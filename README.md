@@ -1,201 +1,183 @@
 # Geoform
 
-Geoform is a browser-based worldbuilding product. A TypeScript SPA edits a heightfield and renders the result on a Canvas, while a FastAPI backend runs the Mindwerks [WorldEngine](https://github.com/Mindwerks/worldengine) simulation pipeline (plate tectonics, climate, hydrology, biomes) and provides a small save/load store. Settlement suitability is a deterministic, server-side rule engine over the derived layers.
+Geoform is a browser-based worldbuilding tool. A TypeScript SPA edits a heightfield and renders it on a canvas; a FastAPI server wraps the vendored [WorldEngine](https://github.com/Mindwerks/worldengine) simulation pipeline (plate tectonics, erosion, climate, hydrology, Holdridge biomes) and owns world generation, recompute, persistence, and a deterministic settlement-suitability rule engine.
+
+The server is authoritative: the client treats every `/api/generate` and `/api/recompute` response as canonical state.
 
 ## Architecture
 
 ```
-                browser (Vite + TS SPA)
-                       │
-                       │  HTTP /api/*, /health
-                       ▼
-            Vite dev server  :5173  ── proxies ──►  FastAPI (uvicorn)  :8765
-            (src/main.ts, Canvas)                       │
-                                                       ▼
-                                       vendor/worldengine (pip install -e)
-                                       PyPlatec + numpy + noise + protobuf
-                                                       │
-                                                       ▼
-                                          data/worlds/  (durable JSON)
+  browser (Vite + TS SPA, src/)
+          │  fetch /api/*, /health
+          ▼
+  Vite dev server :5173  ──proxy──►  FastAPI + uvicorn :8765  (server/api/)
+  (dev only; prod serves dist/)              │
+                                             ▼
+                              vendor/worldengine  (pip install -e)
+                              numpy · noise · protobuf · pypng
+                                             │
+                                             ▼
+                              $GEOFORM_DATA_DIR/worlds/  (JSON + .meta.json)
 ```
 
-Two processes in dev: `npm run dev` (Vite on 5173) and `python -m server.api` (FastAPI on 8765). The Vite dev server proxies `/api/*` and `/health` to 8765 so the browser stays same-origin.
+In dev these are two processes. In production the SPA is a static bundle (`dist/`) served by any web server, talking to the API over `/api`.
 
 ## Prerequisites
 
-- **Python 3.12** — required by `pyproject.toml` and the WorldEngine build.
-- **Node.js 20+** — Vite 8 / TypeScript 6.
-- **Build toolchain** — needed to compile the `noise` and `numpy` C extensions.
-  - Debian/Ubuntu: `sudo apt-get install -y build-essential python3.12-dev`
-  - Fedora: `sudo dnf install -y gcc make python3.12-devel`
-  - macOS: `xcode-select --install` (Xcode Command Line Tools)
-- **Docker** (optional) — only for the `docker compose` path.
+- **Python 3.12** and **python3.12-dev** (headers — `noise` builds a C extension)
+- **Node 20+**
+- **build-essential** (or equivalent C toolchain; `xcode-select --install` on macOS)
+
+```bash
+sudo apt-get install -y python3.12-dev build-essential
+```
 
 ## Install
 
 ```bash
-git clone <repo-url> geoform && cd geoform
+# Backend (one-time)
+python3 -m venv .venv
+.venv/bin/pip install --upgrade pip wheel setuptools
+.venv/bin/pip install 'numpy<3' 'noise==1.2.2' protobuf pypng fastapi 'uvicorn[standard]' httpx pydantic pytest pytest-asyncio
+.venv/bin/pip install -e vendor/worldengine
 
-# One-shot, idempotent installer (Python venv + deps + WorldEngine editable + npm)
-bash scripts/install.sh
-
-# Verify
-.venv/bin/python -c "import worldengine; print('worldengine OK')"
+# Frontend (one-time)
+npm install
 ```
 
-The installer creates `.venv/` at the repo root, installs `numpy<3`, `noise==1.2.2`, `protobuf`, `pypng`, `fastapi`, `uvicorn[standard]`, `httpx`, `pydantic`, `pytest`, then runs `pip install -e vendor/worldengine`. It also runs `npm install`.
+`bash scripts/install.sh` (also `npm run install:all`) runs exactly these steps and is idempotent.
 
-If `bash scripts/install.sh` is unavailable, the equivalent steps are:
+Verify:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip wheel setuptools
-.venv/bin/pip install "numpy<3" "noise==1.2.2" protobuf pypng \
-                    fastapi "uvicorn[standard]" httpx pydantic pytest pytest-asyncio
-.venv/bin/pip install -e vendor/worldengine
-npm install
+.venv/bin/python -c "import worldengine; print('worldengine ok')"
 ```
 
 ## Dev
 
-Two terminals (or one — `npm run dev:all` runs both):
-
 ```bash
-# Terminal 1 — API
-.venv/bin/python -m server.api
-
-# Terminal 2 — frontend (proxies /api → :8765)
-npm run dev
+npm start      # terminal 1 — API on 127.0.0.1:8765
+npm run dev    # terminal 2 — Vite on 127.0.0.1:5173
 ```
 
-Open `http://127.0.0.1:5173`. The SPA talks to the API at the same origin via the Vite proxy in `vite.config.ts`.
+Open <http://127.0.0.1:5173>. Vite proxies `/api/*` and `/health` to `127.0.0.1:8765` (see `vite.config.ts`), so the browser stays same-origin and there is no CORS config.
+
+> **Known divergence.** There are currently two server implementations, both binding 8765 — run only one:
+> - `server/api/` (FastAPI, started by `npm start`) implements `docs/contract.md` and is what the test suite covers.
+> - `server/worldengine_api.py` (stdlib `http.server`, started by `npm run dev:api`, and by `npm run dev:all` together with Vite) is an older bridge with a different wire format.
+>
+> The SPA in `src/world/worldengine.ts` still posts the older bridge's shape (`{seed, width, height, numPlates}`), which `server/api` rejects. Converging the client onto `docs/contract.md` is outstanding work.
 
 ## Production run
 
 ```bash
-# Build the SPA into dist/
-npm run build
-
-# Serve the API (port from $GEOFORM_API_PORT, default 8765)
-.venv/bin/python -m server.api --host 0.0.0.0 --port 8765
-
-# Serve dist/ statically — any static host works
-npx serve -s dist -l 5173
-# …or nginx, Caddy, S3+CloudFront, etc.
+npm run build            # type-checks, then emits the static SPA to dist/
+npm start                # API on 127.0.0.1:8765 (npm run start:prod binds 0.0.0.0)
+npx serve dist           # or nginx, Caddy, S3+CloudFront, …
 ```
 
-Or the containerised path:
+`dist/` is a plain static bundle. Point your web server at it and route `/api` and `/health` to the API process.
 
-```bash
-docker compose up --build
-```
+A `Dockerfile` and `docker-compose.yml` are present (`npm run docker:up`); they are not exercised by CI.
 
-This brings up two services from the same image: `api` on 8765 and `web` (serving `dist/` via `npx serve`) on 5173, with `web` resolving `api` by service name. The host `./data/` is bind-mounted into the API container for durability.
+## API contract
 
-## API
+[`docs/contract.md`](docs/contract.md) is authoritative for every endpoint, bound, and error code — read it before changing a request or response shape. Summary: `GET /health`, `POST /api/generate`, `POST /api/recompute`, `POST /api/serialize`, `POST /api/deserialize`, `POST /api/settlements`, and CRUD at `POST|GET /api/worlds` + `GET|DELETE /api/worlds/{id}`.
 
-The authoritative contract is [`docs/contract.md`](docs/contract.md). Endpoints:
-
-| Method | Path                 | Purpose                                  |
-|--------|----------------------|------------------------------------------|
-| GET    | `/health`            | Liveness probe                           |
-| POST   | `/api/generate`      | Generate a fresh world (authoritative)   |
-| POST   | `/api/recompute`     | Re-run climate/hydrology after sculpt    |
-| POST   | `/api/serialize`     | World → base64 protobuf                  |
-| POST   | `/api/deserialize`   | base64 protobuf → World                  |
-| POST   | `/api/settlements`   | Per-cell suitability with optional rules |
-| POST   | `/api/worlds`        | Save world to disk                       |
-| GET    | `/api/worlds`        | List saved worlds                        |
-| GET    | `/api/worlds/{id}`   | Load saved world                         |
-| DELETE | `/api/worlds/{id}`   | Delete saved world                       |
-
-All errors share the envelope `{"error": "<code>", "message": "<human>", "details": {...}}` with codes `validation`, `not_found`, `timeout`, `conflict`, `internal`.
+All errors share one envelope, `{"error": "<code>", "message": "<human>", "details": {...}}`, with codes `validation`, `not_found`, `timeout`, `conflict`, `internal`. The server never returns 200 with a partial result.
 
 ## Save schema
 
-World documents are JSON with a `schema_version` stamp (currently `1`). Required top-level keys: `name`, `width`, `height`, `seed`, `generation_params`, `layers`. The `layers` object holds `elevation`, `plates`, `ocean`, `precipitation`, `temperature`, `biome`, `humidity`, `permeability`, `watermap`, `irrigation`, `icecap`. Sculpt edits live at `sculpt[]`; settlement state at `settlements.{rules,overrides,cells}`.
+World documents are JSON stamped with `schema_version` (currently `1`). Top level: `name`, `width`, `height`, `seed`, `generation_params`, `temps`, `humids`, `gamma_curve`, `curve_offset`, `layers`, `sculpt`, `settlements`. `layers` holds `elevation`, `plates`, `ocean`, `precipitation`, `temperature`, `biome`, `humidity`, `permeability`, `watermap`, `irrigation`, `icecap` (plus `sea_depth`, `lake_map`, `river_map`), each as `{"data": [[...]]}` in row-major `(height, width)` order. `biome` is an integer index into `worldengine.biome`.
 
-Migrations live in [`server/api/migrations.py`](server/api/migrations.py). The server walks older `schema_version` payloads forward through `(from, to, fn)` entries to `CURRENT_VERSION` on every load. Adding a new layer or top-level key means appending a new migration and bumping `CURRENT_VERSION`.
+Migrations live in [`server/api/migrations.py`](server/api/migrations.py). Documents are walked forward through `(from, to, fn)` steps to `CURRENT_VERSION` on every load, so older saves keep opening. Adding a layer or top-level key means appending a migration and bumping `CURRENT_VERSION`.
 
-Files persist under `<GEOFORM_DATA_DIR>/worlds/<id>.json` (full doc) plus a sidecar `<id>.meta.json` (`id`, `name`, `width`, `height`, `seed`, `saved_at`). Writes are atomic (write-temp + `os.replace`) so a crash mid-save cannot leave a half-written file.
+Saves land in `$GEOFORM_DATA_DIR/worlds/<id>.json` with a sidecar `<id>.meta.json` (`id`, `name`, `width`, `height`, `seed`, `saved_at`). Writes are atomic (temp file + `os.replace`).
+
+`sculpt` stores brush strokes (`{x, y, radius, delta, tool}`) rather than elevation history; recompute replays them, which keeps edits deterministic and saves small.
 
 ## Settlement rules
 
-[`server/api/settlements.py`](server/api/settlements.py) is the pure, deterministic rule engine — it imports nothing from `worldengine`, only numpy. Per cell `(x,y)` it scores on:
+[`server/api/settlements.py`](server/api/settlements.py) is a pure numpy function of `(world, rules, overrides)` — same inputs always give the same output. Each land cell starts at **0.5** and accumulates:
 
-- **fresh water** — humidity ≥ `min_fresh_water`
-- **elevation** — below `max_elevation`; `hills` / `mountain` tagged above
-- **coastal** — bonus when 4-neighbour-adjacent to ocean (only if `prefer_coastal`)
-- **arable** — precipitation ≥ `arable_threshold` AND temperature in `[0.3, 0.7]`
-- **ocean** — cells are forced to `wilderness` with suitability `0.0`
+| Signal | Condition | Δ |
+|---|---|---|
+| `fresh_water` / `low_fresh_water` | humidity ≥ / < `min_fresh_water` | +0.15 / −0.30 |
+| `low_lying` / `hills` / `mountain` | elevation ≤ 60% of / above 60% of / above `max_elevation` | +0.10 / 0 / −0.25 |
+| `coastal` | 4-neighbour-adjacent to ocean, when `prefer_coastal` | +0.20 |
+| `arable` | precipitation ≥ `arable_threshold` **and** 0.3 ≤ temperature ≤ 0.7 | +0.15 |
 
-Score is clipped to `[0, 1]`; cells with `score ≥ min_settlement_suitability` (default `0.5`) are labelled `settlement`, otherwise `wilderness`.
+The score is clipped to `[0, 1]`. Cells scoring ≥ `min_settlement_suitability` (default 0.5) get `rule: "settlement"`, else `"wilderness"`. Ocean cells short-circuit to suitability `0.0`, `rule: "wilderness"`, `reasons: ["ocean"]`.
 
-`overrides` is an `{ "x,y": "settlement" | "wilderness" | null }` map. A non-null override always wins over the computed rule, and the response carries an `override` field on the cell to record that the user pinned it.
+`overrides` maps `"x,y"` → `"settlement" | "wilderness" | null`. **A non-null override always beats the computed rule**, and the cell echoes it back in `override` so the UI can show which cells the user pinned.
 
 ## Tests
 
 ```bash
-# Client (Vitest; colocated *.test.ts under src/)
-npm run test:client
-
-# API (pytest; under tests/)
-.venv/bin/pytest tests -q
+npm test              # client + API
+npm run test:client   # vitest run           — 32 tests in src/**/*.test.ts
+npm run test:api      # pytest tests -q      — 20 tests in tests/
 ```
 
-Client test files: `src/world/climate.test.ts`, `src/world/generate.test.ts`, `src/world/noise.test.ts`, `src/world/persist.test.ts`, `src/world/worldengine.test.ts`, `src/render/draw.test.ts`. API tests live in `tests/test_api_smoke.py` and `tests/test_api_integration.py`.
+The Python suite boots a real `python -m server.api` subprocess on an OS-assigned free port with a temp `GEOFORM_DATA_DIR` (see `tests/conftest.py`), so it exercises startup, routing, validation, and the on-disk store rather than mocks. `tests/test_api_smoke.py` additionally covers the app in-process via `TestClient`.
+
+`tests/test_e2e_smoke.py` walks the full journey — generate → score → sculpt → recompute → re-score → save → load → delete — and checks that `dist/` is servable (skipped unless you have run `npm run build`).
 
 ## CI
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs two jobs on every push to `main` and every PR:
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes to `main` and on every PR, with two jobs:
 
-- **`api`** — installs the C toolchain, builds `.venv/`, installs Python deps + the vendored WorldEngine, runs `pytest tests -q`.
-- **`web`** — `npm ci`, `npm run typecheck`, `npm run test:client`, `npm run build`.
+- **`api`** — Python 3.12, installs `python3.12-dev` + `build-essential`, builds `.venv`, installs the Python deps and `pip install -e vendor/worldengine`, runs `pytest tests -q`. pip and `.venv` are cached (best-effort) on a key derived from `vendor/worldengine/pyproject.toml` and `package.json`.
+- **`web`** — Node 20, `npm ci`, `npm run typecheck`, `npm run test:client`, `npm run build`.
 
 ## Vendoring WorldEngine
 
-`vendor/worldengine/` is the upstream Mindwerks WorldEngine source, installed **editable** via `pip install -e vendor/worldengine`. Editing files in `vendor/worldengine/` is reflected immediately — no reinstall required.
-
-To refresh from upstream (this is a destructive operation: stash any local edits first):
+`vendor/worldengine/` is an upstream WorldEngine source drop, installed editable from `vendor/worldengine/pyproject.toml`:
 
 ```bash
-cd vendor/worldengine
-git fetch && git pull
-cd ../..
 .venv/bin/pip install -e vendor/worldengine
 ```
 
-The vendored `pyproject.toml` declares its own Python deps, which `pip install -e .` resolves automatically. No additional flags are needed unless upstream's deps changed.
+Editable means changes under `vendor/worldengine/` take effect without reinstalling; reinstall only when upstream's dependencies or entry points change.
+
+To refresh, replace the tree with a newer upstream checkout and reinstall:
+
+```bash
+git clone https://github.com/Mindwerks/worldengine /tmp/worldengine
+rm -rf vendor/worldengine && cp -a /tmp/worldengine vendor/worldengine
+.venv/bin/pip install -e vendor/worldengine
+```
+
+> The vendored tree is **not** a git clone or submodule here — it has no remote, and `git -C vendor/worldengine …` resolves to *this* repository, so `git -C vendor/worldengine pull` would not do what it looks like it does. If you re-vendor it as a real clone or submodule, `git -C vendor/worldengine pull && .venv/bin/pip install -e vendor/worldengine` becomes the refresh path.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and adjust as needed. All keys are optional — defaults match `.env.example`.
+Copy `.env.example` to `.env`; every key is optional and defaults to the value below. The server also reads `--host`, `--port`, `--data-dir`, and `--log-level` (`python -m server.api --help`), which override the environment.
 
 | Variable | Default | Purpose |
-|----------|---------|---------|
-| `GEOFORM_API_HOST` | `127.0.0.1` | Bind host for the FastAPI server |
-| `GEOFORM_API_PORT` | `8765` | Bind port for the FastAPI server |
-| `GEOFORM_WEB_HOST` | `127.0.0.1` | Vite dev server bind host |
+|---|---|---|
+| `GEOFORM_API_HOST` | `127.0.0.1` | API bind host |
+| `GEOFORM_API_PORT` | `8765` | API bind port |
+| `GEOFORM_WEB_HOST` | `127.0.0.1` | Vite dev server host |
 | `GEOFORM_WEB_PORT` | `5173` | Vite dev server port |
-| `GEOFORM_DATA_DIR` | `./data` | Durable world store root (saves land under `data/worlds/`) |
-| `GEOFORM_MIN_WIDTH` | `32` | Lower bound for world width |
-| `GEOFORM_MAX_WIDTH` | `2048` | Upper bound for world width |
-| `GEOFORM_MIN_HEIGHT` | `32` | Lower bound for world height |
-| `GEOFORM_MAX_HEIGHT` | `2048` | Upper bound for world height |
-| `GEOFORM_GENERATE_TIMEOUT_MS` | `180000` | `/api/generate` timeout (ms) |
-| `GEOFORM_RECOMPUTE_TIMEOUT_MS` | `60000` | `/api/recompute` and `/api/settlements` timeout (ms) |
+| `GEOFORM_DATA_DIR` | `./data` | Durable store root; worlds land in `<dir>/worlds/` |
+| `GEOFORM_MIN_WIDTH` / `GEOFORM_MAX_WIDTH` | `32` / `2048` | World width bounds |
+| `GEOFORM_MIN_HEIGHT` / `GEOFORM_MAX_HEIGHT` | `32` / `2048` | World height bounds |
+| `GEOFORM_GENERATE_TIMEOUT_MS` | `180000` | `/api/generate` timeout |
+| `GEOFORM_RECOMPUTE_TIMEOUT_MS` | `60000` | `/api/recompute` and `/api/settlements` timeout |
 
-CLI flags `--host`, `--port`, `--data-dir`, `--log-level` (see `python -m server.api --help`) override env vars.
+No secrets are required to run, build, or test Geoform.
 
 ## License
 
-Geoform is released under the **MIT License**. The vendored WorldEngine (`vendor/worldengine/`) is also MIT-licensed; copyright 2013–2014 Federico Tomassetti and Bret Curtis. See [`vendor/worldengine/LICENSE.txt`](vendor/worldengine/LICENSE.txt).
+MIT — see [`LICENSE`](LICENSE). Geoform vendors [WorldEngine](https://github.com/Mindwerks/worldengine) (© Federico Tomassetti, Bret Curtis), also MIT; its text is at [`vendor/worldengine/LICENSE.txt`](vendor/worldengine/LICENSE.txt).
 
 ## Troubleshooting
 
-- **`noise` build fails** with `Python.h: No such file` / `_PyLong_AsByteArray` errors → install the Python dev headers and a C toolchain: `sudo apt-get install -y python3.12-dev build-essential`. Re-run `bash scripts/install.sh`.
-- **Port 8765 already in use** → set `GEOFORM_API_PORT=9000` in `.env` (and update the `target` in `vite.config.ts` to match).
-- **`ModuleNotFoundError: No module named 'worldengine'`** → the editable install was skipped or the venv isn't activated. Run `.venv/bin/pip install -e vendor/worldengine` from the repo root.
-- **Vite proxy returns 502 in the browser** → the API server isn't running on 8765. Start it with `.venv/bin/python -m server.api` in another terminal.
-- **Generation hangs / times out** at large dimensions → defaults cap at 2048×2048 and 100 plates; tune `GEOFORM_GENERATE_TIMEOUT_MS` upward, or lower the resolution in the UI.
-- **`Schema version X is newer than supported`** on load → your server is older than the file. Upgrade the server or convert the file down with a matching migration.
+- **`fatal error: Python.h: No such file or directory`** while installing `noise` → missing headers: `sudo apt-get install -y python3.12-dev build-essential`, then re-run the install.
+- **`ModuleNotFoundError: No module named 'worldengine'`** → the editable install was skipped: `.venv/bin/pip install -e vendor/worldengine`.
+- **`Address already in use` on 8765** → another API process (or the other server implementation) is running. Stop it, or set `GEOFORM_API_PORT` and update the proxy `target` in `vite.config.ts` to match.
+- **Vite returns 502 for `/api/*`** → the API isn't running; start it with `npm start`.
+- **`vitest: not found` / `Cannot find package 'rolldown'`** → stale `node_modules`: `rm -rf node_modules && npm ci`.
+- **Generation times out** on large maps → raise `GEOFORM_GENERATE_TIMEOUT_MS`, or generate smaller (bounds cap at 2048×2048, 100 plates).
+- **`pytest: command not found`** → use the venv: `.venv/bin/python -m pytest tests -q` (or `npm run test:api`).

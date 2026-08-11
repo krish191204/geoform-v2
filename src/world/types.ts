@@ -117,6 +117,11 @@ export function biomeColor(name: string): string {
   return FALLBACK_BIOME
 }
 
+/**
+ * Legacy stdlib-bridge wire format. Kept around for the test that exercises
+ * `worldFromPayload` directly. The current bridge (`/api/generate`,
+ * `/api/recompute` on `server/api/`) uses `ContractWorld` instead.
+ */
 export interface WorldEnginePayload {
   engine: string
   width: number
@@ -133,4 +138,59 @@ export interface WorldEnginePayload {
   rawElevMin: number
   rawElevMax: number
   rawSeaThreshold: number
+}
+
+/**
+ * A single layer in the contract `World` JSON document
+ * (see `docs/contract.md`). The contents of `data` are always a 2D array
+ * (rows × cols) of numbers; biome indices are integers, the rest are floats.
+ */
+export interface ContractLayer {
+  data: number[][]
+  thresholds?: Array<[string, number | null]> | Record<string, number | null>
+  quantiles?: Record<string, number>
+}
+
+/**
+ * Full `World` JSON document returned by `server.api`'s
+ * `/api/generate` and `/api/recompute` endpoints.
+ *
+ * Only the fields the client bridge actually reads are typed strictly;
+ * everything else stays loose to absorb future schema additions without
+ * requiring a TS update.
+ */
+export interface ContractWorld {
+  schema_version: number
+  name: string
+  width: number
+  height: number
+  seed: number
+  generation_params: {
+    n_plates: number
+    ocean_level: number
+    step: string
+    fade_borders: boolean
+  }
+  temps: number[]
+  humids: number[]
+  gamma_curve: number
+  curve_offset: number
+  layers: {
+    elevation?: ContractLayer
+    plates?: ContractLayer
+    ocean?: ContractLayer
+    sea_depth?: ContractLayer
+    precipitation?: ContractLayer
+    temperature?: ContractLayer
+    humidity?: ContractLayer
+    permeability?: ContractLayer
+    watermap?: ContractLayer
+    irrigation?: ContractLayer
+    lake_map?: ContractLayer
+    river_map?: ContractLayer
+    biome?: ContractLayer
+    icecap?: ContractLayer
+  }
+  sculpt?: unknown[]
+  settlements?: unknown
 }

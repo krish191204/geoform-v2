@@ -15,12 +15,11 @@ import re
 import secrets
 import string
 import tempfile
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .errors import APIError, CODE_CONFLICT, CODE_NOT_FOUND, CODE_VALIDATION, CODE_TIMEOUT
+from .errors import APIError, CODE_CONFLICT, CODE_NOT_FOUND, CODE_VALIDATION
 from .migrations import migrate
 
 log = logging.getLogger(__name__)

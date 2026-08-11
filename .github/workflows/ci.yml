@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   api:
     name: API tests
@@ -18,10 +21,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Cache pip dependencies
+      - name: Cache pip + venv
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
+          path: |
+            ~/.cache/pip
+            .venv
           key: pip-${{ hashFiles('vendor/worldengine/pyproject.toml', 'package.json') }}
           restore-keys: |
             pip-
@@ -68,14 +73,6 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-
-      - name: Cache pip dependencies (shared key with api)
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ hashFiles('vendor/worldengine/pyproject.toml', 'package.json') }}
-          restore-keys: |
-            pip-
 
       - name: Install Node dependencies
         run: npm ci

@@ -1,0 +1,21 @@
+# CODEOWNERS — reviewers automatically requested on matching pull requests.
+# Syntax: <path pattern> <@owner ...>
+# See https://docs.github.com/articles/about-code-owners
+#
+# NOTE: @krishsinha is a placeholder default owner. Replace it with the real
+# GitHub user or team (e.g. @org/geoform-maintainers) before enabling branch
+# protection — an unresolvable owner silently blocks review assignment.
+
+# Default owner for everything in the repo.
+*                       @krishsinha
+
+# Vendored upstream source. Changes here should be a clean re-vendor of
+# WorldEngine, never a local patch — see README "Vendoring WorldEngine".
+/vendor/                @krishsinha
+
+# The API contract is shared by the server, the client and the tests.
+/docs/contract.md       @krishsinha
+
+# CI, licensing and repo-level config.
+/.github/               @krishsinha
+/LICENSE                @krishsinha
