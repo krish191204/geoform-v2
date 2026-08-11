@@ -1,0 +1,26 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: geoform:latest
+    command: ["python", "-m", "server.api", "--host", "0.0.0.0", "--port", "8765"]
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./data:/app/data
+    environment:
+      GEOFORM_API_HOST: 0.0.0.0
+      GEOFORM_API_PORT: "8765"
+      GEOFORM_DATA_DIR: /app/data
+
+  web:
+    image: geoform:latest
+    command: ["npx", "serve", "-s", "dist", "-l", "5173"]
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+    environment:
+      GEOFORM_API_HOST: api
+      GEOFORM_API_PORT: "8765"

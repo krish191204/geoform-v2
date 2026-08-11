@@ -1,0 +1,12 @@
+.venv/
+node_modules/
+vendor/worldengine/.venv/
+data/
+.git/
+dist/
+tests/
+.github/
+*.log
+__pycache__/
+*.pyc
+.DS_Store

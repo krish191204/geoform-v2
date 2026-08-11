@@ -1,0 +1,90 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api:
+    name: API tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('vendor/worldengine/pyproject.toml', 'package.json') }}
+          restore-keys: |
+            pip-
+
+      - name: Install C build toolchain (numpy/noise)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3.12-dev build-essential
+
+      - name: Create venv and upgrade packaging
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip wheel setuptools
+
+      - name: Install Python dependencies
+        run: |
+          .venv/bin/pip install \
+            "numpy<3" \
+            "noise==1.2.2" \
+            "protobuf" \
+            "pypng" \
+            "fastapi" \
+            "uvicorn[standard]" \
+            "httpx" \
+            "pydantic" \
+            "pytest" \
+            "pytest-asyncio"
+
+      - name: Install vendored WorldEngine (editable)
+        run: .venv/bin/pip install -e vendor/worldengine
+
+      - name: Run pytest
+        run: .venv/bin/pytest tests -q
+
+  web:
+    name: Web tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Cache pip dependencies (shared key with api)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('vendor/worldengine/pyproject.toml', 'package.json') }}
+          restore-keys: |
+            pip-
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run client tests
+        run: npm run test:client
+
+      - name: Build
+        run: npm run build

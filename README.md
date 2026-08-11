@@ -1,250 +1,201 @@
-# Geoform — technical documentation
+# Geoform
 
-Geoform is a browser-based worldbuilding UI that uses **Mindwerks WorldEngine** as the geography backend. The UI edits a heightfield; WorldEngine recomputes climate, hydrology, and biomes. Settlement placement is a separate heuristic scored in the client.
-
----
+Geoform is a browser-based worldbuilding product. A TypeScript SPA edits a heightfield and renders the result on a Canvas, while a FastAPI backend runs the Mindwerks [WorldEngine](https://github.com/Mindwerks/worldengine) simulation pipeline (plate tectonics, climate, hydrology, biomes) and provides a small save/load store. Settlement suitability is a deterministic, server-side rule engine over the derived layers.
 
 ## Architecture
 
 ```
-┌─────────────────────────────┐     Vite proxy /api/*      ┌──────────────────────────────┐
-│  Browser (Vite + TS)        │ ─────────────────────────► │  ThreadingHTTPServer :8765   │
-│  src/main.ts                │     JSON grids             │  server/worldengine_api.py   │
-│  TypedArrays in memory      │ ◄───────────────────────── │  vendor/worldengine (pip -e) │
-│  Canvas 2D renderer         │                            │  PyPlatec + numpy sims       │
-│  localStorage autosave      │                            └──────────────────────────────┘
-└─────────────────────────────┘
+                browser (Vite + TS SPA)
+                       │
+                       │  HTTP /api/*, /health
+                       ▼
+            Vite dev server  :5173  ── proxies ──►  FastAPI (uvicorn)  :8765
+            (src/main.ts, Canvas)                       │
+                                                       ▼
+                                       vendor/worldengine (pip install -e)
+                                       PyPlatec + numpy + noise + protobuf
+                                                       │
+                                                       ▼
+                                          data/worlds/  (durable JSON)
 ```
 
-| Process | Command | Port | Role |
-|---------|---------|------|------|
-| Frontend | `npm run dev` | `127.0.0.1:5173` | UI, brush edits, suitability, render, persist |
-| Backend | `npm run dev:api` | `127.0.0.1:8765` | `world_gen` / climate recompute → JSON |
+Two processes in dev: `npm run dev` (Vite on 5173) and `python -m server.api` (FastAPI on 8765). The Vite dev server proxies `/api/*` and `/health` to 8765 so the browser stays same-origin.
 
-`vite.config.ts` proxies `/api` and `/health` to `:8765` so the browser stays same-origin.
+## Prerequisites
 
-There is **no database**. Runtime state is in-memory typed arrays. Persistence is `localStorage` + optional JSON file export.
+- **Python 3.12** — required by `pyproject.toml` and the WorldEngine build.
+- **Node.js 20+** — Vite 8 / TypeScript 6.
+- **Build toolchain** — needed to compile the `noise` and `numpy` C extensions.
+  - Debian/Ubuntu: `sudo apt-get install -y build-essential python3.12-dev`
+  - Fedora: `sudo dnf install -y gcc make python3.12-devel`
+  - macOS: `xcode-select --install` (Xcode Command Line Tools)
+- **Docker** (optional) — only for the `docker compose` path.
 
----
-
-## Setup / run
+## Install
 
 ```bash
-cd vendor/worldengine && python3 -m venv .venv && source .venv/bin/activate
-pip install -e .          # worldengine + PyPlatec, numpy, noise, protobuf, …
-cd ../.. && npm install
+git clone <repo-url> geoform && cd geoform
 
-npm run dev:api           # terminal 1
-npm run dev               # terminal 2 → http://127.0.0.1:5173
+# One-shot, idempotent installer (Python venv + deps + WorldEngine editable + npm)
+bash scripts/install.sh
+
+# Verify
+.venv/bin/python -c "import worldengine; print('worldengine OK')"
 ```
 
-Default generation size from the UI: **320 × 160** cells, **10 plates**. Full plate sim is O(seconds); climate-only recompute is ~1s at that resolution.
+The installer creates `.venv/` at the repo root, installs `numpy<3`, `noise==1.2.2`, `protobuf`, `pypng`, `fastapi`, `uvicorn[standard]`, `httpx`, `pydantic`, `pytest`, then runs `pip install -e vendor/worldengine`. It also runs `npm install`.
 
----
+If `bash scripts/install.sh` is unavailable, the equivalent steps are:
 
-## In-memory world model (`src/world/types.ts`)
-
-All spatial fields are length `width * height`, row-major (`i = y * width + x`).
-
-| Field | Type | Semantics |
-|-------|------|-----------|
-| `elev` | `Float32Array` | Normalized elevation in **\[0, 1\]**; sea ≈ `seaLevel` (0.42) |
-| `temp` | `Float32Array` | Normalized temperature **\[0, 1\]** |
-| `moist` | `Float32Array` | Normalized humidity (preferred) or precip **\[0, 1\]** |
-| `flux` | `Float32Array` | Scaled WorldEngine watermap; rivers drawn if ≳ 3.2–3.8 |
-| `plateId` | `Int16Array` | Plate index per cell |
-| `biome` | `string[]` | Holdridge names (e.g. `cool temperate moist forest`) or `ocean` |
-| `suitability` | `Float32Array` | Client-side settlement score **\[0, 1\]** (lazy / on demand) |
-| `cities` | `{x,y,name,score}[]` | Placed settlements |
-| `rawElevMin/Max`, `rawSeaThreshold` | `number` | WorldEngine native elevation calibration for round-trip recompute |
-
-`engine: 'worldengine' | 'local'` marks provenance. Live path is always `worldengine` after generate/recompute.
-
----
-
-## Backend pipeline (WorldEngine)
-
-Entry: `worldengine.plates.world_gen(...)` then serialization in `server/worldengine_api.py`.
-
-### Generate (`POST /api/generate`)
-
-Body: `{ seed, width, height, numPlates }`.
-
-1. **`generate_plates_simulation` (PyPlatec)**  
-   C extension steps a plate simulation until finished. Returns heightmap + plate id map.
-
-2. **Wrap in `World`**  
-   `World(name, Size(w,h), seed, GenerationParameters(...))` with elevation + plates as numpy layers.
-
-3. **`center_land`**  
-   Roll map so ocean mass sits toward borders.
-
-4. **`add_noise_to_elevation`**  
-   Simplex noise (`noise.snoise2`) added to heightfield.
-
-5. **`place_oceans_at_map_borders`** (optional fade) + **`initialize_ocean_and_thresholds`**  
-   Flood-fill ocean from map edges where `elev <= ocean_level`; compute sea / plain / hill / mountain thresholds.
-
-6. **`generate_world(world, Step.full())`** sequential simulations:
-   - `TemperatureSimulation` — latitude + altitude lapse vs mountain threshold  
-   - `PrecipitationSimulation` — noise precip modulated by temperature curve  
-   - `ErosionSimulation`  
-   - `WatermapSimulation` — drainage / flux  
-   - `IrrigationSimulation`, `HumiditySimulation`, `PermeabilitySimulation`  
-   - `BiomeSimulation` — Holdridge classification from temp + humidity  
-   - `IcecapSimulation`
-
-7. **`serialize_world`**  
-   - Remaps WorldEngine elevation into UI space with fixed `seaLevel = 0.42` (ocean below, land above).  
-   - Min–max normalizes temp and humidity to \[0,1\].  
-   - Scales watermap so max → 18 (UI river threshold).  
-   - Emits flat JSON arrays + `rawElev*` for inverse mapping on recompute.
-
-### Recompute (`POST /api/recompute`)
-
-Body: edited normalized `elev[]`, `plateId[]`, seed, size, `rawElev*`, `seaLevel`.
-
-1. Invert UI elevation → approximate WorldEngine elevation using stored raw min/max/sea threshold.  
-2. Rebuild `World`, set elevation + plates.  
-3. `initialize_ocean_and_thresholds(ocean_level=raw_sea_threshold)`.  
-4. `generate_world(..., Step.full())` again (**no** plate resim).  
-5. Serialize like generate.
-
-**Note:** Brushing only mutates height on the client; plates stay fixed unless you generate a new world.
-
----
-
-## Frontend data path
-
-### Load
-
-`src/world/worldengine.ts` → `fetch('/api/generate')` → `worldFromPayload()` builds `Float32Array`/`Int16Array` fields → `recomputeSuitability()`.
-
-Boot (`main.ts`): if `localStorage['geoform.autosave.v1']` exists, deserialize that instead of generating.
-
-### Brush edit (`paintElevation`)
-
-Radial falloff brush adds/subtracts from `elev` (clamped \[0,1\]).
-
-Then **local** `recomputeDerived(world, includeSuitability=false)` in `climate.ts` (fast TS climate/hydro/biome) for immediate preview.
-
-Debounced (~650ms) **`recomputeWorldEngine(world)`** replaces arrays with authoritative WorldEngine output and keeps `cities`.
-
-### Settlement (`evaluateSuitability`)
-
-Pure client heuristic on cell `(x,y)`:
-
-- hard fail if `elev < seaLevel`
-- penalties: alpine height, steep local slope, low moisture, polar cold, hostile biome strings, distance from river/coast  
-- bonuses: temperate band, grassland/forest-like biomes, near high `flux` or ocean neighbor  
-- `ok` if score ≥ 0.42 and slope/height gates pass  
-- UI blocks unless `ok` or Shift forced
-
----
-
-## HTTP API contract
-
-### `GET /health`
-
-```json
-{ "ok": true, "engine": "worldengine", "version": "0.20.0" }
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip wheel setuptools
+.venv/bin/pip install "numpy<3" "noise==1.2.2" protobuf pypng \
+                    fastapi "uvicorn[standard]" httpx pydantic pytest pytest-asyncio
+.venv/bin/pip install -e vendor/worldengine
+npm install
 ```
 
-### `POST /api/generate` → world payload
+## Dev
 
-```json
-{
-  "engine": "worldengine",
-  "width": 320,
-  "height": 160,
-  "seed": 123,
-  "seaLevel": 0.42,
-  "plateCount": 10,
-  "elev": [/* wh floats */],
-  "plateId": [/* wh ints */],
-  "temp": [/* wh */],
-  "moist": [/* wh */],
-  "flux": [/* wh */],
-  "biome": [/* wh strings */],
-  "rawElevMin": 0.0,
-  "rawElevMax": 8.0,
-  "rawSeaThreshold": 1.0
-}
+Two terminals (or one — `npm run dev:all` runs both):
+
+```bash
+# Terminal 1 — API
+.venv/bin/python -m server.api
+
+# Terminal 2 — frontend (proxies /api → :8765)
+npm run dev
 ```
 
-### `POST /api/recompute`
+Open `http://127.0.0.1:5173`. The SPA talks to the API at the same origin via the Vite proxy in `vite.config.ts`.
 
-Same response shape. Request includes `elev`, `plateId`, calibration fields above.
+## Production run
 
-Errors: `{ "error": "..." }` with 4xx/5xx.
+```bash
+# Build the SPA into dist/
+npm run build
 
----
+# Serve the API (port from $GEOFORM_API_PORT, default 8765)
+.venv/bin/python -m server.api --host 0.0.0.0 --port 8765
 
-## Persistence
-
-Implemented in `src/world/persist.ts`.
-
-| Mechanism | Storage | Contents |
-|-----------|---------|----------|
-| Autosave | `localStorage` key `geoform.autosave.v1` | Full `SavedWorld` JSON (version 1) |
-| Export | Download `geoform-seed-{seed}.json` | Same schema, pretty-printed |
-| Import | File picker | `deserializeWorld` → replace in-memory world |
-
-`SavedWorld` stores number arrays (not TypedArrays), biomes, cities, and WorldEngine calibration fields. Suitability is recomputed on load.
-
-Autosave triggers: debounced after edits/cities, and `beforeunload`.  
-**New world** calls `clearAutosave()` then writes a fresh autosave after generate.
-
-Limits: origin-scoped, quota-bound (~few MB; 320×160 × several float arrays is fine), not synced across browsers/devices.
-
----
-
-## Rendering (`src/render/draw.ts`)
-
-`MapRenderer`:
-
-1. Rebuilds a cached `ImageData` when world hash / layer changes.  
-2. Samples cell colors with bilinear interpolation at `scale=4` (display buffer 1280×640 for 320×160).  
-3. Relief/biome: directional hillshade from elevation gradients; coast edge darkening/foam; river tint from `flux`.  
-4. Animation loop (`requestAnimationFrame`): throttled ocean shimmer overlay, wind particles on relief/moisture, brush ring, city pulse.
-
-Layers are **views** over the same arrays; switching layer does not mutate simulation state.
-
----
-
-## Repo layout
-
-```
-src/main.ts                 UI state machine, tools, rAF, boot
-src/world/worldengine.ts    HTTP client + payload → World
-src/world/climate.ts        Local climate preview + suitability
-src/world/generate.ts       Brush + optional local generator (fallback)
-src/world/persist.ts        serialize / localStorage / file I/O
-src/render/draw.ts          Canvas rasterizer
-server/worldengine_api.py   WorldEngine JSON bridge
-vendor/worldengine/         Upstream Mindwerks WorldEngine (editable install)
+# Serve dist/ statically — any static host works
+npx serve -s dist -l 5173
+# …or nginx, Caddy, S3+CloudFront, etc.
 ```
 
----
+Or the containerised path:
 
-## Complexity / performance notes
+```bash
+docker compose up --build
+```
 
-| Operation | Approx cost | Bottleneck |
-|-----------|-------------|------------|
-| Generate 320×160 | ~5–15s | PyPlatec plate stepping |
-| Recompute climate | ~1s | WE simulation chain on CPU |
-| Local brush preview | ms | TS loops over brush radius + light climate |
-| Full suitability map | tens of ms | 320×160 × neighborhood queries |
-| Base raster rebuild | tens of ms | bilinear + hillshade CPU |
+This brings up two services from the same image: `api` on 8765 and `web` (serving `dist/` via `npx serve`) on 5173, with `web` resolving `api` by service name. The host `./data/` is bind-mounted into the API container for durability.
 
-Authoritative climate after sculpt always goes through the Python process; the TS climate path is preview-only and gets overwritten.
+## API
 
----
+The authoritative contract is [`docs/contract.md`](docs/contract.md). Endpoints:
 
-## What is explicitly not in the stack
+| Method | Path                 | Purpose                                  |
+|--------|----------------------|------------------------------------------|
+| GET    | `/health`            | Liveness probe                           |
+| POST   | `/api/generate`      | Generate a fresh world (authoritative)   |
+| POST   | `/api/recompute`     | Re-run climate/hydrology after sculpt    |
+| POST   | `/api/serialize`     | World → base64 protobuf                  |
+| POST   | `/api/deserialize`   | base64 protobuf → World                  |
+| POST   | `/api/settlements`   | Per-cell suitability with optional rules |
+| POST   | `/api/worlds`        | Save world to disk                       |
+| GET    | `/api/worlds`        | List saved worlds                        |
+| GET    | `/api/worlds/{id}`   | Load saved world                         |
+| DELETE | `/api/worlds/{id}`   | Delete saved world                       |
 
-- No GPU compute / WebGL terrain  
-- No vector SVG cartography  
-- No multiplayer / server-side save store  
-- No RAG or external climate datasets (WorldEngine’s internal models only)  
-- Plate velocities are not exposed for interactive editing—only height brushes + full regenerations
+All errors share the envelope `{"error": "<code>", "message": "<human>", "details": {...}}` with codes `validation`, `not_found`, `timeout`, `conflict`, `internal`.
+
+## Save schema
+
+World documents are JSON with a `schema_version` stamp (currently `1`). Required top-level keys: `name`, `width`, `height`, `seed`, `generation_params`, `layers`. The `layers` object holds `elevation`, `plates`, `ocean`, `precipitation`, `temperature`, `biome`, `humidity`, `permeability`, `watermap`, `irrigation`, `icecap`. Sculpt edits live at `sculpt[]`; settlement state at `settlements.{rules,overrides,cells}`.
+
+Migrations live in [`server/api/migrations.py`](server/api/migrations.py). The server walks older `schema_version` payloads forward through `(from, to, fn)` entries to `CURRENT_VERSION` on every load. Adding a new layer or top-level key means appending a new migration and bumping `CURRENT_VERSION`.
+
+Files persist under `<GEOFORM_DATA_DIR>/worlds/<id>.json` (full doc) plus a sidecar `<id>.meta.json` (`id`, `name`, `width`, `height`, `seed`, `saved_at`). Writes are atomic (write-temp + `os.replace`) so a crash mid-save cannot leave a half-written file.
+
+## Settlement rules
+
+[`server/api/settlements.py`](server/api/settlements.py) is the pure, deterministic rule engine — it imports nothing from `worldengine`, only numpy. Per cell `(x,y)` it scores on:
+
+- **fresh water** — humidity ≥ `min_fresh_water`
+- **elevation** — below `max_elevation`; `hills` / `mountain` tagged above
+- **coastal** — bonus when 4-neighbour-adjacent to ocean (only if `prefer_coastal`)
+- **arable** — precipitation ≥ `arable_threshold` AND temperature in `[0.3, 0.7]`
+- **ocean** — cells are forced to `wilderness` with suitability `0.0`
+
+Score is clipped to `[0, 1]`; cells with `score ≥ min_settlement_suitability` (default `0.5`) are labelled `settlement`, otherwise `wilderness`.
+
+`overrides` is an `{ "x,y": "settlement" | "wilderness" | null }` map. A non-null override always wins over the computed rule, and the response carries an `override` field on the cell to record that the user pinned it.
+
+## Tests
+
+```bash
+# Client (Vitest; colocated *.test.ts under src/)
+npm run test:client
+
+# API (pytest; under tests/)
+.venv/bin/pytest tests -q
+```
+
+Client test files: `src/world/climate.test.ts`, `src/world/generate.test.ts`, `src/world/noise.test.ts`, `src/world/persist.test.ts`, `src/world/worldengine.test.ts`, `src/render/draw.test.ts`. API tests live in `tests/test_api_smoke.py` and `tests/test_api_integration.py`.
+
+## CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs two jobs on every push to `main` and every PR:
+
+- **`api`** — installs the C toolchain, builds `.venv/`, installs Python deps + the vendored WorldEngine, runs `pytest tests -q`.
+- **`web`** — `npm ci`, `npm run typecheck`, `npm run test:client`, `npm run build`.
+
+## Vendoring WorldEngine
+
+`vendor/worldengine/` is the upstream Mindwerks WorldEngine source, installed **editable** via `pip install -e vendor/worldengine`. Editing files in `vendor/worldengine/` is reflected immediately — no reinstall required.
+
+To refresh from upstream (this is a destructive operation: stash any local edits first):
+
+```bash
+cd vendor/worldengine
+git fetch && git pull
+cd ../..
+.venv/bin/pip install -e vendor/worldengine
+```
+
+The vendored `pyproject.toml` declares its own Python deps, which `pip install -e .` resolves automatically. No additional flags are needed unless upstream's deps changed.
+
+## Configuration
+
+Copy `.env.example` to `.env` and adjust as needed. All keys are optional — defaults match `.env.example`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `GEOFORM_API_HOST` | `127.0.0.1` | Bind host for the FastAPI server |
+| `GEOFORM_API_PORT` | `8765` | Bind port for the FastAPI server |
+| `GEOFORM_WEB_HOST` | `127.0.0.1` | Vite dev server bind host |
+| `GEOFORM_WEB_PORT` | `5173` | Vite dev server port |
+| `GEOFORM_DATA_DIR` | `./data` | Durable world store root (saves land under `data/worlds/`) |
+| `GEOFORM_MIN_WIDTH` | `32` | Lower bound for world width |
+| `GEOFORM_MAX_WIDTH` | `2048` | Upper bound for world width |
+| `GEOFORM_MIN_HEIGHT` | `32` | Lower bound for world height |
+| `GEOFORM_MAX_HEIGHT` | `2048` | Upper bound for world height |
+| `GEOFORM_GENERATE_TIMEOUT_MS` | `180000` | `/api/generate` timeout (ms) |
+| `GEOFORM_RECOMPUTE_TIMEOUT_MS` | `60000` | `/api/recompute` and `/api/settlements` timeout (ms) |
+
+CLI flags `--host`, `--port`, `--data-dir`, `--log-level` (see `python -m server.api --help`) override env vars.
+
+## License
+
+Geoform is released under the **MIT License**. The vendored WorldEngine (`vendor/worldengine/`) is also MIT-licensed; copyright 2013–2014 Federico Tomassetti and Bret Curtis. See [`vendor/worldengine/LICENSE.txt`](vendor/worldengine/LICENSE.txt).
+
+## Troubleshooting
+
+- **`noise` build fails** with `Python.h: No such file` / `_PyLong_AsByteArray` errors → install the Python dev headers and a C toolchain: `sudo apt-get install -y python3.12-dev build-essential`. Re-run `bash scripts/install.sh`.
+- **Port 8765 already in use** → set `GEOFORM_API_PORT=9000` in `.env` (and update the `target` in `vite.config.ts` to match).
+- **`ModuleNotFoundError: No module named 'worldengine'`** → the editable install was skipped or the venv isn't activated. Run `.venv/bin/pip install -e vendor/worldengine` from the repo root.
+- **Vite proxy returns 502 in the browser** → the API server isn't running on 8765. Start it with `.venv/bin/python -m server.api` in another terminal.
+- **Generation hangs / times out** at large dimensions → defaults cap at 2048×2048 and 100 plates; tune `GEOFORM_GENERATE_TIMEOUT_MS` upward, or lower the resolution in the UI.
+- **`Schema version X is newer than supported`** on load → your server is older than the file. Upgrade the server or convert the file down with a matching migration.
