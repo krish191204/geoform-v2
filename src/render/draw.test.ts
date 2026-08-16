@@ -203,7 +203,9 @@ describe('draw', () => {
       height: 3,
       elev: (_x, _y) => 1500,
     })
-    world.rivers[1] = 1
+    // Place the river at the cell we're going to inspect (1, 1) —
+    // index 1*6+1 = 7, not 1 (which is (1, 0) on a 6-wide grid).
+    world.rivers[1 * 6 + 1] = 1
 
     const withRivers = draw(world, 'summer', 'relief', { showRivers: true })
     const withoutRivers = draw(world, 'summer', 'relief', { showRivers: false })
