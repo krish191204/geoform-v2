@@ -293,6 +293,9 @@ export async function makeSenseInline(
     seasonal.winterMoist,
     mask,
     threshold,
+    // Pass elevation so the alpine override (`elev >= 3500`) actually fires.
+    // Without this, the alpine branch in `classifyBiome` is dead code.
+    orogeny.elev,
   )
   const biomeCounts = new Map<string, number>()
   for (let i = 0; i < biomesResult.biome.length; i++) {

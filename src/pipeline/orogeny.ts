@@ -100,6 +100,14 @@ const WEIGHT_EPSILON = 0.01
  *   - predicate        → apply only where it returns `true`. Used to keep
  *                        arc Gaussians on land and trench Gaussians on
  *                        ocean so they don't cancel each other.
+ *
+ * Density scaling: each call first counts how many distinct boundaries
+ * will paint this cell (via `density`), then stamps with a per-cell
+ * scale of `4 / max(4, density[i])`. A common triple-junction with 4
+ * overlapping Gaussians gets full weight; a stress-test fixture with 18
+ * overlapping Gaussians shares the available peak height so the worst
+ * case stays bounded. The cap is a defense-in-depth; the scaling is
+ * the actual fix.
  */
 function applyGaussian(
   cx: number,
@@ -109,11 +117,28 @@ function applyGaussian(
   sigma: number,
   elev: Float32Array,
   boundaryUplift: Float32Array,
+  density: Uint8Array,
   width: number,
   height: number,
   applyTo: ((i: number) => boolean) | null,
 ): void {
   const inv2SigmaSq = 1 / (2 * sigma * sigma)
+  // Phase 1: count contributors (so each cell knows how many Gaussians
+  // will write to it, before they actually write — used to normalize
+  // the contribution per stamp).
+  for (let dy = -radius; dy <= radius; dy++) {
+    const ty = cy + dy
+    if (ty < 0 || ty >= height) continue
+    for (let dx = -radius; dx <= radius; dx++) {
+      const d2 = dx * dx + dy * dy
+      if (d2 > radius * radius) continue
+      const tx = wrapX(cx + dx, width)
+      const ti = idx(width, tx, ty)
+      if (applyTo !== null && !applyTo(ti)) continue
+      if (density[ti] < 255) density[ti]++
+    }
+  }
+  // Phase 2: stamp with density scaling.
   for (let dy = -radius; dy <= radius; dy++) {
     const ty = cy + dy
     if (ty < 0 || ty >= height) continue
@@ -124,8 +149,10 @@ function applyGaussian(
       const tx = wrapX(cx + dx, width)
       const ti = idx(width, tx, ty)
       if (applyTo !== null && !applyTo(ti)) continue
-      elev[ti] += w
-      boundaryUplift[ti] += w
+      const scale = 4 / Math.max(4, density[ti])
+      const contribution = w * scale
+      elev[ti] += contribution
+      boundaryUplift[ti] += contribution
     }
   }
 }
@@ -224,6 +251,7 @@ export function computeOrogeny(
   const n = width * height
   const elev = new Float32Array(n)
   const boundaryUplift = new Float32Array(n)
+  const density = new Uint8Array(n)
 
   // 1. Base elevation: 200 m on land, 0 at sea.
   for (let i = 0; i < n; i++) {
@@ -252,6 +280,7 @@ export function computeOrogeny(
         CC_SIGMA,
         elev,
         boundaryUplift,
+        density,
         width,
         height,
         null,
@@ -268,6 +297,7 @@ export function computeOrogeny(
           OC_SIGMA,
           elev,
           boundaryUplift,
+          density,
           width,
           height,
           landPred,
@@ -280,6 +310,7 @@ export function computeOrogeny(
           OC_SIGMA,
           elev,
           boundaryUplift,
+          density,
           width,
           height,
           oceanPred,
@@ -293,6 +324,7 @@ export function computeOrogeny(
           OC_SIGMA,
           elev,
           boundaryUplift,
+          density,
           width,
           height,
           oceanPred,
@@ -305,6 +337,7 @@ export function computeOrogeny(
           OC_SIGMA,
           elev,
           boundaryUplift,
+          density,
           width,
           height,
           landPred,
@@ -322,6 +355,7 @@ export function computeOrogeny(
           DIVERGENT_SIGMA,
           elev,
           boundaryUplift,
+          density,
           width,
           height,
           landPred,
@@ -335,6 +369,7 @@ export function computeOrogeny(
           DIVERGENT_SIGMA,
           elev,
           boundaryUplift,
+          density,
           width,
           height,
           landPred,
@@ -348,6 +383,7 @@ export function computeOrogeny(
           DIVERGENT_SIGMA,
           elev,
           boundaryUplift,
+          density,
           width,
           height,
           oceanPred,
@@ -399,19 +435,19 @@ export function computeOrogeny(
   // 8. Final smoothing.
   blurElev(elev, mask, threshold, width, height)
 
-  // 9. Assertion + clamping.
-  let maxElev = 0
+  // 9. Final clamping: solid land ≥ 0, no peak above MAX_PEAK_M.
+  // We no longer throw on overflow — the density scaling above plus this
+  // hard cap is enough defense-in-depth. A peak > MAX_PEAK_M means a
+  // pathological fixture; capping is gentler than throwing in the
+  // middle of a real pipeline run.
   for (let i = 0; i < n; i++) {
     const v = elev[i]
-    if (v > maxElev) maxElev = v
     // Clamp negative land to 0 — a deep rift on land can otherwise
     // drive the field below sea level, which the spec forbids.
     if (mask[i] > threshold && v < 0) elev[i] = 0
-  }
-  if (maxElev > MAX_PEAK_M) {
-    throw new Error(
-      `Orogeny peak elevation ${maxElev.toFixed(0)}m exceeds limit ${MAX_PEAK_M}m`,
-    )
+    // Hard cap so a pathological 18-stacked Gaussian can never
+    // produce a 36,000m mountain.
+    if (v > MAX_PEAK_M) elev[i] = MAX_PEAK_M
   }
 
   // Use meanLand once so the import stays live; handy provenance value

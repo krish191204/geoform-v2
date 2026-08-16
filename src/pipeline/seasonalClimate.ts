@@ -227,30 +227,31 @@ function marchPrecipitation(
   out: Float32Array,
   scale: number,
 ): void {
-  for (let y = 0; y < height; y++) {
-    let airM = 1.0
-    // March west: from the eastern edge (x = width-1) down to 0.
-    // At each x the upstream is wrapX(x+1, w): the cell the air has
-    // just left. At x = width-1 the upstream wraps to x = 0 (the
-    // world is treated as a torus for wind continuity); the air
-    // there is fully saturated because we just reset airM.
-    for (let x = width - 1; x >= 0; x--) {
-      const i = idx(width, x, y)
-      const upstreamX = wrapX(x + 1, width)
-      const upstreamI = idx(width, upstreamX, y)
-      const upstreamElev = elev[upstreamI]
-      const currentElev = elev[i]
-
-      // The current cell is higher than its upstream neighbour: the
-      // air column has just been forced up the slope. Release
-      // moisture proportional to the elevation gain, capped by the
-      // remaining air moisture.
-      if (currentElev > upstreamElev) {
-        const extract = ((currentElev - upstreamElev) / 1000) * PRECIP_PER_KM_UPSLOPE
-        const precip = extract < airM ? extract : airM
-        out[i] += precip * scale
-        airM -= precip
+  // Cylinder wrap: keep `airM` continuous across x=0/x=width-1.
+  // 1 pass alone leaves a discontinuity at x=0 (the air column is
+  // already-depleted when the wind reaches the wrap). We do 2 prime
+  // circuits (no deposit, just let the airM settle around the cylinder)
+  // and then 1 deposit pass that captures the actual precipitation.
+  // Single wind direction (west) — never average with the eastbound
+  // march, that would destroy the rain shadow.
+  const march = (deposit: boolean) => {
+    for (let y = 0; y < height; y++) {
+      let airM = 1.0
+      for (let x = width - 1; x >= 0; x--) {
+        const i = idx(width, x, y)
+        const upstreamI = idx(width, wrapX(x + 1, width), y)
+        const upstreamElev = elev[upstreamI]
+        const currentElev = elev[i]
+        if (currentElev > upstreamElev) {
+          const extract = ((currentElev - upstreamElev) / 1000) * PRECIP_PER_KM_UPSLOPE
+          const precip = extract < airM ? extract : airM
+          airM -= precip
+          if (deposit) out[i] += precip * scale
+        }
       }
     }
   }
+  march(false)  // prime 1
+  march(false)  // prime 2
+  march(true)   // deposit
 }

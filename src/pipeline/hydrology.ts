@@ -275,9 +275,12 @@ export function computeHydrology(
     const y = (i - x) / width
     const j = lowestNeighbour(e, x, y, width, height)
     if (j === -1) {
-      // Local maximum: no downhill neighbour on land.
-      // Audit check (Donald bar): flux[i] must be 0 here.
-      flux[i] = 0
+      // Sink / flat plain / local min: no strictly lower neighbour.
+      // Keep accumulated flux from donors above (the descending sort
+      // already added them). The original code wrongly zeroed flux here,
+      // clobbering downstream-cumulated flux. The Donald-bar check
+      // (`flux[i] === 0` on strict local maxima) is independent and
+      // asserted in a separate test (see PR 5).
       continue
     }
     flux[j] += 1 + flux[i]

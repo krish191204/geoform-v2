@@ -77,10 +77,11 @@ function isLandInContinent(i: number, width: number, _height: number): boolean {
 
 /** Find a land cell adjacent to an ocean cell along a given direction. */
 function findCoastPair(): { land: number; ocean: number } {
-  // Continent in makeContinentWorld is the disc (32, 16, r=20). Walk down
-  // the centre column until we cross the boundary.
-  const x = 32
-  for (let y = 16; y < HEIGHT - 1; y++) {
+  // The disc has radius 20 at center (32, 16), so column 32 is land all
+  // the way from y=0 to y=31. Column 13 has land from y=10..22 and ocean
+  // at y=0..9 and y=23..31 — we walk down that column to find a coast.
+  const x = 13
+  for (let y = 10; y < HEIGHT - 1; y++) {
     const i = idx(WIDTH, x, y)
     const iBelow = idx(WIDTH, x, y + 1)
     if (isLandInContinent(i, WIDTH, HEIGHT) && !isLandInContinent(iBelow, WIDTH, HEIGHT)) {
