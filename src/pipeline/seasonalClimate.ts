@@ -46,6 +46,15 @@ export interface SeasonalClimateResult {
   summer: Float32Array
   /** Winter mean temperature per cell, °C. */
   winter: Float32Array
+  /**
+   * Latitude-aware annual mean temperature per cell, °C. This is NOT
+   * `(summer + winter) / 2` — that averages a symmetric summer/winter
+   * formula and is therefore latitude-blind (every cell reads 30 °C).
+   * Instead `tempMean` is driven by the daily-averaged solar insolation
+   * proxy `cos(latRad) * sin(obliquity)`, which gives ~21 °C at the
+   * equator and ~15 °C at the poles, with the lapse rate applied on top.
+   */
+  tempMean: Float32Array
   /** Summer precipitation index per cell, 0..1. */
   summerMoist: Float32Array
   /** Winter precipitation index per cell, 0..1. */
@@ -123,6 +132,11 @@ export function computeSeasonalClimate(
   const n = width * height
   const summer = new Float32Array(n)
   const winter = new Float32Array(n)
+  // Latitude-aware annual mean. Computed alongside summer/winter so
+  // the inner loop produces all three fields in one pass. See the
+  // docstring on `tempMean` above for why this is NOT
+  // `(summer + winter) / 2`.
+  const tempMean = new Float32Array(n)
   const summerMoist = new Float32Array(n)
   const winterMoist = new Float32Array(n)
 
@@ -142,6 +156,23 @@ export function computeSeasonalClimate(
   const obliquityRad = (obliquityDeg * Math.PI) / 180
   const sinObl = Math.sin(obliquityRad)
 
+  // `tempMean` is the latitude-driven annual mean. The summer/winter
+  // formulas above are symmetric in `cosZ` — `(summer + winter) / 2`
+  // averages to `BASE_TEMP_C` regardless of latitude, which would
+  // give every cell 30 °C and leave the biome classifier blind to
+  // equator-vs-pole. We therefore build `tempMean` from the
+  // daily-averaged solar-insolation proxy `cos(lat) * sin(obliquity)`
+  // directly, with the lapse rate applied on top.
+  //
+  //   latFactor = 0.5 + 0.5 * cos(lat) * sin(obliquity)
+  //   tempMean  = BASE_TEMP_C * latFactor − elevKm * LAPSE_RATE
+  //
+  // At the equator (lat=0) `cos(lat)=1` and we get
+  //   0.5 + 0.5 * sin(23.5°) ≈ 0.7  →  21 °C
+  // At the pole (lat=π/2) `cos(lat)=0` and we get
+  //   0.5                       = 0.5  →  15 °C
+  // Note: we use `cos(lat)` (not `sin(lat)`) because `helpers.latRad`
+  // is 0 at the equator and ±π/2 at the poles.
   for (let y = 0; y < height; y++) {
     const lat = latRad(y, height)
     const cosZ = sinObl * Math.cos(lat)
@@ -154,6 +185,9 @@ export function computeSeasonalClimate(
     const winterInsol = 1 - cosZ
     const summerBase = BASE_TEMP_C * summerInsol
     const winterBase = BASE_TEMP_C * winterInsol
+    // Latitude factor for the annual mean. See the block comment
+    // above for derivation.
+    const latFactor = 0.5 + 0.5 * Math.cos(lat) * sinObl
 
     for (let x = 0; x < width; x++) {
       const i = idx(width, x, y)
@@ -163,6 +197,9 @@ export function computeSeasonalClimate(
       // A scale of 80 cells gives a believable continentality
       // half-life: at 80 cells from the sea coastality is 0.5, at
       // 240 cells it is 0.25.
+      // Continentality widens the annual *range*, not the annual
+      // mean — so it appears in `summer` and `winter` below but NOT
+      // in `tempMean`.
       const coastality = 1 / (1 + coastDist[i] / COASTALITY_SCALE_CELLS)
       const inland = 1 - coastality
 
@@ -176,6 +213,15 @@ export function computeSeasonalClimate(
 
       summer[i] = s
       winter[i] = w
+
+      // Annual mean from the latitude-driven formula, with the
+      // lapse rate applied on top. Clamped to the same range as the
+      // seasonal fields so downstream consumers never see NaN or
+      // out-of-range values from a high-altitude cell.
+      let tm = BASE_TEMP_C * latFactor - lapse
+      if (tm < TEMP_CLAMP_MIN_C) tm = TEMP_CLAMP_MIN_C
+      else if (tm > TEMP_CLAMP_MAX_C) tm = TEMP_CLAMP_MAX_C
+      tempMean[i] = tm
     }
   }
 
@@ -193,7 +239,7 @@ export function computeSeasonalClimate(
   // Winter is generally drier — same march, halved output.
   marchPrecipitation(orogeny.elev, width, height, winterMoist, WINTER_PRECIP_SCALE)
 
-  return { summer, winter, summerMoist, winterMoist }
+  return { summer, winter, tempMean, summerMoist, winterMoist }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,16 +249,18 @@ export function computeSeasonalClimate(
 /**
  * March a column of saturated air east-to-west across each row,
  * extracting moisture whenever the current cell is higher than its
- * upstream (eastern neighbour, wrapped) cell. Each row is
- * independent; `airM` resets to 1.0 at the eastern edge.
+ * upstream (eastern neighbour, wrapped) cell. The cylinder wraps:
+ * the air column is continuous across the x=0 / x=width-1 seam. We
+ * prime with two air-circuits (no deposit, just let `airM` stabilize
+ * around the cylinder) and then take one deposit pass that
+ * accumulates actual precipitation. The "Donald bar" moisture
+ * conservation invariant is preserved by construction: `precip =
+ * min(extract, airM)` and `airM -= precip`, so no cell's moisture
+ * index can exceed the initial 1.0 saturation, even when upstream
+ * ridges have already eaten the air column dry.
  *
  * `scale` is applied to the precipitation that lands on each cell:
  * `1.0` for summer, `0.5` for winter.
- *
- * Precipitation is conserved by construction: `precip = min(extract,
- * airM)` and `airM -= precip`. The maximum any cell can accumulate
- * is 1.0 (the initial saturation), regardless of how many
- * precipitation events occur upstream.
  *
  * The "extract on ascent" condition is what makes the windward side
  * of an N-S ridge wetter than the lee side: air climbs the windward
