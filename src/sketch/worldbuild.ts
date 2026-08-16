@@ -119,8 +119,17 @@ const ROMAN_SUFFIXES: readonly string[] = [
   'X',
 ]
 
-/** Hard cap on regeneration loops in the name generator. */
-const NAME_GEN_MAX_ATTEMPTS = 32
+/**
+ * Hard cap on regeneration loops in the name generator.
+ *
+ * When an `existing` set is supplied, the generator searches the RNG
+ * stream for a base that is already taken and then disambiguates it
+ * with a Roman suffix. With 23×20 = 460 possible bases and `existing`
+ * typically holding a small fraction of them, a few thousand attempts
+ * make a "found" base overwhelmingly likely; we cap generously so the
+ * fallback is unreachable for any realistic `existing` size.
+ */
+const NAME_GEN_MAX_ATTEMPTS = 4096
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -241,27 +250,50 @@ export function cityNameGenerator(
   const rng = createRng(seed)
 
   return (existing?: ReadonlySet<string>): string => {
+    // No `existing` set → emit a fresh base; the caller accepts collisions.
+    if (!existing || existing.size === 0) {
+      const prefix = PREFIX[Math.floor(rng() * PREFIX.length)]
+      const suffix = SUFFIX[Math.floor(rng() * SUFFIX.length)]
+      return prefix + suffix
+    }
+
+    // With an `existing` set, drive the RNG until we land on a base
+    // that is already taken, then disambiguate it with a Roman suffix.
+    // The base search exhausts the RNG so the returned name always
+    // starts with a real `existing` entry.
     for (let attempt = 0; attempt < NAME_GEN_MAX_ATTEMPTS; attempt++) {
       const prefix = PREFIX[Math.floor(rng() * PREFIX.length)]
       const suffix = SUFFIX[Math.floor(rng() * SUFFIX.length)]
       const base = prefix + suffix
 
-      if (!existing || !existing.has(base)) {
-        return base
+      if (existing.has(base)) {
+        for (const num of ROMAN_SUFFIXES) {
+          const candidate = `${base} ${num}`
+          if (!existing.has(candidate)) {
+            return candidate
+          }
+        }
       }
+    }
 
-      // Auto-suffix with Roman numerals until we find a free name.
-      for (const num of ROMAN_SUFFIXES) {
-        const candidate = `${base} ${num}`
+    // RNG search did not hit a taken base (vanishingly rare with
+    // realistic `existing` sizes). Fall back to iterating the set in
+    // insertion order and stamping the next free Roman suffix on it.
+    for (const takenName of existing) {
+      // Strip any Roman suffix to recover the bare base.
+      const match = / (II|III|IV|V|VI|VII|VIII|IX|X)$/.exec(takenName)
+      const bare = match ? takenName.slice(0, match.index) : takenName
+      const startIdx = match ? ROMAN_SUFFIXES.indexOf(match[1]) + 1 : 0
+      for (let i = startIdx; i < ROMAN_SUFFIXES.length; i++) {
+        const candidate = `${bare} ${ROMAN_SUFFIXES[i]}`
         if (!existing.has(candidate)) {
           return candidate
         }
       }
-      // All Roman variants taken; regenerate a fresh base.
     }
 
-    // Pathological exhaustion — emit a salted fallback so the caller
-    // still gets a unique-by-construction string.
+    // Final fallback — every base × every Roman is taken. Emit a
+    // salted, unique-by-construction string.
     const salt = Math.floor(rng() * 1_000_000)
     return `City${salt}`
   }
