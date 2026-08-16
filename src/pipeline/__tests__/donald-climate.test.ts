@@ -154,6 +154,7 @@ describe('Donald bar: continentality', () => {
   it('a polar continent produces a wide annual temperature range inland', async () => {
     const tw = makePolarStripWorld()
     const meta = metaFromTest(tw, 1, 0.5)
+    void meta
     const result = await evolve(tw, 1, 0.5)
     // The polar strip is 4 rows tall — there are no cells sufficiently
     // far from the coast to read "deep interior". So the test is
@@ -168,6 +169,7 @@ describe('Donald bar: continentality', () => {
   it('a mid-latitude continent reads tempRange[i] >= 15 °C for coastal cells', async () => {
     const tw = makeContinentWorld()
     const meta = metaFromTest(tw, 1, 0.5)
+    void meta
     const result = await evolve(tw, 1, 0.5)
     const seaLevel = 0.5
     let found = false
@@ -187,7 +189,7 @@ describe('Donald bar: continentality', () => {
 
   it('the tempRange array is non-zero on land', async () => {
     const tw = makeContinentWorld()
-    const meta = metaFromTest(tw, 7, 0.5)
+    void metaFromTest(tw, 7, 0.5)
     const result = await evolve(tw, 7, 0.5)
     let nonzero = 0
     for (let i = 0; i < result.tempRange.length; i++) {
@@ -205,6 +207,7 @@ describe('Donald bar: rain shadow', () => {
   it('a continent at any latitude shows mean moisture higher on the windward side than lee', async () => {
     const tw = makeContinentWorld()
     const meta = metaFromTest(tw, 1, 0.5)
+    void meta
     const result = await evolve(tw, 1, 0.5)
     const w = tw.width
     const h = tw.height
@@ -249,7 +252,7 @@ describe('Donald bar: rain shadow', () => {
 
   it('a mountain-bearing continent reads more moisture on the windward than lee slope', async () => {
     const tw = makeTwinContinentWorld()
-    const meta = metaFromTest(tw, 42, 0.5)
+    void metaFromTest(tw, 42, 0.5)
     const result = await evolve(tw, 42, 0.5)
     const w = tw.width
     const h = tw.height
@@ -301,6 +304,7 @@ describe('Donald bar: no flux on local maxima', () => {
   it('flux[i] = 0 for every cell that is a strict local maximum of elev', async () => {
     const tw = makeContinentWorld()
     const meta = metaFromTest(tw, 1, 0.5)
+    void meta
     const result = await evolve(tw, 1, 0.5)
     const w = tw.width
     const h = tw.height

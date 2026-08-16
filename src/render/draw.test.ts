@@ -67,12 +67,13 @@ function makeWorld(opts: TestWorldOpts = {}): World {
 
   const elev = resolveArr<number>(opts.elev, 500, width, height)
   // Default summer: row gradient 0 → 30 °C.
-  const summer = resolveArr<number>(
-    opts.summer,
-    (x, y) => ((x + y) / Math.max(1, width + height - 2)) * 30,
-    width,
-    height,
-  )
+  const defaultSummer: number[] = []
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      defaultSummer.push(((x + y) / Math.max(1, width + height - 2)) * 30)
+    }
+  }
+  const summer = resolveArr<number>(opts.summer ?? defaultSummer, 0, width, height)
   const winter = resolveArr<number>(opts.winter, 0, width, height)
   const summerMoist = resolveArr<number>(opts.summerMoist, 0.5, width, height)
   const winterMoist = resolveArr<number>(opts.winterMoist, 0.5, width, height)

@@ -17,13 +17,6 @@ function fill(size: number, value: number): Float32Array {
   return Float32Array.from({ length: size }, () => value)
 }
 
-/** Count cells where mask[i] >= threshold (land). */
-function landCells(mask: Float32Array, threshold: number): number {
-  let n = 0
-  for (let i = 0; i < mask.length; i++) if (mask[i] >= threshold) n++
-  return n
-}
-
 /** Sum a Float32Array. */
 function sum(a: Float32Array): number {
   let s = 0

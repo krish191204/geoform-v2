@@ -51,7 +51,7 @@ export { SEVERITY_WEIGHTS, scoreFromIssues, sortIssuesBySeverity }
 // ---------------------------------------------------------------------------
 
 /** Fraction of cells with `mask >= threshold`. */
-function landFraction(mask: Float32Array, w: number, h: number, threshold: number): number {
+function landFraction(mask: Float32Array, _w: number, _h: number, threshold: number): number {
   let land = 0
   const total = mask.length
   if (total === 0) return 0

@@ -21,7 +21,6 @@ import {
 } from '../../sketch/worldbuild'
 import type { World, City, WorldMeta } from '../../world/types'
 import type { CellBiome } from '../../world/types'
-import { DEFAULT_META } from '../../world/types'
 import { makeContinentWorld } from './fixtures'
 import type { TestWorld } from './fixtures'
 

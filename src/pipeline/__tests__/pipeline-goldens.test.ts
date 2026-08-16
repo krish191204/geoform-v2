@@ -23,7 +23,6 @@ import {
 } from '../../critique/analyzeWorld'
 import type { World, WorldMeta } from '../../world/types'
 import { makeContinentWorld } from './fixtures'
-import type { TestWorld } from './fixtures'
 
 // ---------------------------------------------------------------------------
 // Helpers

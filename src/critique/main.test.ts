@@ -10,8 +10,6 @@ import {
 } from './main'
 import {
   checkIceDesertDualism,
-  checkRainShadow,
-  checkContinentality,
   checkFluxOnMaxima,
   checkMaskLock,
   computeCoastDistance,

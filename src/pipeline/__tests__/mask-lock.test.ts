@@ -167,7 +167,7 @@ describe('bigComponentsMask (pre-count)', () => {
 describe('byte-deterministic output', () => {
   it('the same seed produces a byte-identical MakeSenseResult', async () => {
     const tw = makeContinentWorld()
-    const meta = metaFromTest(tw, 1234, 0.5)
+    void metaFromTest(tw, 1234, 0.5)
     const a = await evolve(tw, 1234, 0.5)
     const b = await evolve(tw, 1234, 0.5)
     // Same provenance steps.

@@ -60,7 +60,7 @@ function oneBoundary(cls: Boundary['class']): PlateAssignment {
 }
 
 /** True for cells strictly inside the continent circle in `makeContinentWorld`. */
-function isLandInContinent(i: number, width: number, height: number): boolean {
+function isLandInContinent(i: number, width: number, _height: number): boolean {
   const x = i % width
   const y = (i - x) / width
   const cx = 32
