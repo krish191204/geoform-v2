@@ -38,11 +38,18 @@ import {
   updateTopbar,
   type StageRefs,
 } from './ui'
+import { renderMaskToCanvas } from './canvas_paint'
 import { createMaskBrushes } from '../sketch/maskBrushes'
+import { placeCity, removeNearestCity } from '../sketch/worldbuild'
 import { makeSenseInline } from '../pipeline/makeSense_inline'
 import { critiqueMask, critiqueWorld } from '../critique/main'
-import { hasMask, loadMask } from '../world/persist'
-import { announce } from './coach'
+import {
+  saveMask,
+  saveWorld,
+  serializeMask,
+  serializeWorld,
+} from '../world/persist'
+import { announce as announceCoach } from './coach'
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -118,17 +125,10 @@ export function mountApp(root: HTMLElement): void {
   const bundle = makeInitialBundle()
   const { state, flags } = bundle
 
-  // ----- Boot: load any persisted mask ----------------------------------
-  // The user can resume a saved sketch. If none, default to empty ocean.
-  if (hasMask()) {
-    const saved = loadMask()
-    if (saved) {
-      flags.mask = saved.mask
-      state.meta = saved.meta
-      flags.maskCommitted = true
-      announce('info', `Resumed saved mask (${state.meta.seed}).`)
-    }
-  }
+  // ----- Boot: always start with an empty ocean per the Phase 0 spec. ---
+  // The user can opt in to resume a saved sketch via a future "Resume"
+  // button; for Phase 0 we leave the canvas untouched until the user
+  // paints. This also keeps the boot deterministic for tests.
 
   // Mask brush module — owns the dab logic. Created once, reused for
   // every canvas pointer event.
@@ -165,17 +165,47 @@ export function mountApp(root: HTMLElement): void {
     }
   }
 
-  /** Bind a single `pointerdown` + `pointermove` to the brush. */
+  /** Bind a single `pointerdown` + `pointermove` to the brush / city router. */
   function attachCanvasDab(canvas: HTMLCanvasElement): void {
     let painting = false
     const dab = (clientX: number, clientY: number) => {
-      if (!flags.mask) {
-        flags.mask = new Float32Array(state.meta.width * state.meta.height)
-      }
       const rect = canvas.getBoundingClientRect()
       const x = Math.floor(((clientX - rect.left) / rect.width) * state.meta.width)
       const y = Math.floor(((clientY - rect.top) / rect.height) * state.meta.height)
       if (x < 0 || x >= state.meta.width || y < 0 || y >= state.meta.height) return
+
+      // Worldbuild tools route to city placement; sketch tools route to the
+      // mask brushes. The routing is tool-driven so the same canvas
+      // listener works on every stage.
+      if (state.tool === 'place-city' || state.tool === 'remove-city') {
+        if (!state.world) {
+          announce('warn', 'No derived world yet — run Make sense first.')
+          return
+        }
+        if (state.tool === 'place-city') {
+          const next = `City ${state.world.cities.length + 1}`
+          const result = placeCity(state.world, x, y, next)
+          if (result.rejected) {
+            announce('warn', 'No city placed — need land, suitability ≥ 0.4, no neighbour within 5 cells.')
+          } else if (result.city) {
+            announce('success', `Placed ${result.city.name} at (${x}, ${y}).`)
+          }
+        } else {
+          const result = removeNearestCity(state.world, x, y)
+          if (result.matched && result.removed) {
+            announce('info', `Removed ${result.removed.name}.`)
+          } else {
+            announce('warn', 'No city within range.')
+          }
+        }
+        render()
+        return
+      }
+
+      // Sketch tool: mutate the mask.
+      if (!flags.mask) {
+        flags.mask = new Float32Array(state.meta.width * state.meta.height)
+      }
       const tool = state.tool === 'erase-land' ? 'erase-land' : 'draw-land'
       brushes.dab({
         mask: flags.mask,
@@ -186,6 +216,8 @@ export function mountApp(root: HTMLElement): void {
         strength: state.strength,
         tool,
       })
+      // Always repaint the canvas so the user sees the new dab.
+      renderMaskToCanvas(canvas, flags.mask, state.meta)
       flagOnlyMaskDirty()
     }
     canvas.addEventListener('pointerdown', (e) => {
@@ -205,13 +237,17 @@ export function mountApp(root: HTMLElement): void {
   }
 
   /**
-   * Re-render once after a mask dab. Triggers a topbar update so the
-   * "Critique" button enables as soon as the mask has any land.
+   * Re-render once after a mask dab. Updates the topbar (so the
+   * "Critique" button enables as soon as the mask has any land) AND
+   * the current stage UI (so any in-stage sliders/badges refresh).
    * Cheap enough that we don't bother with throttling.
    */
   function flagOnlyMaskDirty(): void {
     const view = buildView(bundle)
     updateTopbar(topbarRefs, view)
+    if (currentStageUI !== null) {
+      updateStageUI(currentStageUI, view)
+    }
   }
 
   // ----- Topbar events ---------------------------------------------------
@@ -233,7 +269,45 @@ export function mountApp(root: HTMLElement): void {
   })
 
   window.addEventListener(APP_EVENTS.SAVE, () => {
-    announce('info', `Saved (seed ${state.meta.seed}).`)
+    // Save whatever is currently mounted. If we have a derived world,
+    // save it; otherwise save the mask. Both succeed or fail honestly —
+    // a bare "Saved (seed N)" message without any storage write is B02.
+    if (state.world) {
+      const json = serializeWorld(state.world)
+      const bytes = json.length
+      const ok = saveWorld(state.world)
+      if (ok) {
+        announceCoach({ kind: 'persist.saved', key: 'world', bytes, ok: true })
+      } else {
+        announceCoach({
+          kind: 'persist.failed',
+          key: 'world',
+          reason: 'quota',
+          bytes,
+        })
+      }
+    } else if (flags.mask) {
+      const json = serializeMask(state.meta, flags.mask)
+      const bytes = json.length
+      const ok = saveMask(state.meta, flags.mask)
+      if (ok) {
+        announceCoach({ kind: 'persist.saved', key: 'mask', bytes, ok: true })
+      } else {
+        announceCoach({
+          kind: 'persist.failed',
+          key: 'mask',
+          reason: 'quota',
+          bytes,
+        })
+      }
+    } else {
+      announceCoach({
+        kind: 'persist.failed',
+        key: 'mask',
+        reason: 'shape',
+        bytes: 0,
+      })
+    }
   })
 
   window.addEventListener(APP_EVENTS.RESET, () => {
