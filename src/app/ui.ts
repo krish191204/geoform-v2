@@ -205,11 +205,14 @@ export function mountCoachBar(): HTMLElement {
   root.append(badge)
 
   window.addEventListener('coach:message', (ev) => {
+    // Coach-engine emits `message` (see src/app/coach.ts). Old UI
+    // read `text` — that field doesn't exist, so the badge stayed
+    // empty. Read the correct field.
     const detail = (ev as CustomEvent).detail as
-      | { tone?: 'info' | 'success' | 'warn' | 'error'; text?: string }
+      | { tone?: 'info' | 'success' | 'warn' | 'error'; message?: string }
       | undefined
     const tone = detail?.tone ?? 'info'
-    const text = detail?.text ?? ''
+    const text = detail?.message ?? ''
     badge.className = `coach-badge coach-${tone}`
     badge.textContent = text
   })
@@ -502,7 +505,11 @@ export function updateCritiqueStage(refs: CritiqueStageRefs, state: ShellStateVi
 
 function formatScore(score: number): string {
   if (score <= 0) return '—'
-  return `${Math.round(score * 100)}%`
+  // score is 0..100 (from scoreFromIssues in src/critique/main.ts).
+  // Don't multiply by 100 here — that's the bug the original
+  // inverse-unit assumption produced (a real score of 75 displayed as
+  // "7500%").
+  return `${Math.round(score)}%`
 }
 
 function renderIssues(list: HTMLElement, issues: readonly { id: string; severity: string; title: string }[]): void {

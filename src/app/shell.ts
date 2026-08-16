@@ -10,6 +10,8 @@
  *     sliders, tool picks).
  *   - `coach:message` events fired by anyone — passed through to the
  *     coach-bar UI.
+ *   - canvas pointer events on the Sketch stage — wired by the shell
+ *     to `paintMask` from the brush module.
  *
  * On every state change the shell re-renders the affected DOM regions
  * via the `ui` module. There is no external state library.
@@ -36,6 +38,11 @@ import {
   updateTopbar,
   type StageRefs,
 } from './ui'
+import { createMaskBrushes } from '../sketch/maskBrushes'
+import { makeSenseInline } from '../pipeline/makeSense_inline'
+import { critiqueMask, critiqueWorld } from '../critique/main'
+import { hasMask, loadMask } from '../world/persist'
+import { announce } from './coach'
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -111,6 +118,22 @@ export function mountApp(root: HTMLElement): void {
   const bundle = makeInitialBundle()
   const { state, flags } = bundle
 
+  // ----- Boot: load any persisted mask ----------------------------------
+  // The user can resume a saved sketch. If none, default to empty ocean.
+  if (hasMask()) {
+    const saved = loadMask()
+    if (saved) {
+      flags.mask = saved.mask
+      state.meta = saved.meta
+      flags.maskCommitted = true
+      announce('info', `Resumed saved mask (${state.meta.seed}).`)
+    }
+  }
+
+  // Mask brush module — owns the dab logic. Created once, reused for
+  // every canvas pointer event.
+  const brushes = createMaskBrushes()
+
   // Mount the three regions: topbar, stage body, coach bar.
   const topbarRefs = mountTopbar()
   const stageBody = mountStageBody()
@@ -128,11 +151,67 @@ export function mountApp(root: HTMLElement): void {
     updateTopbar(topbarRefs, view)
     if (currentStageUI === null || currentStageUI.stage !== state.stage) {
       const next = mountStageUI(view)
+      // Wire canvas pointer events to the brush. The canvas is in the
+      // SketchStageRefs only; the other stages don't have one. When the
+      // stage changes, we re-attach the listener.
+      const sketchRefs = next.refs as { canvas?: HTMLCanvasElement } | undefined
+      if (sketchRefs?.canvas) {
+        attachCanvasDab(sketchRefs.canvas)
+      }
       stageBody.mount(next.refs.root)
       currentStageUI = next
     } else {
       updateStageUI(currentStageUI, view)
     }
+  }
+
+  /** Bind a single `pointerdown` + `pointermove` to the brush. */
+  function attachCanvasDab(canvas: HTMLCanvasElement): void {
+    let painting = false
+    const dab = (clientX: number, clientY: number) => {
+      if (!flags.mask) {
+        flags.mask = new Float32Array(state.meta.width * state.meta.height)
+      }
+      const rect = canvas.getBoundingClientRect()
+      const x = Math.floor(((clientX - rect.left) / rect.width) * state.meta.width)
+      const y = Math.floor(((clientY - rect.top) / rect.height) * state.meta.height)
+      if (x < 0 || x >= state.meta.width || y < 0 || y >= state.meta.height) return
+      const tool = state.tool === 'erase-land' ? 'erase-land' : 'draw-land'
+      brushes.dab({
+        mask: flags.mask,
+        meta: state.meta,
+        x,
+        y,
+        brushSize: state.brushSize,
+        strength: state.strength,
+        tool,
+      })
+      flagOnlyMaskDirty()
+    }
+    canvas.addEventListener('pointerdown', (e) => {
+      painting = true
+      dab(e.clientX, e.clientY)
+    })
+    canvas.addEventListener('pointermove', (e) => {
+      if (!painting) return
+      dab(e.clientX, e.clientY)
+    })
+    canvas.addEventListener('pointerup', () => {
+      painting = false
+    })
+    canvas.addEventListener('pointercancel', () => {
+      painting = false
+    })
+  }
+
+  /**
+   * Re-render once after a mask dab. Triggers a topbar update so the
+   * "Critique" button enables as soon as the mask has any land.
+   * Cheap enough that we don't bother with throttling.
+   */
+  function flagOnlyMaskDirty(): void {
+    const view = buildView(bundle)
+    updateTopbar(topbarRefs, view)
   }
 
   // ----- Topbar events ---------------------------------------------------
@@ -178,8 +257,12 @@ export function mountApp(root: HTMLElement): void {
   window.addEventListener(APP_EVENTS.COMMIT_SKETCH, () => {
     if (state.stage !== 'sketch') return
     flags.maskCommitted = true
-    flags.score = 0.6 // demo: ensure Make-sense canEnter passes for Phase 0
-    announce('info', 'Sketch committed. Critique available.')
+    // Run the real pre-Make-sense critique on the mask. Score now comes
+    // from the real grader, not a hardcoded 0.6 demo.
+    const result = critiqueMask(flags.mask ?? new Float32Array(0), state.meta, state.meta.threshold)
+    state.issues = result.issues
+    flags.score = result.score
+    announce('info', `Sketch committed. Critique score: ${result.score}.`)
     render()
   })
 
@@ -187,19 +270,40 @@ export function mountApp(root: HTMLElement): void {
     if (state.stage !== 'critique') return
     const view = buildView(bundle)
     if (!STAGES['make-sense'].canEnter(view)) return
-    STAGES[state.stage].leave(view)
+    void runMakeSense()
+  })
+
+  /** The actual Make-sense pipeline run. */
+  async function runMakeSense(): Promise<void> {
+    STAGES[state.stage].leave(buildView(bundle))
     state.stage = 'make-sense'
     state.isProcessing = true
-    announce('info', 'Make-sense running…')
     render()
-    // Phase 0 placeholder: real pipeline is Phase 1+. Simulate completion.
-    window.setTimeout(() => {
+    announce('info', 'Make-sense running…')
+    try {
+      const result = await makeSenseInline({
+        meta: state.meta,
+        mask: flags.mask ?? new Float32Array(state.meta.width * state.meta.height),
+      })
+      state.world = result.world
+      state.provenance = result.provenance
+      // Post-Make-sense critique on the derived world.
+      const c = critiqueWorld(result.world)
+      state.issues = c.issues
+      flags.score = c.score
       flags.makeSenseComplete = true
       state.isProcessing = false
-      announce('success', 'Make-sense complete. Worldbuild available.')
+      announce(
+        'success',
+        `Make-sense complete. Score: ${c.score}. Rivers: ${c.issues.length === 0 ? '✓' : 'needs review'}.`,
+      )
+    } catch (err) {
+      state.isProcessing = false
+      announce('error', `Make-sense failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
       render()
-    }, 1500)
-  })
+    }
+  }
 
   window.addEventListener(APP_EVENTS.CANCEL_MAKE_SENSE, () => {
     if (state.stage !== 'make-sense') return
