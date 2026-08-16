@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * No-ridge-rivers regression tests.
  *

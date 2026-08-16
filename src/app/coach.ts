@@ -134,8 +134,12 @@ function render(event: CoachEvent): { tone: CoachTone; message: string } {
 /**
  * Dispatch a `coach:message` CustomEvent on `window` for the given event.
  * The message is generated purely from the event's measurements.
+ *
+ * Pure-Node / SSR / Web Worker: no-op. The CustomEvent wire is window-only;
+ * tests run under vitest+node, where `window` is undefined, so we early-return.
  */
 export function announce(event: CoachEvent): void {
+  if (typeof window === 'undefined') return
   const { tone, message } = render(event)
   window.dispatchEvent(
     new CustomEvent('coach:message', { detail: { kind: event.kind, message, tone } }),
