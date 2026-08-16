@@ -232,5 +232,3 @@ describe('Donald minimum', () => {
   })
 })
 
-// Suppress unused import warning for the test fixture type.
-void (null as unknown as TestWorld | null)
