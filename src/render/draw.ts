@@ -447,3 +447,187 @@ export function screenToCell(
   if (x < 0 || y < 0 || x >= world.width || y >= world.height) return null
   return { x, y }
 }
+
+/** Which coloring the 2D map (and globe bake) uses. Satellite / night are extra looks, not extra data. */
+export type MapLook = Layer | 'satellite' | 'night'
+
+/** Sample the chosen look at a fractional world coordinate (bilinear). */
+function sampleLookBilinear(
+  world: World,
+  look: MapLook,
+  x: number,
+  y: number,
+  time: number,
+): [number, number, number] {
+  const { width: w, height: h } = world
+  const x0 = Math.max(0, Math.min(w - 1, Math.floor(x)))
+  const y0 = Math.max(0, Math.min(h - 1, Math.floor(y)))
+  const x1 = Math.min(w - 1, x0 + 1)
+  const y1 = Math.min(h - 1, y0 + 1)
+  const fx = x - x0
+  const fy = y - y0
+  const layer = look as Layer
+  const c00 = cellColor(world, layer, x0, y0, false, time)
+  const c10 = cellColor(world, layer, x1, y0, false, time)
+  const c01 = cellColor(world, layer, x0, y1, false, time)
+  const c11 = cellColor(world, layer, x1, y1, false, time)
+  const top = mix(c00, c10, fx)
+  const bot = mix(c01, c11, fx)
+  return mix(top, bot, fy)
+}
+
+/** High-res bilinear bake for PNG export and HD globe textures. */
+export function bakeWorldImageDataSmooth(
+  world: World,
+  look: MapLook,
+  outW: number,
+  outH?: number,
+): ImageData {
+  const { width: w, height: h } = world
+  const cw = Math.max(1, outW)
+  const ch = Math.max(1, outH ?? Math.round((outW * h) / Math.max(1, w)))
+  const image = new ImageData(cw, ch)
+  const data = image.data
+  const scale = cw / w
+
+  for (let py = 0; py < ch; py++) {
+    const yf = py / scale
+    for (let px = 0; px < cw; px++) {
+      const xf = px / scale
+      const [r, g, b] = sampleLookBilinear(world, look, xf, yf, 0)
+      const o = (py * cw + px) * 4
+      data[o] = r
+      data[o + 1] = g
+      data[o + 2] = b
+      data[o + 3] = 255
+    }
+  }
+
+  if (look !== 'night') {
+    for (const c of world.cities) {
+      const cx = Math.round((c.x + 0.5) * scale)
+      const cy = Math.round((c.y + 0.5) * scale)
+      const r = Math.max(2, Math.round(scale * 0.55))
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (dx * dx + dy * dy > r * r) continue
+          const px = cx + dx
+          const py = cy + dy
+          if (px < 0 || py < 0 || px >= cw || py >= ch) continue
+          const o = (py * cw + px) * 4
+          data[o] = 245
+          data[o + 1] = 236
+          data[o + 2] = 214
+        }
+      }
+    }
+  }
+  return image
+}
+
+/** Roughness map: shiny ocean, matte land — for globe specular. */
+export function bakeRoughnessImageData(world: World, scale = 2): ImageData {
+  const { width: w, height: h, elev, seaLevel } = world
+  const cw = Math.max(1, w * scale)
+  const ch = Math.max(1, h * scale)
+  const image = new ImageData(cw, ch)
+  const data = image.data
+  for (let py = 0; py < ch; py++) {
+    const y = Math.min(h - 1, (py / scale) | 0)
+    for (let px = 0; px < cw; px++) {
+      const x = Math.min(w - 1, (px / scale) | 0)
+      const e = elev[y * w + x]
+      const v =
+        e < seaLevel
+          ? Math.round(28 + (e / Math.max(seaLevel, 1e-6)) * 18)
+          : Math.round(165 + ((e - seaLevel) / Math.max(1e-6, 1 - seaLevel)) * 55)
+      const o = (py * cw + px) * 4
+      data[o] = v
+      data[o + 1] = v
+      data[o + 2] = v
+      data[o + 3] = 255
+    }
+  }
+  return image
+}
+
+export function bakeBumpImageData(world: World, scale = 2): ImageData {
+  const { width: w, height: h, elev, seaLevel } = world
+  const cw = Math.max(1, w * scale)
+  const ch = Math.max(1, h * scale)
+  const image = new ImageData(cw, ch)
+  const data = image.data
+  for (let py = 0; py < ch; py++) {
+    const y = Math.min(h - 1, (py / scale) | 0)
+    for (let px = 0; px < cw; px++) {
+      const x = Math.min(w - 1, (px / scale) | 0)
+      const e = elev[y * w + x]
+      const v = e < seaLevel ? Math.round((e / seaLevel) * 70) : Math.round(90 + ((e - seaLevel) / Math.max(1e-6, 1 - seaLevel)) * 165)
+      const o = (py * cw + px) * 4
+      data[o] = v
+      data[o + 1] = v
+      data[o + 2] = v
+      data[o + 3] = 255
+    }
+  }
+  return image
+}
+
+/** RGB normal map from elevation slope — sharper mountains on the 3D globe. */
+export function bakeNormalImageData(world: World, scale = 2): ImageData {
+  const { width: w, height: h, elev, seaLevel } = world
+  const cw = Math.max(1, w * scale)
+  const ch = Math.max(1, h * scale)
+  const image = new ImageData(cw, ch)
+  const data = image.data
+
+  const sample = (x: number, y: number) => {
+    const cx = Math.max(0, Math.min(w - 1, x))
+    const cy = Math.max(0, Math.min(h - 1, y))
+    return elev[cy * w + cx]
+  }
+
+  for (let py = 0; py < ch; py++) {
+    const y = Math.min(h - 1, (py / scale) | 0)
+    for (let px = 0; px < cw; px++) {
+      const x = Math.min(w - 1, (px / scale) | 0)
+      const e = elev[y * w + x]
+      const dx = (sample(x + 1, y) - sample(x - 1, y)) * 2.4
+      const dy = (sample(x, y + 1) - sample(x, y - 1)) * 2.4
+      const dz = e < seaLevel ? 0.35 : 0.85 + Math.max(0, e - seaLevel) * 0.5
+      const len = Math.hypot(dx, dy, dz) || 1
+      const o = (py * cw + px) * 4
+      data[o] = Math.round((-dx / len) * 0.5 * 255 + 128)
+      data[o + 1] = Math.round((dy / len) * 0.5 * 255 + 128)
+      data[o + 2] = Math.round((dz / len) * 0.5 * 255 + 128)
+      data[o + 3] = 255
+    }
+  }
+  return image
+}
+
+/** Displacement height for globe mesh (land rises, ocean sinks slightly). */
+export function bakeDisplacementImageData(world: World, scale = 2): ImageData {
+  const { width: w, height: h, elev, seaLevel } = world
+  const cw = Math.max(1, w * scale)
+  const ch = Math.max(1, h * scale)
+  const image = new ImageData(cw, ch)
+  const data = image.data
+  for (let py = 0; py < ch; py++) {
+    const y = Math.min(h - 1, (py / scale) | 0)
+    for (let px = 0; px < cw; px++) {
+      const x = Math.min(w - 1, (px / scale) | 0)
+      const e = elev[y * w + x]
+      const v =
+        e < seaLevel
+          ? Math.round(40 + (e / Math.max(seaLevel, 1e-6)) * 30)
+          : Math.round(110 + ((e - seaLevel) / Math.max(1e-6, 1 - seaLevel)) * 145)
+      const o = (py * cw + px) * 4
+      data[o] = v
+      data[o + 1] = v
+      data[o + 2] = v
+      data[o + 3] = 255
+    }
+  }
+  return image
+}

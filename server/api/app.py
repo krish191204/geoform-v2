@@ -21,10 +21,12 @@ from .errors import (
     CODE_TIMEOUT,
     CODE_VALIDATION,
 )
+from .interpret import router as interpret_router
 from .migrations import migrate, validate
 from .schemas import (
     DeserializeRequest,
     GenerateRequest,
+    InterpretRequest,
     RecomputeRequest,
     SaveWorldRequest,
     SerializeRequest,
@@ -331,6 +333,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(router)
+    app.include_router(interpret_router)
 
     @app.exception_handler(APIError)
     async def _api_handler(_request, exc: APIError):

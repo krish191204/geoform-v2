@@ -40,3 +40,23 @@ __pycache__/
 
 # Saved world artifacts
 *.world
+
+# Local env files (B-added; safe to ignore — never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Cursor session artifacts (B-added; recovered via `npx skills add` if needed)
+.cursor/
+
+# Empty Cursor vendor-skill placeholders (B-added; gitignored by snapshot, not runtime)
+vendor-skills/
+
+# Track A AOI downloads — Cascades rain-shadow calibration (B-added)
+# Folders kept via `npm run aoi:init`; contents are gitignored
+data/raw/**/*
+!data/raw/**/.gitkeep
+data/staging/**/*
+!data/staging/**/.gitkeep
+data/derived/**/*
+!data/derived/**/.gitkeep

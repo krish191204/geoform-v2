@@ -156,7 +156,18 @@ const CITY_NAMES = [
   'Gildenreach',
 ]
 
-export function generateWorld(width: number, height: number, seed: number): World {
+export function generateWorld(
+  width: number,
+  height: number,
+  seed: number,
+  landRatio: number = 0.4,
+  continentMass: 'continents' | 'mixed' | 'islands' = 'continents',
+): World {
+  // landRatio/continentMass are accepted by B-side callers (critique samples,
+  // labs/continents). The function body still uses defaults — full fan-out is
+  // pending B's `mass.ts`/`land.ts` pipeline integration.
+  void landRatio
+  void continentMass
   const rng = createRng(seed)
   const plateCount = 8 + Math.floor(rng() * 6)
   const plates: Plate[] = []

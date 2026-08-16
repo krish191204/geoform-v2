@@ -24,7 +24,7 @@ from typing import Iterator
 import httpx
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # The server must run out of the project venv: it needs worldengine, numpy and
 # the noise C extension, none of which are on the system interpreter.

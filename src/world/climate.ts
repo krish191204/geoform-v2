@@ -1,5 +1,10 @@
 import type { Biome, SuitabilityResult, World } from './types'
 
+/** Land cells at or above this flux tint as rivers on the atlas. */
+export const RIVER_VISIBLE_MIN = 1.8
+/** Stronger trunk / main-stem tint starts here. */
+export const RIVER_MAIN_MIN = 5.5
+
 const idx = (w: number, x: number, y: number) => y * w + x
 
 export function classifyBiome(elev: number, sea: number, temp: number, moist: number): Biome {
@@ -248,4 +253,20 @@ export function recomputeDerived(world: World, includeSuitability = true): void 
   recomputeHydrology(world)
   recomputeBiomes(world)
   if (includeSuitability) recomputeSuitability(world)
+}
+
+/**
+ * Drainage + rivers without wiping WorldEngine climate/biomes.
+ * If moisture was never filled, run a quick climate pass first.
+ */
+export function ensureVisibleHydrology(world: World): void {
+  let moistOk = false
+  for (let i = 0; i < world.moist.length; i++) {
+    if (world.moist[i] > 0.04) {
+      moistOk = true
+      break
+    }
+  }
+  if (!moistOk) recomputeClimate(world)
+  recomputeHydrology(world)
 }

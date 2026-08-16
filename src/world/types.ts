@@ -7,7 +7,20 @@ export type Layer =
   | 'biome'
   | 'suitability'
 
-export type Tool = 'raise' | 'lower' | 'city' | 'inspect'
+/** What the mouse does when you click the map. */
+export type Tool =
+  | 'raise'
+  | 'lower'
+  | 'smooth'
+  | 'ridge'
+  | 'channel'
+  | 'plateau'
+  | 'sea'
+  | 'land'
+  | 'city'
+  | 'razecity'
+  | 'inspect'
+  | 'continent'
 
 /** WorldEngine Holdridge names + a few UI aliases */
 export type Biome = string
@@ -17,12 +30,16 @@ export interface City {
   y: number
   name: string
   score: number
+  /** Optional role inferred by settlements.ts / director.ts. */
+  role?: SettlementRole
 }
 
 export interface SuitabilityResult {
   score: number
   ok: boolean
   reasons: string[]
+  /** Discrete tier used by placement.ts and settlements.ts gates. */
+  tier?: SuitabilityTier
 }
 
 export interface World {
@@ -44,6 +61,41 @@ export interface World {
   rawElevMax: number
   rawSeaThreshold: number
   engine: 'worldengine' | 'local'
+  /**
+   * Wish, not a measurement: "I want this fraction of cells to be land."
+   * 0.40 means 40% land. Repair tries to honor it by growing or shrinking
+   * existing coasts — not by sprinkling islands.
+   * Populated by B-side director/timeline modules as a side effect.
+   */
+  landRatio?: number
+  /**
+   * How land should clump.
+   * continents = 2–3 big blobs (Earth look). Speckles get drowned.
+   * mixed      = a few big ones plus leftovers.
+   * islands    = keep the speckles. Only this mode wants archipelagos.
+   * Populated by B-side director/expand modules.
+   */
+  continentMass?: 'continents' | 'mixed' | 'islands'
+  /** Maritime trade lanes between coastal settlements.
+   *  Populated by B-side expand/placement modules. */
+  tradeRoutes?: TradeRoute[]
+  /** How fast each plate slides, in cells per million years.
+   *  Populated by B-side geography/plate modules. */
+  plateVx?: Float32Array
+  plateVy?: Float32Array
+  /**
+   * World-space origin of cell (0,0). When the map zooms out we add cells
+   * around the edge, so the old (0,0) is no longer the corner.
+   * originX/Y remember that. Populated by B-side expand/zoom-out modules.
+   */
+  originX?: number
+  originY?: number
+  /**
+   * How many rows "full planet latitude" uses. Frozen at generate so zoom-out
+   * padding does not suddenly restyle climate (equator would jump).
+   * Populated by B-side geography module.
+   */
+  latRows?: number
   /** Brush-stroke log; sent to /api/recompute so the server can re-apply
    *  every stroke from scratch on a fresh elevation derived from `seed`. */
   sculpt: Array<{ x: number; y: number; radius: number; delta: number; tool: 'raise' | 'lower' }>
@@ -197,3 +249,43 @@ export interface ContractWorld {
   sculpt?: unknown[]
   settlements?: unknown
 }
+
+/**
+ * B-side worldbuilding types (settlements, trade routes, suitability).
+ * Appended verbatim from the snapshot at geoform-cursor-geoform-worldengine-mvp
+ * so modules copied in from that snapshot (history, timeline, expand, director,
+ * placement, geography) compile against the same shapes they were written for.
+ *
+ * Fields on `World` that these modules populate (`landRatio`, `continentMass`,
+ * `tradeRoutes`, `plateVx/Vy`, `originX/Y`, `latRows`) are declared optional on
+ * the A-side `World` above — A's `worldFromPayload` bridge never touches them,
+ * and B's modules fill them in as a side effect.
+ */
+
+/** What a settlement primarily does economically. */
+export type SettlementRole =
+  | 'seat_of_power'
+  | 'farmland'
+  | 'fishing'
+  | 'mining'
+  | 'hunting'
+  | 'trade'
+  | 'pastoral'
+
+/** How safe a sea cell is for shipping. */
+export type SeaNavClass = 'open' | 'coastal' | 'polar' | 'blocked'
+
+/** A maritime lane between two port settlements. */
+export interface TradeRoute {
+  id: string
+  /** Index into world.cities */
+  from: number
+  to: number
+  /** Ocean waypoints (grid coords), including start/end port cells. */
+  waypoints: { x: number; y: number }[]
+  /** Worst hazard class along the route. */
+  hazard: 'open' | 'coastal' | 'polar' | 'mixed'
+}
+
+/** Settlement viability — not one ideal biome, but can vs cannot. */
+export type SuitabilityTier = 'blocked' | 'marginal' | 'favorable'

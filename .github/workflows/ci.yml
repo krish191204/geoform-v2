@@ -59,7 +59,7 @@ jobs:
         run: .venv/bin/pip install -e vendor/worldengine
 
       - name: Run pytest
-        run: .venv/bin/pytest tests -q
+        run: .venv/bin/pytest server/tests -q
 
   web:
     name: Web tests

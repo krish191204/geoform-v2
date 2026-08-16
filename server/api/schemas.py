@@ -38,7 +38,11 @@ StepName = Literal["full", "plates", "precipitations"]
 class GenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(..., min_length=1, max_length=200, description="Human-readable world name")
+    # Server default-fills this on save when absent (one-shot /api/generate callers
+    # are not required to invent a name upfront).
+    name: Optional[str] = Field(
+        None, min_length=1, max_length=200, description="Human-readable world name (optional)"
+    )
     width: conint(ge=MIN_WIDTH, le=MAX_WIDTH) = Field(256, description="Map width in cells")
     height: conint(ge=MIN_HEIGHT, le=MAX_HEIGHT) = Field(192, description="Map height in cells")
     seed: conint(ge=MIN_SEED, le=MAX_SEED) = Field(..., description="Deterministic seed")
@@ -78,6 +82,21 @@ class RecomputeRequest(BaseModel):
 
     world: Dict[str, Any] = Field(..., description="World JSON document")
     sculpt: List[SculptOp] = Field(default_factory=list, description="Sculpt ops to apply first")
+
+
+# ---------------------------------------------------------------------------
+# Interpret (director NL → actions)
+# ---------------------------------------------------------------------------
+
+
+class InterpretRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(..., min_length=1, description="Free-form director instruction in plain English")
+    context: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional world context to ground interpretation",
+    )
 
 
 # ---------------------------------------------------------------------------

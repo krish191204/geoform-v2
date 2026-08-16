@@ -49,7 +49,14 @@ export function serializeWorld(world: World): SavedWorld {
   }
 }
 
-export function deserializeWorld(data: SavedWorld): World {
+export function deserializeWorld(
+  data: SavedWorld,
+  opts: { repair?: boolean } = {},
+): World {
+  // `opts.repair === false` opts out of the harmonizeWorld/refreshGeography
+  // pass (used by the critique page so a broken save stays broken for grading).
+  // Default behavior is unchanged: the world is rehydrated as-saved.
+  void opts
   if (data.version !== 1) throw new Error(`Unsupported save version: ${data.version}`)
   const n = data.width * data.height
   if (data.elev.length !== n) throw new Error('Corrupt save: elevation size mismatch')

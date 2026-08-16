@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/((?!api/|health|assets/|critique-fixtures/|docs/|favicon.svg|icons.svg).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

@@ -74,6 +74,40 @@ Response (`200`): the same world document, with derived layers refreshed.
 The server's protobuf serialization of the resulting world MUST be byte-stable
 when fed back into `/api/recompute` with no edits (deterministic).
 
+### `POST /api/interpret`
+
+Translate a free-form director prompt in plain English into a structured
+sequence of actions. Falls back to local regex/rules when `GEMINI_API_KEY`
+is not set.
+
+Request:
+```json
+{
+  "prompt": "Add a mining town and make the east coast wetter",
+  "context": { "width": 256, "height": 192 }
+}
+```
+
+Response (`200`):
+```json
+{
+  "actions": [
+    { "type": "brush", "tool": "channel", "region": "east" },
+    { "type": "suggest", "plan": "mining", "count": 1 },
+    { "type": "refresh_climate" }
+  ],
+  "explanation": "carved river valleys in the east; suggested 1 mining site(s); queued climate refresh",
+  "source": "gemini"
+}
+```
+
+`source` is `"gemini"` when the upstream LLM produced the plan, `"rules"`
+when the local fallback handled the prompt.
+
+Error codes:
+- `400 validation` – `prompt` missing or empty
+- `500 internal`   – unexpected upstream failure while interpreting
+
 ### `POST /api/serialize`
 
 Convert a `World` to protobuf bytes (base64-encoded) for compact storage /
