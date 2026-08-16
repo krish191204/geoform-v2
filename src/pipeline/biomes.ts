@@ -149,7 +149,11 @@ export function classifyBiome(
 /**
  * Build the per-cell biome array plus the combined climate fields.
  *
- *   tempMean[i]  = (summer[i]      + winter[i])      / 2   °C, annual mean
+ *   tempMean[i]  = `tempMeanIn[i]` when supplied by the seasonal climate
+ *                  step (latitude-aware annual mean, °C). When omitted,
+ *                  falls back to `(summer + winter) / 2` for callers that
+ *                  pass synthetic summer/winter arrays without a
+ *                  corresponding latitude-aware field.
  *   tempRange[i] =  summer[i]      - winter[i]            °C, annual swing
  *   moistMean[i] = (summerMoist[i] + winterMoist[i]) / 2  0..1, annual mean
  *
@@ -164,6 +168,7 @@ export function computeBiomes(
   mask: Float32Array,
   threshold: number,
   elev?: Float32Array,
+  tempMeanIn?: Float32Array,
 ): BiomesResult {
   const n = summer.length
   const tempMean = new Float32Array(n)
@@ -177,7 +182,11 @@ export function computeBiomes(
   for (let i = 0; i < n; i++) {
     const s = summer[i]
     const w = winter[i]
-    tempMean[i] = (s + w) / 2
+    // Use the latitude-aware `tempMeanIn` from the climate step when it
+    // is supplied; otherwise fall back to the symmetric summer/winter
+    // average (kept for callers and tests that pass synthetic summer/
+    // winter arrays without a corresponding latitude-aware field).
+    tempMean[i] = tempMeanIn ? tempMeanIn[i] : (s + w) / 2
     // tempRange is always non-negative by construction (summer ≥ winter).
     tempRange[i] = s - w
     moistMean[i] = (summerMoist[i] + winterMoist[i]) / 2

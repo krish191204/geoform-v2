@@ -296,6 +296,11 @@ export async function makeSenseInline(
     // Pass elevation so the alpine override (`elev >= 3500`) actually fires.
     // Without this, the alpine branch in `classifyBiome` is dead code.
     orogeny.elev,
+    // Pass the latitude-aware `tempMean` from the climate step so the
+    // biome classifier can distinguish equator from pole. Without this,
+    // `computeBiomes` falls back to the symmetric `(summer + winter) / 2`
+    // which collapses to `BASE_TEMP_C` at every latitude.
+    seasonal.tempMean,
   )
   const biomeCounts = new Map<string, number>()
   for (let i = 0; i < biomesResult.biome.length; i++) {
@@ -354,12 +359,14 @@ export async function makeSenseInline(
   )
 
   // -- Annual aggregates ---------------------------------------------------
-  // tempMean, tempRange, moistMean — derived from the seasonal fields.
-  const tempMean = new Float32Array(mask.length)
+  // tempMean comes straight from the seasonal climate step (latitude-
+  // aware; see `seasonalClimate.computeSeasonalClimate`). tempRange and
+  // moistMean remain simple symmetric derivations — tempRange is by
+  // construction non-negative (summer ≥ winter), and moistMean is the
+  // arithmetic mean of the two seasonal moisture indices.
   const tempRange = new Float32Array(mask.length)
   const moistMean = new Float32Array(mask.length)
   for (let i = 0; i < mask.length; i++) {
-    tempMean[i] = 0.5 * (seasonal.summer[i] + seasonal.winter[i])
     tempRange[i] = seasonal.summer[i] - seasonal.winter[i]
     moistMean[i] = 0.5 * (seasonal.summerMoist[i] + seasonal.winterMoist[i])
   }
@@ -398,7 +405,7 @@ export async function makeSenseInline(
     winter: seasonal.winter,
     summerMoist: seasonal.summerMoist,
     winterMoist: seasonal.winterMoist,
-    tempMean,
+    tempMean: seasonal.tempMean,
     tempRange,
     moistMean,
     flux: hydro.flux,
