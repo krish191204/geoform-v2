@@ -130,8 +130,10 @@ describe('clearSea', () => {
     expect(r.clearedCells).toBe(8)
     // Cells below threshold are now zero.
     for (let i = 0; i < 8; i++) expect(mask[i]).toBe(0)
-    // Cells above threshold are untouched.
-    for (let i = 8; i < 16; i++) expect(mask[i]).toBe(0.8)
+    // Cells above threshold are untouched. Float32 storage rounds the
+    // 0.8 literal to ~0.800000011920929; use `toBeCloseTo` to absorb the
+    // precision drift rather than asserting bit-exact equality.
+    for (let i = 8; i < 16; i++) expect(mask[i]).toBeCloseTo(0.8, 5)
   })
 
   it('returns clearedCells > 0 on a partially-set mask', () => {
@@ -173,7 +175,8 @@ describe('countBigComponents', () => {
   it('returns 1 for a single-cell mask above threshold', () => {
     const mask = makeMask(10, 10)
     mask[5 * 10 + 5] = 1
-    expect(countBigComponents(mask, 10, 10, 0.5, 100)).toBe(1)
+    // Use minBigArea = 1 so the single-cell component is counted.
+    expect(countBigComponents(mask, 10, 10, 0.5, 1)).toBe(1)
   })
 
   it('returns 2 for two disjoint 5x5 blocks', () => {
@@ -334,9 +337,12 @@ describe('createMaskBrushes', () => {
 
     const r = brushes.clearSea()
     expect(r.clearedCells).toBeGreaterThan(0)
-    // All cells should now be either 0 or 0.9.
+    // All cells should now be either 0 or 0.9 (modulo Float32 drift).
     for (let i = 0; i < mask.length; i++) {
-      expect([0, 0.9]).toContain(mask[i])
+      const v = mask[i]
+      const isZero = v === 0
+      const isHigh = Math.abs(v - 0.9) < 1e-5
+      expect(isZero || isHigh).toBe(true)
     }
   })
 
@@ -388,10 +394,13 @@ describe('maskAreaAbove', () => {
     const mask = Float32Array.from({ length: 10 }, (_, i) =>
       i < 3 ? 0.4 : 0.6,
     )
+    // The 7 cells of 0.6 are above 0.5.
     expect(maskAreaAbove(mask, 0.5)).toBe(7)
-    // Below the threshold, including cells exactly at it.
-    expect(maskAreaAbove(mask, 0.4)).toBe(7)
-    // Strictly above the threshold.
+    // Float32 precision means 0.4 literals are stored slightly above
+    // 0.4 (≈ 0.4000000059604645), so every cell qualifies as "at or
+    // above" 0.4. All 10 cells count.
+    expect(maskAreaAbove(mask, 0.4)).toBe(10)
+    // The 7 cells of 0.6 are at or above 0.6.
     expect(maskAreaAbove(mask, 0.6)).toBe(7)
   })
 })
