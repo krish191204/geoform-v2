@@ -283,7 +283,7 @@ export function computeOrogeny(
         density,
         width,
         height,
-        null,
+        landPred,
       )
     } else if (b.class === 'convergent-oc') {
       // Oceanic-continental: arc on the land side, trench on the ocean side.
