@@ -444,3 +444,78 @@ export function screenToCell(
   if (x < 0 || y < 0 || x >= w || y >= h) return null
   return { x, y }
 }
+
+/** Sub-rectangle of a DOM element returned by `getBoundingClientRect`. */
+export interface ClientRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+/** Normalised bitmap coordinates returned by `clientToContainedBitmap`. */
+export interface NormalisedPoint {
+  /** 0..1 horizontal position inside the bitmap. */
+  nx: number
+  /** 0..1 vertical position inside the bitmap. */
+  ny: number
+}
+
+/**
+ * Map a client (viewport) coordinate to a normalised point inside a
+ * bitmap that has been "letterboxed" into a screen rectangle.
+ *
+ * The bitmap is scaled to fit the rect while preserving its aspect
+ * ratio; the unused space forms letterbox bars on the long axis.
+ * Returns `null` when the click lands inside a letterbox bar (i.e. on
+ * the rect but off the bitmap).
+ *
+ * Example: a 400×200 bitmap (aspect 2:1) inside a 200×200 rect
+ * (aspect 1:1) renders at 200×100 centred vertically — clicking in the
+ * top 50 px of the rect returns `null`.
+ */
+export function clientToContainedBitmap(
+  clientX: number,
+  clientY: number,
+  rect: ClientRect,
+  bitmapWidth: number,
+  bitmapHeight: number,
+): NormalisedPoint | null {
+  if (rect.width <= 0 || rect.height <= 0) return null
+  if (bitmapWidth <= 0 || bitmapHeight <= 0) return null
+
+  // Position relative to the rect (viewport → rect-local).
+  const lx = clientX - rect.left
+  const ly = clientY - rect.top
+  if (lx < 0 || ly < 0 || lx >= rect.width || ly >= rect.height) return null
+
+  const rectAspect = rect.width / rect.height
+  const bitmapAspect = bitmapWidth / bitmapHeight
+
+  // Fit the bitmap into the rect while preserving aspect ratio.
+  let bitmapX: number, bitmapY: number, bitmapW: number, bitmapH: number
+  if (rectAspect > bitmapAspect) {
+    // Rect is wider than the bitmap → fit the bitmap to the rect's
+    // height; vertical (left/right) letterbox bars appear.
+    bitmapH = rect.height
+    bitmapW = rect.height * bitmapAspect
+    bitmapY = 0
+    bitmapX = (rect.width - bitmapW) / 2
+  } else {
+    // Rect is squarer (or equal) than the bitmap → fit the bitmap to
+    // the rect's width; horizontal (top/bottom) letterbox bars appear.
+    bitmapW = rect.width
+    bitmapH = rect.width / bitmapAspect
+    bitmapX = 0
+    bitmapY = (rect.height - bitmapH) / 2
+  }
+
+  // Reject clicks that fall inside a letterbox bar.
+  if (lx < bitmapX || lx >= bitmapX + bitmapW) return null
+  if (ly < bitmapY || ly >= bitmapY + bitmapH) return null
+
+  return {
+    nx: (lx - bitmapX) / bitmapW,
+    ny: (ly - bitmapY) / bitmapH,
+  }
+}
