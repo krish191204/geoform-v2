@@ -91,20 +91,22 @@ export function classifyBiome(
   if (tempMean < -5 && tempRange >= 15) return 'ice'
 
   // 3. Polar desert = cold coastal dry (low tempRange, low summerMoist).
-  if (tempMean < 0 && tempRange < 15 && summerMoist < 0.2) return 'polar desert'
+  if (tempMean < 0 && tempRange < 15 && summerMoist < 0.2) return 'polar-desert'
 
   // 4. Tundra = cold catch-all.
   if (tempMean < 5) return 'tundra'
 
   // 5. Boreal desert = cold dry; checked before taiga because it's more
   //    specific (uses summerMoist in addition to tempMean).
-  if (tempMean < 12 && summerMoist < 0.2) return 'boreal desert'
+  if (tempMean < 12 && summerMoist < 0.2) return 'boreal-desert'
 
   // 6. Taiga = cold wet catch-all.
   if (tempMean < 12) return 'taiga'
 
-  // 7. Tropical desert = hot dry.
-  if (tempMean > 25 && summerMoist < 0.15) return 'tropical desert'
+  // 7. Tropical desert = hot dry. Tagged 'hot-desert' to match
+  //    BIOME_BY_ID keys (avoids the prose ambiguity of "tropical
+  //    desert" vs "hot desert").
+  if (tempMean > 25 && summerMoist < 0.15) return 'hot-desert'
 
   // 8. Rainforest = hot, low seasonality, very wet.
   if (tempMean > 20 && tempRange < 10 && summerMoist > 0.7) return 'rainforest'
@@ -113,7 +115,7 @@ export function classifyBiome(
   if (tempMean > 20 && summerMoist >= 0.2 && summerMoist <= 0.5) return 'savanna'
 
   // 10. Temperate desert = mid-latitude very dry.
-  if (tempMean >= 5 && tempMean <= 25 && summerMoist < 0.15) return 'temperate desert'
+  if (tempMean >= 5 && tempMean <= 25 && summerMoist < 0.15) return 'temperate-desert'
 
   // 11. Steppe = mid-latitude dry.
   if (tempMean >= 5 && tempMean <= 25 && summerMoist < 0.3) return 'steppe'
@@ -131,7 +133,7 @@ export function classifyBiome(
 
   // 13. Temperate forest = mid-latitude, low seasonality, wet.
   if (tempMean >= 5 && tempMean <= 25 && tempRange < 25 && summerMoist > 0.4) {
-    return 'temperate forest'
+    return 'temperate-forest'
   }
 
   // 14. Catch-all fallback for unusual combinations (e.g. mid-latitude,

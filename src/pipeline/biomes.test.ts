@@ -21,11 +21,11 @@ describe('classifyBiome — spec table', () => {
   })
 
   it('tempMean=-10, tempRange=5, summerMoist=0.1  →  polar desert', () => {
-    expect(classifyBiome(-10, 5, 0.1)).toBe('polar desert')
+    expect(classifyBiome(-10, 5, 0.1)).toBe('polar-desert')
   })
 
   it('tempMean=30, tempRange=5, summerMoist=0.1  →  tropical desert', () => {
-    expect(classifyBiome(30, 5, 0.1)).toBe('tropical desert')
+    expect(classifyBiome(30, 5, 0.1)).toBe('hot-desert')
   })
 
   it('tempMean=25, tempRange=5, summerMoist=0.8  →  rainforest', () => {
@@ -33,7 +33,7 @@ describe('classifyBiome — spec table', () => {
   })
 
   it('tempMean=15, tempRange=5, summerMoist=0.1  →  temperate desert', () => {
-    expect(classifyBiome(15, 5, 0.1)).toBe('temperate desert')
+    expect(classifyBiome(15, 5, 0.1)).toBe('temperate-desert')
   })
 
   // A few bonus cases that pin down the priority order.
@@ -59,11 +59,11 @@ describe('classifyBiome — spec table', () => {
   })
 
   it('mid-latitude wet and seasonal is temperate forest', () => {
-    expect(classifyBiome(15, 20, 0.6)).toBe('temperate forest')
+    expect(classifyBiome(15, 20, 0.6)).toBe('temperate-forest')
   })
 
   it('cold dry in the boreal range is boreal desert, not taiga', () => {
-    expect(classifyBiome(8, 15, 0.1)).toBe('boreal desert')
+    expect(classifyBiome(8, 15, 0.1)).toBe('boreal-desert')
   })
 })
 
@@ -217,8 +217,8 @@ describe('computeBiomes — test continent', () => {
     const distinct = new Set<string>(r.biome)
     // Should have at least one cold label (tundra / polar desert / taiga)
     // and at least one hot label (tropical desert / savanna / rainforest).
-    const cold = ['tundra', 'polar desert', 'taiga', 'boreal desert', 'ice']
-    const hot = ['tropical desert', 'savanna', 'rainforest']
+    const cold = ['tundra', 'polar-desert', 'taiga', 'boreal-desert', 'ice']
+    const hot = ['hot-desert', 'savanna', 'rainforest']
     const hasCold = [...cold].some((b) => distinct.has(b))
     const hasHot = [...hot].some((b) => distinct.has(b))
     expect(hasCold).toBe(true)
@@ -256,7 +256,7 @@ describe('computeBiomes — test continent', () => {
         if (x < W - 1) neighbours.push([x + 1, y])
         for (const [nx, ny] of neighbours) {
           const j = ny * W + nx
-          if (r.biome[j] === 'tropical desert') {
+          if (r.biome[j] === 'hot-desert') {
             offenders.push({ a: [x, y], b: [nx, ny] })
           }
         }
@@ -279,7 +279,7 @@ describe('computeBiomes — test continent', () => {
             const ny = y + dy
             if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue
             const j = ny * W + nx
-            if (r.biome[j] === 'tropical desert') {
+            if (r.biome[j] === 'hot-desert') {
               offenders.push({ a: [x, y], b: [nx, ny] })
             }
           }
@@ -306,7 +306,7 @@ describe('classifyBiome — Donald bar invariants', () => {
       const trop = classifyBiome(tm, 5, 0.1)
       // If both happen to fire on the same tempMean, that's the dualism
       // the Donald bar forbids.
-      expect(ice === 'ice' && trop === 'tropical desert').toBe(false)
+      expect(ice === 'ice' && trop === 'hot-desert').toBe(false)
     }
   })
 

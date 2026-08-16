@@ -1,4 +1,21 @@
 // @vitest-environment happy-dom
+// happy-dom 15.x doesn't include ImageData in its global. Polyfill so
+// draw() can construct an ImageData result without crashing.
+if (typeof (globalThis as { ImageData?: unknown }).ImageData === 'undefined') {
+  class ImageDataPolyfill {
+    public data: Uint8ClampedArray
+    public width: number
+    public height: number
+    public colorSpace = 'srgb' as const
+    constructor(width: number, height: number) {
+      this.width = width
+      this.height = height
+      this.data = new Uint8ClampedArray(width * height * 4)
+    }
+  }
+  ;(globalThis as { ImageData: unknown }).ImageData = ImageDataPolyfill
+}
+
 import { describe, it, expect } from 'vitest'
 import { draw, inspectCell, screenToCell } from './draw'
 import { biomeColor, type CellBiome, type World, type WorldMeta } from '../world/types'

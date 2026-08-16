@@ -349,7 +349,10 @@ function cellColor(
       break
     }
     case 'suitability': {
-      rgb = suitColor(world.moistMean[i])
+      // Was world.moistMean (annual mean precipitation — wrong field).
+      // Render world.suitability (the per-cell city placement score,
+      // 0..1) which is what the Suitability layer is conceptually for.
+      rgb = suitColor(world.suitability[i])
       break
     }
   }
