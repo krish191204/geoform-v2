@@ -81,6 +81,7 @@ function toWorld(result: Awaited<ReturnType<typeof makeSenseInline>>, meta: Worl
     rivers: result.rivers,
     biome: result.biome as World['biome'],
     cities: [],
+    suitability: result.suitability,
   } as World
 }
 
