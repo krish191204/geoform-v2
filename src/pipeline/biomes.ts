@@ -163,6 +163,7 @@ export function computeBiomes(
   winterMoist: Float32Array,
   mask: Float32Array,
   threshold: number,
+  elev?: Float32Array,
 ): BiomesResult {
   const n = summer.length
   const tempMean = new Float32Array(n)
@@ -188,7 +189,12 @@ export function computeBiomes(
       biome[i] = 'ocean'
       continue
     }
-    biome[i] = classifyBiome(tempMean[i], tempRange[i], summerMoist[i])
+    biome[i] = classifyBiome(
+      tempMean[i],
+      tempRange[i],
+      summerMoist[i],
+      elev ? elev[i] : Infinity,
+    )
   }
 
   // Touch the helpers so the import survives tree-shaking and lint, and so

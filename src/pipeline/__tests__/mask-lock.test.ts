@@ -75,6 +75,7 @@ function toWorld(result: Awaited<ReturnType<typeof makeSenseInline>>, meta: Worl
     rivers: result.rivers,
     biome: result.biome as World['biome'],
     cities: [],
+    suitability: result.suitability,
   } as World
 }
 
@@ -103,15 +104,18 @@ describe('bigComponentsMask (pre-count)', () => {
     const before = bigComponentsMask(tw.mask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
     const result = await evolve(tw, 1, 0.5)
     const postArea = result.provenance.outputMaskArea
-    // Pre-count area is `before.count` (the number of big components).
+    // The pre-area is the sum of big-component cells in the input mask.
+    let preArea = 0
+    for (let i = 0; i < before.mask.length; i++) preArea += before.mask[i]
     // The Make-sense lock is over the OUTPUT mask area; build the output
     // mask from the post area and re-count.
     const outputMask = new Float32Array(tw.mask.length)
     for (let i = 0; i < tw.mask.length; i++) outputMask[i] = tw.mask[i] >= meta.threshold ? 1 : 0
     const after = bigComponentsMask(outputMask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
-    const preArea = before.count
-    expect(Math.abs(after.count - preArea) / Math.max(1, preArea)).toBeLessThanOrEqual(0.05)
-    // The provenance must report the same number of output cells.
+    let postBigArea = 0
+    for (let i = 0; i < after.mask.length; i++) postBigArea += after.mask[i]
+    expect(Math.abs(postBigArea - preArea) / Math.max(1, preArea)).toBeLessThanOrEqual(0.05)
+    // The provenance must report the same number of input cells.
     expect(postArea).toBeGreaterThan(0)
     expect(result.provenance.inputMaskArea).toBe(preArea)
   })
