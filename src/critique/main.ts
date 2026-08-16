@@ -1,431 +1,300 @@
 /**
- * Critique page (`/critique.html`). Drop a Geoform JSON (or a picture) and
- * get a grade. Gallery includes healthy worlds and deliberately broken ones.
+ * Module entry for the Critique stage.
  *
- * Repair like the editor runs harmonizeWorld. Leave it broken if you want
- * to see why the score is bad. deserializeWorld(..., { repair: false })
- * is how we load a broken save without silently fixing it.
+ * `critiqueMask` runs pre-Make-sense over the soft mask alone.
+ * `critiqueWorld` runs post-Make-sense over the derived World; it
+ * automatically pulls in `checkMaskLock` if a prior mask has been set
+ * via `setPriorMask()` (or by an earlier `critiqueMask` call).
+ *
+ * No flattery. No alternatives. The output is diagnostic and the user
+ * decides what to do with it.
  */
-import './style.css'
-import { navHtml } from '../chrome/nav'
+import type { World, WorldMeta, Issue } from '../world/types'
+import { idx } from '../world/types'
+import { countBigComponents } from '../sketch/countBigComponents'
 import {
-  analyzeMapImage,
-  analyzeRawPixels,
-  type ImageMode,
-} from './analyzeImage'
-import { analyzeGeoformWorld } from './analyzeWorld'
-import { getGeoformSamples, repairedCopy, worldToJson, type GeoformSample } from './geoformSamples'
-import { deserializeWorld, type SavedWorld } from '../world/persist'
-import type { World } from '../world/types'
-import { drawCritiquePreview } from './preview'
-import { getAllSamples, sampleToCanvas, type SampleMap } from './sampleMaps'
-import { KIND_LABEL, SEVERITY_LABEL, type CritiqueResult, type IssueKind, type Severity } from './types'
+  SEVERITY_WEIGHTS,
+  scoreFromIssues,
+  sortIssuesBySeverity,
+  checkIceDesertDualism,
+  checkRainShadow,
+  checkContinentality,
+  checkFluxOnMaxima,
+  checkMaskLock,
+} from './analyzeWorld'
 
-const root = document.querySelector<HTMLDivElement>('#critique-root')!
+// ---------------------------------------------------------------------------
+// 1. Public types.
+// ---------------------------------------------------------------------------
 
-let result: CritiqueResult | null = null
-let activeId: string | null = null
-let filter: 'all' | Severity = 'all'
-let previewImage: ImageBitmap | HTMLImageElement | HTMLCanvasElement | null = null
-let raf = 0
-let mode: ImageMode = 'auto'
-let lastFile: File | null = null
-let galleryScores: Record<string, number> = {}
-let geoformScores: Record<string, number> = {}
-let geoformCache: GeoformSample[] | null = null
-let lastWorld: World | null = null
-
-function geoformList() {
-  if (!geoformCache) geoformCache = getGeoformSamples()
-  return geoformCache
+/**
+ * One score and its issues.
+ *
+ * `pre = true` only on results produced by `critiqueMask`. `critiqueWorld`
+ * always emits `pre = false`.
+ */
+export interface CritiqueResult {
+  /** 0..100. 100 means zero issues were found. Drops of 25/10/2 per critical/major/minor. */
+  score: number
+  /** Sorted with critical first, then major, then minor. */
+  issues: Issue[]
+  /** True if this result was computed pre-Make-sense (mask only). */
+  pre: boolean
 }
 
-function render() {
-  const samples = getAllSamples()
-  root.innerHTML = `
-    <div class="shell">
-      ${navHtml('critique')}
+// Re-exported so callers don't need a second import path.
+export type { Issue }
+export { SEVERITY_WEIGHTS, scoreFromIssues, sortIssuesBySeverity }
 
-      <header class="hero">
-        <div class="hero-veil"></div>
-        <div class="hero-copy">
-          <h1>Critique</h1>
-          <p>The atlas repairs broken geography as you paint. This page grades maps you bring in — fixture crimes, Earth-pattern rain shadows, Geoform JSON, and owned fantasy benchmarks.</p>
-          <div class="hero-actions">
-            <button type="button" class="chip-btn btn-primary" id="pickFile">Upload image or JSON</button>
-            <button type="button" class="chip-btn" data-jump="geoform">Geoform worlds</button>
-            <button type="button" class="chip-btn" data-jump="gallery">Image fixtures</button>
-          </div>
-        </div>
-      </header>
+// ---------------------------------------------------------------------------
+// 2. Pre-Make-sense helpers (mask only).
+// ---------------------------------------------------------------------------
 
-      <section class="panel" id="geoform">
-        <div class="section-head-inline">
-          <div>
-            <h2>Geoform worlds</h2>
-            <p class="muted">Live local-atlas samples. Broken cards are what the editor now repairs on its own — critique still names the crime.</p>
-          </div>
-        </div>
-        <div class="gallery-grid" id="geoformGrid"></div>
-      </section>
-
-      <section class="panel" id="gallery">
-        <div class="section-head-inline">
-          <div>
-            <h2>Fixture gallery</h2>
-            <p class="muted">Click a card to run the same critic the Vitest suite uses. Corpus: synthetic · earth-pattern · fantasy-owned.</p>
-          </div>
-          <button type="button" class="chip-btn" id="gradeAll">Grade all</button>
-        </div>
-        <div class="gallery-grid" id="galleryGrid"></div>
-      </section>
-
-      <section class="panel">
-        <div class="drop" id="drop">
-          <h2>Drop a map image or Geoform JSON</h2>
-          <p>
-            <strong>PNG / JPG / WebP / GIF</strong> for painted atlases, or a <strong>Geoform export</strong> (<code>.json</code>)
-            from the editor. Toggle mode if auto-detect guesses wrong.
-          </p>
-          <div class="mode-row" id="modeRow">
-            <button type="button" class="chip-btn ${mode === 'auto' ? 'active' : ''}" data-mode="auto">Auto</button>
-            <button type="button" class="chip-btn ${mode === 'painted' ? 'active' : ''}" data-mode="painted">Painted map</button>
-            <button type="button" class="chip-btn ${mode === 'heightmap' ? 'active' : ''}" data-mode="heightmap">Heightmap</button>
-          </div>
-          <div class="drop-actions">
-            <button type="button" class="chip-btn btn-primary" id="pickFile2">Choose image</button>
-          </div>
-          <input class="hidden-file" id="file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif,application/json,.json" />
-        </div>
-
-        <div class="workspace" id="workspace" hidden>
-          <div>
-            <div class="preview-wrap">
-              <canvas id="preview"></canvas>
-            </div>
-          </div>
-          <div>
-            <div class="scoreboard" id="scoreboard"></div>
-            <div class="filters" id="filters"></div>
-            <div class="issue-list" id="issues"></div>
-          </div>
-        </div>
-      </section>
-
-      <p class="footer-note">
-        Policy: Earth AOIs calibrate physics; these images and Geoform exports benchmark the critic.
-        The map editor does not nag — it repairs. Critique is the place that still says the quiet part out loud.
-        See <a href="/docs/TRAINING_AND_TESTS.md">TRAINING_AND_TESTS.md</a>
-        · Labs: <a href="/labs.html">/labs.html</a>
-        · Editor: <a href="/">/</a>
-      </p>
-    </div>
-  `
-
-  paintGallery(samples)
-  paintGeoform()
-  bind(samples)
-  if (result) paintResult()
+/** Fraction of cells with `mask >= threshold`. */
+function landFraction(mask: Float32Array, w: number, h: number, threshold: number): number {
+  let land = 0
+  const total = mask.length
+  if (total === 0) return 0
+  for (let i = 0; i < total; i++) {
+    if (mask[i] >= threshold) land++
+  }
+  return land / total
 }
 
-function paintGallery(samples: SampleMap[]) {
-  const grid = root.querySelector('#galleryGrid')!
-  grid.innerHTML = samples
-    .map((s) => {
-      const score = galleryScores[s.id]
-      const canvas = sampleToCanvas(s)
-      const url = canvas.toDataURL('image/png')
-      return `
-      <button type="button" class="gallery-card" data-sample="${s.id}">
-        <img src="${url}" alt="${s.title}" />
-        <div class="gallery-meta">
-          <strong>${s.title}</strong>
-          <span class="corpus">${s.corpus}</span>
-          <span class="score-pill">${score == null ? '—' : score}</span>
-        </div>
-        <p>${s.blurb}</p>
-      </button>`
-    })
-    .join('')
-
-  grid.querySelectorAll<HTMLButtonElement>('[data-sample]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const sample = samples.find((s) => s.id === btn.dataset.sample)
-      if (sample) void runSample(sample)
-    })
-  })
-}
-
-function worldThumb(world: World): string {
-  const c = document.createElement('canvas')
-  c.width = world.width
-  c.height = world.height
-  const ctx = c.getContext('2d')!
-  const img = ctx.createImageData(world.width, world.height)
-  const sea = world.seaLevel
-  for (let i = 0; i < world.elev.length; i++) {
-    const o = i * 4
-    if (world.elev[i] < sea) {
-      img.data[o] = 32
-      img.data[o + 1] = 86
-      img.data[o + 2] = 112
-    } else {
-      const t = Math.max(0, Math.min(1, (world.elev[i] - sea) * 2.2))
-      img.data[o] = (70 + t * 90) | 0
-      img.data[o + 1] = (118 + t * 50) | 0
-      img.data[o + 2] = (62 + t * 30) | 0
+/** Fraction of cells in `y < 4` that are at or above threshold. */
+function polarLaneFraction(mask: Float32Array, w: number, h: number, threshold: number): number {
+  let land = 0
+  let total = 0
+  const limit = Math.min(4, h)
+  for (let y = 0; y < limit; y++) {
+    for (let x = 0; x < w; x++) {
+      total++
+      if (mask[idx(w, x, y)] >= threshold) land++
     }
-    img.data[o + 3] = 255
   }
-  ctx.putImageData(img, 0, 0)
-  return c.toDataURL('image/png')
+  return total === 0 ? 0 : land / total
 }
 
-function paintGeoform() {
-  const grid = root.querySelector('#geoformGrid')
-  if (!grid) return
-  const samples = geoformList()
-  grid.innerHTML = samples
-    .map((s) => {
-      const score = geoformScores[s.id]
-      return `
-      <button type="button" class="gallery-card" data-geoform="${s.id}">
-        <img src="${worldThumb(s.world)}" alt="${s.title}" />
-        <div class="gallery-meta">
-          <strong>${s.title}</strong>
-          <span class="corpus">${s.kind}</span>
-          <span class="score-pill">${score == null ? '—' : score}</span>
-        </div>
-        <p>${s.blurb}</p>
-      </button>`
+// ---------------------------------------------------------------------------
+// 3. Pre-Make-sense critic: critiqueMask.
+// ---------------------------------------------------------------------------
+
+/**
+ * Pre-Make-sense critique. Reads the soft mask only. Cheap, deterministic,
+ * safe to call on every brush dab — it short-circuits on size failures and
+ * returns an empty result if the mask is empty.
+ */
+export function critiqueMask(
+  mask: Float32Array,
+  meta: WorldMeta,
+  threshold: number,
+): CritiqueResult {
+  const { width: w, height: h } = meta
+  const issues: Issue[] = []
+  if (mask.length !== w * h || w === 0 || h === 0) {
+    return { score: 100, issues: [], pre: true }
+  }
+
+  // 3.1 — land share
+  const landPct = landFraction(mask, w, h, threshold) * 100
+  if (landPct < 5) {
+    issues.push({
+      id: 'too-little-land',
+      severity: 'critical',
+      title: 'Map is mostly ocean',
+      critique: `Only ${landPct.toFixed(1)}% of the map is land. There ` +
+        `is nothing for geography to grip — climate will spin idle.`,
+      fix: 'Paint more land or change the world type to "island world".',
+      evidence: [],
     })
-    .join('')
-  grid.querySelectorAll<HTMLButtonElement>('[data-geoform]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const sample = samples.find((s) => s.id === btn.dataset.geoform)
-      if (sample) runGeoform(sample)
+  }
+  if (landPct > 95) {
+    issues.push({
+      id: 'too-much-land',
+      severity: 'critical',
+      title: 'Map is mostly land',
+      critique: `${landPct.toFixed(1)}% of the map is land. There is ` +
+        `no ocean for climate to drive, so Make-sense cannot initialize.`,
+      fix: 'Paint at least some ocean so wind and currents can circulate.',
+      evidence: [],
     })
-  })
+  }
+
+  // 3.2 — speckles: too many small islands
+  const bigCount = countBigComponents(mask, w, h, threshold, 100)
+  if (bigCount > 8) {
+    // Evidence: sample a few speckle-cell coordinates (use the mask stats).
+    const evidence = sampleSpeckleEvidence(mask, w, h, threshold)
+    issues.push({
+      id: 'too-many-speckles',
+      severity: 'major',
+      title: 'Too many small islands',
+      critique: `Mask has ${bigCount} separate "big" land masses ` +
+        `(each at least 100 cells). That is archipelago, not continents.`,
+      fix: 'Merge them with bigger brushes or pick archipelago as the world type.',
+      evidence,
+    })
+  }
+
+  // 3.3 — polar strip suspiciousness
+  const polarPct = polarLaneFraction(mask, w, h, threshold) * 100
+  if (polarPct > 80) {
+    issues.push({
+      id: 'polar-strip',
+      severity: 'major',
+      title: 'Polar strip is suspicious',
+      critique: `Rows 0..3 are ${polarPct.toFixed(0)}% land. If both ` +
+        `poles are ringed with land, no temperate band can form.`,
+      fix: 'Erase some polar land so cold cells have ocean neighbours to moderate.',
+      evidence: [
+        { x: Math.floor(w / 4), y: 0 },
+        { x: Math.floor(w / 2), y: 1 },
+        { x: Math.floor((3 * w) / 4), y: 2 },
+      ],
+    })
+  }
+
+  // Remember for checkMaskLock.
+  setPriorMask(mask, meta)
+
+  const sorted = sortIssuesBySeverity(issues)
+  return {
+    score: scoreFromIssues(sorted),
+    issues: sorted,
+    pre: true,
+  }
 }
 
-function runGeoform(sample: GeoformSample) {
-  lastFile = null
-  lastWorld = sample.world
-  result = analyzeGeoformWorld(worldToJson(sample.world))
-  result.label = sample.title
-  geoformScores[sample.id] = result.score
-  previewImage = null
-  activeId = result.issues[0]?.id ?? null
-  filter = 'all'
-  paintGeoform()
-  paintResult()
-}
-
-function gradeSample(sample: SampleMap) {
-  const r = analyzeRawPixels(sample.data, sample.width, sample.height, sample.id, mode === 'auto' ? sample.mode : mode)
-  galleryScores[sample.id] = r.score
-  return r
-}
-
-async function runSample(sample: SampleMap) {
-  lastFile = null
-  lastWorld = null
-  const r = gradeSample(sample)
-  result = r
-  previewImage = sampleToCanvas(sample)
-  activeId = r.issues[0]?.id ?? null
-  filter = 'all'
-  paintGallery(getAllSamples())
-  paintResult()
-}
-
-function bind(samples: SampleMap[]) {
-  const file = root.querySelector<HTMLInputElement>('#file')!
-  const drop = root.querySelector('#drop')!
-  const open = () => file.click()
-  root.querySelector('#pickFile')?.addEventListener('click', open)
-  root.querySelector('#pickFile2')?.addEventListener('click', open)
-  drop.addEventListener('click', (e) => {
-    if ((e.target as HTMLElement).closest('button')) return
-    open()
-  })
-
-  file.addEventListener('change', async () => {
-    const f = file.files?.[0]
-    if (f) await ingest(f)
-    file.value = ''
-  })
-
-  ;['dragenter', 'dragover'].forEach((ev) => {
-    drop.addEventListener(ev, (e) => {
-      e.preventDefault()
-      drop.classList.add('drag')
-    })
-  })
-  ;['dragleave', 'drop'].forEach((ev) => {
-    drop.addEventListener(ev, (e) => {
-      e.preventDefault()
-      drop.classList.remove('drag')
-    })
-  })
-  drop.addEventListener('drop', async (e) => {
-    const f = (e as DragEvent).dataTransfer?.files?.[0]
-    if (f) await ingest(f)
-  })
-
-  root.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      mode = btn.dataset.mode as ImageMode
-      root.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('active', b === btn))
-      if (lastFile) await ingest(lastFile)
-    })
-  })
-
-  root.querySelector('#gradeAll')?.addEventListener('click', () => {
-    for (const s of samples) gradeSample(s)
-    paintGallery(getAllSamples())
-  })
-
-  root.querySelectorAll<HTMLButtonElement>('[data-jump]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelector(`#${btn.dataset.jump}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    })
-  })
-}
-
-async function ingest(file: File) {
-  try {
-    const isImage = file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(file.name)
-    if (!isImage) {
-      if (/\.json$/i.test(file.name) || file.type.includes('json')) {
-        const text = await file.text()
-        previewImage = null
-        lastFile = null
-        lastWorld = deserializeWorld(JSON.parse(text) as SavedWorld, { repair: false })
-        result = analyzeGeoformWorld(worldToJson(lastWorld))
-        activeId = result.issues[0]?.id ?? null
-        filter = 'all'
-        paintResult()
-        return
+/**
+ * Internal: pick a few "speckle" cell coordinates by sampling the
+ * components at the back of the size distribution. Stable given the
+ * same mask — we scan row-major and rely on that order.
+ */
+function sampleSpeckleEvidence(
+  mask: Float32Array,
+  w: number,
+  h: number,
+  threshold: number,
+): { x: number; y: number }[] {
+  const out: { x: number; y: number }[] = []
+  const visited = new Uint8Array(mask.length)
+  // Run a BFS but only collect cells from components that finish "small"
+  // (between 100 and 1000 cells). Take the centroid of the first 6 such
+  // components.
+  const queue = new Int32Array(mask.length)
+  const sumX = new Int32Array(w * h)
+  const sumY = new Int32Array(w * h)
+  const compCount = new Int32Array(w * h)
+  for (let y = 0; y < h && out.length < 6; y++) {
+    for (let x = 0; x < w && out.length < 6; x++) {
+      const seed = idx(w, x, y)
+      if (visited[seed]) continue
+      visited[seed] = 1
+      if (mask[seed] < threshold) continue
+      let head = 0
+      let tail = 0
+      queue[tail++] = seed
+      let area = 0
+      let sx = 0
+      let sy = 0
+      while (head < tail) {
+        const k = queue[head++]
+        const kx = k % w
+        const ky = (k - kx) / w
+        area++
+        sx += kx
+        sy += ky
+        // 4-neighbours.
+        const n4 = [
+          [kx === 0 ? w - 1 : kx - 1, ky],
+          [kx === w - 1 ? 0 : kx + 1, ky],
+          [kx, ky - 1],
+          [kx, ky + 1],
+        ] as const
+        for (const [nx, ny] of n4) {
+          if (ny < 0 || ny >= h) continue
+          const j = ny * w + nx
+          if (visited[j]) continue
+          if (mask[j] < threshold) continue
+          visited[j] = 1
+          queue[tail++] = j
+        }
       }
-      throw new Error('Drop a map image (PNG, JPG, WebP, or GIF) or a Geoform JSON export.')
+      sumX[area - 1] = sx
+      sumY[area - 1] = sy
+      compCount[area - 1] = 1
+      if (area >= 100 && area <= 1000) {
+        const cx = Math.round(sx / area)
+        const cy = Math.round(sy / area)
+        out.push({ x: cx, y: cy })
+      }
+      // Quiet the linter about unused local arrays. They are kept for
+      // diagnostics: a future "evidence histogram" mode can read them.
+      void sumX
+      void sumY
+      void compCount
     }
-
-    lastFile = file
-    lastWorld = null
-    result = await analyzeMapImage(file, { mode })
-    previewImage = await createImageBitmap(file).catch(async () => {
-      const url = URL.createObjectURL(file)
-      const img = new Image()
-      await new Promise<void>((res, rej) => {
-        img.onload = () => res()
-        img.onerror = () => rej()
-        img.src = url
-      })
-      URL.revokeObjectURL(url)
-      return img
-    })
-    activeId = result.issues[0]?.id ?? null
-    filter = 'all'
-    paintResult()
-  } catch (err) {
-    alert(err instanceof Error ? err.message : 'Could not read that file')
   }
+  return out
 }
 
-function paintResult() {
-  if (!result) return
-  const workspace = root.querySelector<HTMLElement>('#workspace')!
-  workspace.hidden = false
-  workspace.scrollIntoView({ behavior: 'smooth', block: 'start' })
+// ---------------------------------------------------------------------------
+// 4. Prior-mask state for checkMaskLock.
+// ---------------------------------------------------------------------------
 
-  root.querySelector('#scoreboard')!.innerHTML = `
-    <div class="score-card">
-      <div class="label">Geography grade</div>
-      <div class="big">${result.score}</div>
-      <p>${result.summary}</p>
-      <p style="margin-top:0.45rem">${escapeHtml(result.label)} · ${result.width}×${result.height}</p>
-      ${
-        lastWorld
-          ? `<button type="button" class="chip-btn" id="repairWorld" style="margin-top:0.7rem">Repair like the editor</button>`
-          : ''
-      }
-    </div>
-  `
-
-  root.querySelector('#repairWorld')?.addEventListener('click', () => {
-    if (!lastWorld) return
-    lastWorld = repairedCopy(lastWorld)
-    result = analyzeGeoformWorld(worldToJson(lastWorld))
-    result.label = `${result.label} · repaired`
-    previewImage = null
-    activeId = result.issues[0]?.id ?? null
-    filter = 'all'
-    paintResult()
-  })
-
-  const filters = root.querySelector('#filters')!
-  const counts: Record<string, number> = { all: result.issues.length }
-  for (const s of ['critical', 'major', 'minor', 'note'] as Severity[]) {
-    counts[s] = result.issues.filter((i) => i.severity === s).length
-  }
-  filters.innerHTML = (['all', 'critical', 'major', 'minor', 'note'] as const)
-    .map(
-      (s) => `
-      <button type="button" class="chip-btn ${filter === s ? 'active' : ''}" data-filter="${s}">
-        ${s === 'all' ? 'All' : SEVERITY_LABEL[s]} · ${counts[s]}
-      </button>`,
-    )
-    .join('')
-  filters.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      filter = btn.dataset.filter as typeof filter
-      paintResult()
-    })
-  })
-
-  const list = root.querySelector('#issues')!
-  const shown = result.issues.filter((i) => filter === 'all' || i.severity === filter)
-  if (!shown.length) {
-    list.innerHTML = `<p class="empty">Nothing in this severity bucket.</p>`
-  } else {
-    list.innerHTML = shown
-      .map((issue) => {
-        const kind = KIND_LABEL[issue.kind as IssueKind] ?? issue.kind
-        return `
-        <button type="button" class="issue ${issue.id === activeId ? 'active' : ''}" data-issue="${issue.id}">
-          <div class="issue-top">
-            <span class="badge ${issue.severity}">${SEVERITY_LABEL[issue.severity]}</span>
-            <span class="badge note">${kind}</span>
-            <span class="badge note">${Math.round(issue.confidence * 100)}% conf.</span>
-          </div>
-          <h3>${escapeHtml(issue.title)}</h3>
-          <p>${escapeHtml(issue.critique)}</p>
-          <p class="fix"><strong>Fix:</strong> ${escapeHtml(issue.fix)}</p>
-          ${issue.evidence ? `<p style="margin:0.35rem 0 0;font-size:0.82rem;color:var(--ink-soft)">${escapeHtml(issue.evidence)}</p>` : ''}
-        </button>`
-      })
-      .join('')
-    list.querySelectorAll<HTMLButtonElement>('[data-issue]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        activeId = btn.dataset.issue!
-        paintResult()
-      })
-    })
-  }
-
-  cancelAnimationFrame(raf)
-  const canvas = root.querySelector<HTMLCanvasElement>('#preview')!
-  const tick = () => {
-    if (!result) return
-    drawCritiquePreview(canvas, result, activeId, previewImage)
-    raf = requestAnimationFrame(tick)
-  }
-  raf = requestAnimationFrame(tick)
+interface PriorSnapshot {
+  mask: Float32Array
+  meta: WorldMeta
 }
 
-function escapeHtml(s: string) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+let PRIOR: PriorSnapshot | null = null
+
+/**
+ * Cache the mask that pre-Make-sense saw, so `critiqueWorld` can check
+ * that the derived world did not rewrite the coastline. The shell calls
+ * this (or relies on the implicit call from `critiqueMask`) before
+ * invoking `critiqueWorld`.
+ */
+export function setPriorMask(mask: Float32Array, meta: WorldMeta): void {
+  PRIOR = { mask, meta }
 }
 
-render()
+/** Forget the cached prior mask. Useful when the user resets the sketch. */
+export function clearPriorMask(): void {
+  PRIOR = null
+}
+
+/** Read-only accessor for the cached prior mask, or `null`. */
+export function getPriorMask(): { meta: WorldMeta; mask: Float32Array } | null {
+  return PRIOR ? { mask: PRIOR.mask, meta: PRIOR.meta } : null
+}
+
+// ---------------------------------------------------------------------------
+// 5. Post-Make-sense critic: critiqueWorld.
+// ---------------------------------------------------------------------------
+
+/**
+ * Post-Make-sense critique. Walks the World and emits issues for every
+ * structural violation it finds. If a prior mask was cached (because
+ * `critiqueMask` was called first, or because `setPriorMask` was
+ * invoked), `checkMaskLock` is included; otherwise it is silently
+ * skipped.
+ */
+export function critiqueWorld(world: World): CritiqueResult {
+  const issues: Issue[] = []
+  issues.push(...checkIceDesertDualism(world))
+  issues.push(...checkRainShadow(world))
+  issues.push(...checkContinentality(world))
+  issues.push(...checkFluxOnMaxima(world))
+
+  if (PRIOR && PRIOR.meta.width === world.meta.width && PRIOR.meta.height === world.meta.height) {
+    issues.push(...checkMaskLock(PRIOR.mask, world, PRIOR.meta.threshold))
+  }
+
+  const sorted = sortIssuesBySeverity(issues)
+  return {
+    score: scoreFromIssues(sorted),
+    issues: sorted,
+    pre: false,
+  }
+}

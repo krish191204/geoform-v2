@@ -5,9 +5,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: 'index.html',
-        roadmap: 'roadmap.html',
-        labs: 'labs.html',
-        critique: 'critique.html',
       },
     },
   },

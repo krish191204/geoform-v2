@@ -1,3 +1,365 @@
+/**
+ * Foundation types for the mask-first pipeline.
+ *
+ * Pipeline: Sketch (mask) -> Critique (issues) -> Make-sense (world) -> Worldbuild (cities).
+ * Everything downstream of `Make-sense` reads `World`; everything before it reads `WorldMeta`.
+ */
+
+// ---------------------------------------------------------------------------
+// 1. Brush palette — the visible six
+// ---------------------------------------------------------------------------
+
+/** What the mouse does when you click the map. Six tools, no more. */
+export type Tool =
+  /** Sketch: stamp soft mask value at brush center. */
+  | 'draw-land'
+  /** Sketch: subtract mask value at brush center. */
+  | 'erase-land'
+  /** Worldbuild: place a city. */
+  | 'place-city'
+  /** Worldbuild: remove nearest city. */
+  | 'remove-city'
+  /** All stages: read the inspector. */
+  | 'inspect'
+  /** Default cursor. */
+  | 'none'
+
+// ---------------------------------------------------------------------------
+// 2. Stage gating
+// ---------------------------------------------------------------------------
+
+/** Which step of the pipeline the editor is in; gates the tool palette. */
+export type Stage = 'sketch' | 'critique' | 'make-sense' | 'worldbuild'
+
+// ---------------------------------------------------------------------------
+// 3. WorldMeta
+// ---------------------------------------------------------------------------
+
+/** Sketch-stage parameters; locked at Make-sense entry and copied into `World`. */
+export interface WorldMeta {
+  seed: number
+  width: number
+  height: number
+  /** Default 6371. User range 2000–50000. */
+  planetRadiusKm: number
+  /** Default 23.5. User range 0–45. Drives seasonal swing. */
+  obliquityDeg: number
+  /** 0..1 fractional, default 0.5. */
+  seaLevel: number
+  /** Mask threshold for freeze intent, default 0.5. */
+  threshold: number
+}
+
+/** Defaults for a fresh sketch; spread and override. */
+export const DEFAULT_META: Readonly<WorldMeta> = {
+  seed: 1,
+  width: 512,
+  height: 256,
+  planetRadiusKm: 6371,
+  obliquityDeg: 23.5,
+  seaLevel: 0.5,
+  threshold: 0.5,
+}
+
+// ---------------------------------------------------------------------------
+// 5. Seasons
+// ---------------------------------------------------------------------------
+
+/** How many seasonal samples the climate model ran. v1 = 2, v2 = 4. */
+export type Seasons = 2 | 4
+
+/** The season count v1 ships. */
+export const SEASONS_V1: Seasons = 2
+
+// ---------------------------------------------------------------------------
+// 6. City
+// ---------------------------------------------------------------------------
+
+/** A settlement placed during Worldbuild. */
+export interface City {
+  x: number
+  y: number
+  name: string
+  /** 0..1 suitability score accounting for seasonality. */
+  seasonal: number
+}
+
+// ---------------------------------------------------------------------------
+// 11. Biome palette
+// ---------------------------------------------------------------------------
+
+/** The twelve land biomes a writer can actually see on the atlas. */
+export type BiomeId =
+  | 'ice'
+  | 'polar-desert'
+  | 'tundra'
+  | 'taiga'
+  | 'boreal-desert'
+  | 'steppe'
+  | 'temperate-forest'
+  | 'rainforest'
+  | 'savanna'
+  | 'hot-desert'
+  | 'mediterranean'
+  | 'alpine'
+
+/** Per-cell biome value: a land biome, or `ocean` for cells below sea level. */
+export type CellBiome = BiomeId | 'ocean'
+
+/** Inclusive `[min, max]` envelope for one climate axis. */
+export type Range = readonly [min: number, max: number]
+
+/** One row of the atlas palette: the climate box a biome occupies, plus its color. */
+export interface BiomeSpec {
+  id: BiomeId
+  label: string
+  /** Annual mean temperature envelope, °C. */
+  meanTempC: Range
+  /** Annual temperature swing envelope, °C. */
+  tempRangeC: Range
+  /** Monthly precipitation index envelope, 0..1. */
+  moistIdx: Range
+  /** Hex color, `#rrggbb`. */
+  color: string
+}
+
+/**
+ * The atlas palette. Twelve honest entries keyed off
+ * (`tempMean`, `tempRange`, `summerMoist`) — no duplicates, no aliases.
+ */
+export const BIOME_COLORS: readonly BiomeSpec[] = [
+  {
+    id: 'ice',
+    label: 'Ice',
+    meanTempC: [-60, -10],
+    tempRangeC: [0, 60],
+    moistIdx: [0, 1],
+    color: '#e8f0f4',
+  },
+  {
+    id: 'polar-desert',
+    label: 'Polar desert',
+    meanTempC: [-10, -2],
+    tempRangeC: [0, 60],
+    moistIdx: [0, 0.15],
+    color: '#dce3e6',
+  },
+  {
+    id: 'tundra',
+    label: 'Tundra',
+    meanTempC: [-10, 2],
+    tempRangeC: [0, 60],
+    moistIdx: [0.15, 1],
+    color: '#b7c4b0',
+  },
+  {
+    id: 'boreal-desert',
+    label: 'Boreal desert',
+    meanTempC: [-2, 6],
+    tempRangeC: [0, 60],
+    moistIdx: [0, 0.2],
+    color: '#c4b89a',
+  },
+  {
+    id: 'taiga',
+    label: 'Taiga',
+    meanTempC: [-2, 6],
+    tempRangeC: [0, 60],
+    moistIdx: [0.2, 1],
+    color: '#4f6b52',
+  },
+  {
+    id: 'steppe',
+    label: 'Steppe',
+    meanTempC: [6, 18],
+    tempRangeC: [18, 60],
+    moistIdx: [0.15, 0.4],
+    color: '#8fad5f',
+  },
+  {
+    id: 'mediterranean',
+    label: 'Mediterranean',
+    meanTempC: [10, 20],
+    tempRangeC: [0, 18],
+    moistIdx: [0.2, 0.45],
+    color: '#a8b45c',
+  },
+  {
+    id: 'temperate-forest',
+    label: 'Temperate forest',
+    meanTempC: [6, 18],
+    tempRangeC: [0, 60],
+    moistIdx: [0.4, 1],
+    color: '#3d6b45',
+  },
+  {
+    id: 'hot-desert',
+    label: 'Hot desert',
+    meanTempC: [18, 40],
+    tempRangeC: [0, 60],
+    moistIdx: [0, 0.15],
+    color: '#d4b483',
+  },
+  {
+    id: 'savanna',
+    label: 'Savanna',
+    meanTempC: [18, 40],
+    tempRangeC: [0, 60],
+    moistIdx: [0.15, 0.5],
+    color: '#c4a35a',
+  },
+  {
+    id: 'rainforest',
+    label: 'Rainforest',
+    meanTempC: [18, 40],
+    tempRangeC: [0, 60],
+    moistIdx: [0.5, 1],
+    color: '#1f4d38',
+  },
+  {
+    id: 'alpine',
+    label: 'Alpine',
+    meanTempC: [-60, 40],
+    tempRangeC: [0, 60],
+    moistIdx: [0, 1],
+    color: '#8a8f8c',
+  },
+]
+
+/** Ocean is not a biome — it falls out of the mask — but it still needs a color. */
+export const OCEAN_COLOR = '#1f5f74'
+
+/** Fast id -> spec lookup over `BIOME_COLORS`. */
+export const BIOME_BY_ID: Readonly<Record<BiomeId, BiomeSpec>> = Object.fromEntries(
+  BIOME_COLORS.map((b) => [b.id, b]),
+) as Record<BiomeId, BiomeSpec>
+
+/** Atlas color for a per-cell biome value. Total — every `CellBiome` resolves. */
+export function biomeColor(id: CellBiome): string {
+  return id === 'ocean' ? OCEAN_COLOR : BIOME_BY_ID[id].color
+}
+
+// ---------------------------------------------------------------------------
+// 4. World
+// ---------------------------------------------------------------------------
+
+/** The committed world: everything Make-sense derived from the Sketch mask. */
+export interface World {
+  meta: WorldMeta
+
+  /** Authoritative soft land mask from Sketch, 0..1, length W*H. */
+  mask: Float32Array
+
+  /** Plate assignment per cell, derived from the mask. */
+  plateId: Int16Array
+  /** Plate drift, cells per million years. */
+  plateVx: Float32Array
+  plateVy: Float32Array
+
+  /** Elevation in METRES (not unitless 0..1). */
+  elev: Float32Array
+
+  /** How many seasonal samples the arrays below represent. v1 = 2. */
+  seasons: Seasons
+  /** Mean temperature (°C) over the warm half of the year. */
+  summer: Float32Array
+  /** Mean temperature (°C) over the cold half of the year. */
+  winter: Float32Array
+  /** Monthly precipitation index (0..1) over the warm half. */
+  summerMoist: Float32Array
+  /** Monthly precipitation index (0..1) over the cold half. */
+  winterMoist: Float32Array
+
+  /** Annual mean temperature, °C. Cached aggregate for the atlas default. */
+  tempMean: Float32Array
+  /** Annual temperature swing, °C (summer − winter). */
+  tempRange: Float32Array
+  /** Annual mean precipitation index, 0..1. */
+  moistMean: Float32Array
+
+  /** Accumulated downhill water flux per cell. */
+  flux: Float32Array
+  /** 1 = river cell, 0 = not. */
+  rivers: Uint8Array
+
+  /** Per-cell biome name, keyed off (tempMean, tempRange, summerMoist). Length W*H. */
+  biome: CellBiome[]
+
+  /** Per-cell city-placement suitability score, 0..1. Length W*H. */
+  suitability: Float32Array
+
+  cities: City[]
+}
+
+// ---------------------------------------------------------------------------
+// 7. Issues
+// ---------------------------------------------------------------------------
+
+/** One thing Critique found wrong, with the cells that prove it. */
+export interface Issue {
+  id: string
+  severity: 'critical' | 'major' | 'minor'
+  title: string
+  critique: string
+  fix: string
+  /** Cells that triggered this issue. */
+  evidence: { x: number; y: number }[]
+}
+
+// ---------------------------------------------------------------------------
+// 8. Provenance
+// ---------------------------------------------------------------------------
+
+/** The anti-gaslight trail: what Make-sense did, and how much it moved. */
+export interface Provenance {
+  steps: { name: string; at: number; measurements: Record<string, number> }[]
+  inputMaskArea: number
+  outputMaskArea: number
+  maskDeltaPct: number
+  scoreBefore: number
+  scoreAfter: number
+}
+
+// ---------------------------------------------------------------------------
+// 9. EditorState
+// ---------------------------------------------------------------------------
+
+/** The whole bundle the shell holds; one object, one source of truth. */
+export interface EditorState {
+  stage: Stage
+  /** Null until Make-sense commits. */
+  world: World | null
+  /** Editable during Sketch; copied into `world.meta` on commit. */
+  meta: WorldMeta
+  tool: Tool
+  brushSize: number
+  strength: number
+  /** Last critique result. */
+  issues: Issue[]
+  /** Last make-sense result. */
+  provenance: Provenance | null
+  isProcessing: boolean
+}
+
+// ---------------------------------------------------------------------------
+// 10. Drawing primitives
+// ---------------------------------------------------------------------------
+
+/** Row-major cell index into a W*H typed array. */
+export function idx(w: number, x: number, y: number): number {
+  return y * w + x
+}
+
+/** Clamp `v` into `[lo, hi]`. */
+export function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v
+}
+
+// ---------------------------------------------------------------------------
+// 12. Kept exports
+// ---------------------------------------------------------------------------
+
+/** The seven viewable layers in the atlas. */
 export type Layer =
   | 'relief'
   | 'plates'
@@ -7,285 +369,4 @@ export type Layer =
   | 'biome'
   | 'suitability'
 
-/** What the mouse does when you click the map. */
-export type Tool =
-  | 'raise'
-  | 'lower'
-  | 'smooth'
-  | 'ridge'
-  | 'channel'
-  | 'plateau'
-  | 'sea'
-  | 'land'
-  | 'city'
-  | 'razecity'
-  | 'inspect'
-  | 'continent'
-
-/** WorldEngine Holdridge names + a few UI aliases */
-export type Biome = string
-
-export interface City {
-  x: number
-  y: number
-  name: string
-  score: number
-  /** Optional role inferred by settlements.ts / director.ts. */
-  role?: SettlementRole
-}
-
-export interface SuitabilityResult {
-  score: number
-  ok: boolean
-  reasons: string[]
-  /** Discrete tier used by placement.ts and settlements.ts gates. */
-  tier?: SuitabilityTier
-}
-
-export interface World {
-  width: number
-  height: number
-  seed: number
-  seaLevel: number
-  plateId: Int16Array
-  elev: Float32Array
-  temp: Float32Array
-  moist: Float32Array
-  flux: Float32Array
-  biome: Biome[]
-  suitability: Float32Array
-  cities: City[]
-  plateCount: number
-  /** WorldEngine raw elevation calibration (for recompute) */
-  rawElevMin: number
-  rawElevMax: number
-  rawSeaThreshold: number
-  engine: 'worldengine' | 'local'
-  /**
-   * Wish, not a measurement: "I want this fraction of cells to be land."
-   * 0.40 means 40% land. Repair tries to honor it by growing or shrinking
-   * existing coasts — not by sprinkling islands.
-   * Populated by B-side director/timeline modules as a side effect.
-   */
-  landRatio?: number
-  /**
-   * How land should clump.
-   * continents = 2–3 big blobs (Earth look). Speckles get drowned.
-   * mixed      = a few big ones plus leftovers.
-   * islands    = keep the speckles. Only this mode wants archipelagos.
-   * Populated by B-side director/expand modules.
-   */
-  continentMass?: 'continents' | 'mixed' | 'islands'
-  /** Maritime trade lanes between coastal settlements.
-   *  Populated by B-side expand/placement modules. */
-  tradeRoutes?: TradeRoute[]
-  /** How fast each plate slides, in cells per million years.
-   *  Populated by B-side geography/plate modules. */
-  plateVx?: Float32Array
-  plateVy?: Float32Array
-  /**
-   * World-space origin of cell (0,0). When the map zooms out we add cells
-   * around the edge, so the old (0,0) is no longer the corner.
-   * originX/Y remember that. Populated by B-side expand/zoom-out modules.
-   */
-  originX?: number
-  originY?: number
-  /**
-   * How many rows "full planet latitude" uses. Frozen at generate so zoom-out
-   * padding does not suddenly restyle climate (equator would jump).
-   * Populated by B-side geography module.
-   */
-  latRows?: number
-  /** Brush-stroke log; sent to /api/recompute so the server can re-apply
-   *  every stroke from scratch on a fresh elevation derived from `seed`. */
-  sculpt: Array<{ x: number; y: number; radius: number; delta: number; tool: 'raise' | 'lower' }>
-}
-
-const FALLBACK_BIOME = '#6e7f6a'
-
-/** Colors for WorldEngine biomes + simple aliases */
-export const BIOME_COLORS: Record<string, string> = {
-  ocean: '#1f5f74',
-  coast: '#3d8a9a',
-  ice: '#e8f0f4',
-  'polar desert': '#dce3e6',
-  'subpolar dry tundra': '#b7c4b0',
-  'subpolar moist tundra': '#a8b8a4',
-  'subpolar wet tundra': '#9aaf96',
-  'subpolar rain tundra': '#8ba688',
-  'boreal desert': '#c4b89a',
-  'boreal dry scrub': '#9aaa78',
-  'boreal moist forest': '#4f6b52',
-  'boreal wet forest': '#3f5f44',
-  'boreal rain forest': '#35583c',
-  'cool temperate desert': '#d4b483',
-  'cool temperate desert scrub': '#c4a86e',
-  'cool temperate steppe': '#8fad5f',
-  'cool temperate moist forest': '#3d6b45',
-  'cool temperate wet forest': '#345c3c',
-  'cool temperate rain forest': '#2c5240',
-  'warm temperate desert': '#d9bc8a',
-  'warm temperate desert scrub': '#c9ac72',
-  'warm temperate thorn scrub': '#b89a5c',
-  'warm temperate dry forest': '#5a8a4a',
-  'warm temperate moist forest': '#3d6b45',
-  'warm temperate wet forest': '#2f5a3a',
-  'warm temperate rain forest': '#264d36',
-  'subtropical desert': '#d4b483',
-  'subtropical desert scrub': '#c4a35a',
-  'subtropical thorn woodland': '#b8974e',
-  'subtropical dry forest': '#6a9a4a',
-  'subtropical moist forest': '#3d7a4a',
-  'subtropical wet forest': '#2f6a42',
-  'subtropical rain forest': '#1f5a3a',
-  'tropical desert': '#d8b67a',
-  'tropical desert scrub': '#c4a35a',
-  'tropical thorn woodland': '#b8974e',
-  'tropical dry forest': '#6a9a4a',
-  'tropical very dry forest': '#7aa050',
-  'tropical moist forest': '#2d6b48',
-  'tropical wet forest': '#1f5a3e',
-  'tropical rain forest': '#1f4d38',
-  // legacy simple names
-  tundra: '#b7c4b0',
-  taiga: '#4f6b52',
-  grassland: '#8fad5f',
-  forest: '#3d6b45',
-  rainforest: '#1f4d38',
-  savanna: '#c4a35a',
-  desert: '#d4b483',
-  alpine: '#8a8f8c',
-}
-
-export function biomeColor(name: string): string {
-  if (BIOME_COLORS[name]) return BIOME_COLORS[name]
-  // fuzzy fallbacks
-  if (name.includes('ocean')) return BIOME_COLORS.ocean
-  if (name.includes('ice')) return BIOME_COLORS.ice
-  if (name.includes('desert')) return BIOME_COLORS.desert
-  if (name.includes('rain forest') || name.includes('rainforest')) return BIOME_COLORS.rainforest
-  if (name.includes('forest')) return BIOME_COLORS.forest
-  if (name.includes('tundra')) return BIOME_COLORS.tundra
-  if (name.includes('steppe') || name.includes('grass')) return BIOME_COLORS.grassland
-  if (name.includes('scrub') || name.includes('thorn') || name.includes('savanna'))
-    return BIOME_COLORS.savanna
-  return FALLBACK_BIOME
-}
-
-/**
- * Legacy stdlib-bridge wire format. Kept around for the test that exercises
- * `worldFromPayload` directly. The current bridge (`/api/generate`,
- * `/api/recompute` on `server/api/`) uses `ContractWorld` instead.
- */
-export interface WorldEnginePayload {
-  engine: string
-  width: number
-  height: number
-  seed: number
-  seaLevel: number
-  plateCount: number
-  elev: number[]
-  plateId: number[]
-  temp: number[]
-  moist: number[]
-  flux: number[]
-  biome: string[]
-  rawElevMin: number
-  rawElevMax: number
-  rawSeaThreshold: number
-}
-
-/**
- * A single layer in the contract `World` JSON document
- * (see `docs/contract.md`). The contents of `data` are always a 2D array
- * (rows × cols) of numbers; biome indices are integers, the rest are floats.
- */
-export interface ContractLayer {
-  data: number[][]
-  thresholds?: Array<[string, number | null]> | Record<string, number | null>
-  quantiles?: Record<string, number>
-}
-
-/**
- * Full `World` JSON document returned by `server.api`'s
- * `/api/generate` and `/api/recompute` endpoints.
- *
- * Only the fields the client bridge actually reads are typed strictly;
- * everything else stays loose to absorb future schema additions without
- * requiring a TS update.
- */
-export interface ContractWorld {
-  schema_version: number
-  name: string
-  width: number
-  height: number
-  seed: number
-  generation_params: {
-    n_plates: number
-    ocean_level: number
-    step: string
-    fade_borders: boolean
-  }
-  temps: number[]
-  humids: number[]
-  gamma_curve: number
-  curve_offset: number
-  layers: {
-    elevation?: ContractLayer
-    plates?: ContractLayer
-    ocean?: ContractLayer
-    sea_depth?: ContractLayer
-    precipitation?: ContractLayer
-    temperature?: ContractLayer
-    humidity?: ContractLayer
-    permeability?: ContractLayer
-    watermap?: ContractLayer
-    irrigation?: ContractLayer
-    lake_map?: ContractLayer
-    river_map?: ContractLayer
-    biome?: ContractLayer
-    icecap?: ContractLayer
-  }
-  sculpt?: unknown[]
-  settlements?: unknown
-}
-
-/**
- * B-side worldbuilding types (settlements, trade routes, suitability).
- * Appended verbatim from the snapshot at geoform-cursor-geoform-worldengine-mvp
- * so modules copied in from that snapshot (history, timeline, expand, director,
- * placement, geography) compile against the same shapes they were written for.
- *
- * Fields on `World` that these modules populate (`landRatio`, `continentMass`,
- * `tradeRoutes`, `plateVx/Vy`, `originX/Y`, `latRows`) are declared optional on
- * the A-side `World` above — A's `worldFromPayload` bridge never touches them,
- * and B's modules fill them in as a side effect.
- */
-
-/** What a settlement primarily does economically. */
-export type SettlementRole =
-  | 'seat_of_power'
-  | 'farmland'
-  | 'fishing'
-  | 'mining'
-  | 'hunting'
-  | 'trade'
-  | 'pastoral'
-
-/** How safe a sea cell is for shipping. */
-export type SeaNavClass = 'open' | 'coastal' | 'polar' | 'blocked'
-
-/** A maritime lane between two port settlements. */
-export interface TradeRoute {
-  id: string
-  /** Index into world.cities */
-  from: number
-  to: number
-  /** Ocean waypoints (grid coords), including start/end port cells. */
-  waypoints: { x: number; y: number }[]
-  /** Worst hazard class along the route. */
-  hazard: 'open' | 'coastal' | 'polar' | 'mixed'
-}
-
-/** Settlement viability — not one ideal biome, but can vs cannot. */
-export type SuitabilityTier = 'blocked' | 'marginal' | 'favorable'
+export { createRng, hash2, valueNoise2D, fbm } from './noise'

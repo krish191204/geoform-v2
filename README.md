@@ -4,14 +4,11 @@ Geoform is a browser worldbuilding app. Paint a heightfield; climate, rivers, an
 
 **Split:** **Python** builds New world and authoritative climate (WorldEngine API). **TypeScript** is the paint program — brushes, undo, canvas, instant preview. If Python is offline, Local TypeScript generates the planet instead.
 
-**New here?** Read [`HOW_IT_WORKS.md`](HOW_IT_WORKS.md) first. It explains the grid, land vs sea, and which file does what, in plain English. The source is also commented that way.
+> **Note:** Python/WorldEngine is **not** part of the v1 live path. It is an optional CI-time validator only. Do not expect `npm run dev:api` to be required for normal use.
 
 Pages:
 
-- Map editor `/` — paint, Full continents vs islands, silent geography repair
-- Labs `/labs.html` — one rule at a time (including continent clumping)
-- Critique `/critique.html` — grade fixtures and Geoform JSON
-- Roadmap `/roadmap.html` — T0 shipped, T1 Earth calibration next
+- Map editor `/` — paint, continent-mass presets, silent geography repair
 
 ---
 
@@ -44,7 +41,6 @@ There is **no database**. Runtime state is in-memory typed arrays. Persistence i
 
 ```bash
 npm install
-npm run setup:api          # once — clones vendor/worldengine + creates .venv
 npm run dev:all            # Vite UI + Python API together
 ```
 
@@ -282,15 +278,7 @@ Authoritative climate after sculpt is the local TS path (`harmonizeWorld`) unles
 
 ## Accuracy roadmap (Earth-grounded next stage)
 
-Full requirements (datasets, math, skills, storage, phases):
-
-- Immersive interactive page: [http://127.0.0.1:5173/roadmap.html](http://127.0.0.1:5173/roadmap.html) (also linked from the map editor)
-- Geography labs (elevation, rivers, rain shadow, tectonics, settlement): [http://127.0.0.1:5173/labs.html](http://127.0.0.1:5173/labs.html)
-- Map critique (upload a map image, get a geography roast): [http://127.0.0.1:5173/critique.html](http://127.0.0.1:5173/critique.html)
-- Training / test corpus policy: [`docs/TRAINING_AND_TESTS.md`](docs/TRAINING_AND_TESTS.md)
-- Report: [`docs/ACCURACY_ROADMAP.md`](docs/ACCURACY_ROADMAP.md)
-
-Critique regression: `npm run fixtures:critique && npm test`
+Earth-grounded calibration work is **not** part of v1. Phase 0 removed the roadmap, dashboard, labs, and critique pages; the standalone docs were removed alongside. Track A is deferred.
 
 Tooling references cloned locally under `vendor-skills/` (gitignored): shadcn-ui MCP, anthropics/skills, ui-ux-pro-max, Convex agent-skills.
 
@@ -306,7 +294,7 @@ Tooling references cloned locally under `vendor-skills/` (gitignored): shadcn-ui
 
 - **Status reads `WorldEngine error: Bad Gateway. Is the API running?` and won't clear** — the SPA fired its boot-time `loadWorld` (`src/main.ts`) while the API was down or restarting; the client does not auto-retry. The API may now be fine. **Reload the page**, or click **Randomize** in the toolbar to trigger a fresh `/api/generate`. Verify with `curl http://127.0.0.1:8765/health` and `curl http://127.0.0.1:5173/health` (both should return `{"status":"ok"}`).
 - **`World.sculpt` log grows without limit** — every brush stroke is appended; for worlds with thousands of strokes, recompute latency can climb. The server replays the full list on every `/api/recompute` by design (so saved strokes survive a fresh-from-seed reload). There's no compaction yet.
-- **`/api/interpret` returns `source: "rules"` even with `GEMINI_API_KEY` set** — Director falls back silently if Gemini rejects the request (rate-limit, malformed response, network error). Check `GEMINI_API_KEY` is in scope; the route returns the resolved source in its body so the client surfaces the fallback.
+- **`/api/interpret` returns `source: "rules"` even with `GEMINI_API_KEY` set** — the prompt interpreter falls back silently if Gemini rejects the request (rate-limit, malformed response, network error). Check `GEMINI_API_KEY` is in scope; the route returns the resolved source in its body so the client surfaces the fallback.
 
 ## Deployment
 
@@ -318,19 +306,13 @@ This repo supports two deploy modes:
     docker compose up --build
     ```
 
-2. **Static SPA on Vercel** — `vercel.json` ships with a single SPA rewrite (`/((?!api/|health|assets/|critique-fixtures/|docs/).*)` → `/index.html`). Vercel serves the frontend only; the backend must be reachable separately (Vercel Functions, a sibling service, or skip the editor's `/api/*` calls and run on local-only). Trigger with:
-
-    ```
-    vercel deploy
-    ```
-
-3. **Heroku** — `Procfile` + `runtime.txt` style is supported by the FastAPI `start:prod` script (`uvicorn` on `$PORT`); the static SPA is served from `dist/`. Trigger with `git push heroku main`.
+2. **Heroku** — `Procfile` + `runtime.txt` style is supported by the FastAPI `start:prod` script (`uvicorn` on `$PORT`); the static SPA is served from `dist/`. Trigger with `git push heroku main`.
 
 Local development:
 
 ```
-npm run install:all   # clones vendor/worldengine, creates .venv, npm install
-npm run dev           # vite dev server on :5173 (multi-page editor + roadmap + labs + critique)
+npm install           # install JS deps
+npm run dev           # vite dev server on :5173 (map editor)
 npm run dev:all       # parallel: vite + bash scripts/dev-api.sh (FastAPI on :8765)
 npm run dev:api       # only the FastAPI API
 ```

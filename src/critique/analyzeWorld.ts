@@ -1,26 +1,67 @@
 /**
- * Grade a Geoform save (the JSON from Save). Looks at land shape, climate,
- * rivers, cities. This is the "teacher's red pen." The editor does not use
- * this — it repairs instead of nagging.
+ * Harsh teardown of a derived World.
+ *
+ * The Critique stage is the system's red pen. It looks at the mask (pre
+ * Make-sense) and the World (post Make-sense) and calls out anything that
+ * cannot, should not, or just does not happen on a planet. It never
+ * hedges. It never offers alternatives. The user decides what to do with
+ * the report.
+ *
+ * Severity weights: critical 25, major 10, minor 2. Score starts at 100
+ * and deducts the sum of weights, clamped to `[0, 100]`.
  */
-import type { CritiqueResult, MapIssue, Severity } from './types'
-import { landBboxFill, landmassStats } from '../world/mass'
 
-interface GridWorld {
-  width: number
-  height: number
-  elev: Float32Array | number[]
-  temp?: Float32Array | number[]
-  moist?: Float32Array | number[]
-  flux?: Float32Array | number[]
-  biome?: string[]
-  cities?: { x: number; y: number; name: string; score?: number }[]
-  seaLevel?: number
-  seed?: number
-  label?: string
+import type { World, Issue } from '../world/types'
+import { idx } from '../world/types'
+import { countBigComponents } from '../sketch/countBigComponents'
+
+// ---------------------------------------------------------------------------
+// 1. Severity weights and score aggregation.
+// ---------------------------------------------------------------------------
+
+/**
+ * Deduction per severity. A single critical caps the score at 75; a single
+ * major caps it at 90; a single minor caps it at 98; zero issues is 100.
+ */
+export const SEVERITY_WEIGHTS: Readonly<Record<Issue['severity'], number>> = Object.freeze({
+  critical: 25,
+  major: 10,
+  minor: 2,
+})
+
+/**
+ * Aggregate a score from an issue list. Starts at 100 and subtracts the
+ * sum of severity weights. Clamped to `[0, 100]`.
+ *
+ * Deterministic — the same input list always yields the same number.
+ */
+export function scoreFromIssues(issues: Issue[]): number {
+  let deduction = 0
+  for (const i of issues) {
+    deduction += SEVERITY_WEIGHTS[i.severity] ?? 0
+  }
+  const score = 100 - deduction
+  if (score < 0) return 0
+  if (score > 100) return 100
+  return score
 }
 
-const DIRS = [
+/**
+ * Sort issues so the harshest ones read first. Critical -> major -> minor.
+ * Stable for ties (preserves the order callers produced, e.g. the order
+ * checks fired in).
+ */
+export function sortIssuesBySeverity(issues: Issue[]): Issue[] {
+  const order: Record<Issue['severity'], number> = { critical: 0, major: 1, minor: 2 }
+  return [...issues].sort((a, b) => order[a.severity] - order[b.severity])
+}
+
+// ---------------------------------------------------------------------------
+// 2. Neighbor stencils.
+// ---------------------------------------------------------------------------
+
+/** 8-connected offsets (for local-maxima checks). Row stays inside the map. */
+const NEIGHBOR_OFFSETS_8 = [
   [1, 0],
   [-1, 0],
   [0, 1],
@@ -31,493 +72,360 @@ const DIRS = [
   [-1, -1],
 ] as const
 
-function idx(x: number, y: number, w: number) {
-  return y * w + x
-}
+/** 4-connected offsets (for BFS / coast distance). x wraps, y stays. */
+const NEIGHBOR_OFFSETS_4 = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+] as const
 
-function severityScore(s: Severity) {
-  return s === 'critical' ? 28 : s === 'major' ? 16 : s === 'minor' ? 7 : 2
-}
+// ---------------------------------------------------------------------------
+// 3. Helpers used by the post-Make-sense checks.
+// ---------------------------------------------------------------------------
 
-function grade(issues: MapIssue[]) {
-  const raw = issues.reduce((a, i) => a + severityScore(i.severity) * i.confidence, 0)
-  return Math.max(0, Math.round(100 - raw))
-}
+/**
+ * Distance in cells from the nearest coast. Coastal cells are land cells
+ * with at least one 8-neighbour ocean neighbor. Ocean cells stay at 0.
+ *
+ * Inland cells have a strictly positive distance; we treat `coastDist > 50`
+ * as "real interior" when evaluating continentality.
+ */
+export function computeCoastDistance(world: World): Float32Array {
+  const { elev } = world
+  const w = world.meta.width
+  const h = world.meta.height
+  const seaLevel = world.meta.seaLevel
+  const dist = new Float32Array(w * h)
+  if (w === 0 || h === 0) return dist
 
-export function analyzeGeoformWorld(raw: unknown): CritiqueResult {
-  const data = raw as Record<string, unknown>
-  if (!data || typeof data !== 'object') throw new Error('Not a JSON object')
-  const width = Number(data.width)
-  const height = Number(data.height)
-  if (!width || !height) throw new Error('Missing width/height — need a Geoform export')
-  const elev = toFloat(data.elev, width * height)
-  const world: GridWorld = {
-    width,
-    height,
-    elev,
-    temp: data.temp ? toFloat(data.temp, width * height) : undefined,
-    moist: data.moist ? toFloat(data.moist, width * height) : undefined,
-    flux: data.flux ? toFloat(data.flux, width * height) : undefined,
-    biome: Array.isArray(data.biome) ? (data.biome as string[]) : undefined,
-    cities: Array.isArray(data.cities)
-      ? (data.cities as GridWorld['cities'])
-      : undefined,
-    seaLevel: typeof data.seaLevel === 'number' ? data.seaLevel : 0.22,
-    seed: typeof data.seed === 'number' ? data.seed : undefined,
-    label: `Geoform world${data.seed != null ? ` · seed ${data.seed}` : ''}`,
+  const queue = new Int32Array(w * h)
+  let head = 0
+  let tail = 0
+
+  // Seed: every coastal land cell gets distance 1 and goes into the queue.
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = idx(w, x, y)
+      if (elev[i] < seaLevel) continue
+      let isCoast = false
+      for (const [dx, dy] of NEIGHBOR_OFFSETS_8) {
+        const nx = (x + dx + w) % w
+        const ny = y + dy
+        if (ny < 0 || ny >= h) continue
+        if (elev[ny * w + nx] < seaLevel) {
+          isCoast = true
+          break
+        }
+      }
+      if (isCoast) {
+        dist[i] = 1
+        queue[tail++] = i
+      }
+    }
   }
-  return critiqueGrid(world, 'geoform-json')
+
+  // BFS outward: distance increases by one per ring.
+  while (head < tail) {
+    const i = queue[head++]
+    const cx = i % w
+    const cy = (i - cx) / w
+    const next = dist[i] + 1
+    for (const [dx, dy] of NEIGHBOR_OFFSETS_4) {
+      const nx = (cx + dx + w) % w
+      const ny = cy + dy
+      if (ny < 0 || ny >= h) continue
+      const j = ny * w + nx
+      if (elev[j] < seaLevel) continue
+      if (dist[j] > 0) continue
+      dist[j] = next
+      queue[tail++] = j
+    }
+  }
+  return dist
 }
 
-function toFloat(v: unknown, n: number): Float32Array {
-  if (!Array.isArray(v) && !(v instanceof Float32Array)) throw new Error('Grid field missing')
-  const arr = Float32Array.from(v as ArrayLike<number>)
-  if (arr.length !== n) throw new Error(`Grid size ${arr.length} ≠ ${n}`)
-  return arr
-}
+// ---------------------------------------------------------------------------
+// 4. DOM-bar check: an ice cell directly next to a hot-arid desert cell.
+// ---------------------------------------------------------------------------
 
-export function critiqueGrid(world: GridWorld, source: CritiqueResult['source']): CritiqueResult {
-  const { width: w, height: h, elev } = world
-  const sea = world.seaLevel ?? 0.22
-  const issues: MapIssue[] = []
-  let id = 0
-  const nextId = () => `i${++id}`
-
-  // ——— Hydrology: steepest descent vs flux ———
-  if (world.flux) {
-    const flux = world.flux
-    let climbCount = 0
-    let climbX = 0
-    let climbY = 0
-    let worstClimb = 0
-    let sinks = 0
-    let maxFlux = 0
-    for (let i = 0; i < flux.length; i++) maxFlux = Math.max(maxFlux, flux[i])
-
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 0; x < w; x++) {
-        const i = idx(x, y, w)
-        if (elev[i] < sea) continue
-        if (flux[i] < maxFlux * 0.08) continue
-        let best = -1
-        let bestE = elev[i]
-        for (const [dx, dy] of DIRS) {
-          const nx = (x + dx + w) % w
-          const ny = y + dy
-          if (ny < 0 || ny >= h) continue
-          const j = idx(nx, ny, w)
-          if (elev[j] < bestE) {
-            bestE = elev[j]
-            best = j
-          }
-        }
-        if (best < 0) {
-          sinks++
-          continue
-        }
-        // if this cell has high flux but is a local sink interior — odd for through-flowing rivers
-        const drop = elev[i] - bestE
-        if (drop < 1e-5 && flux[i] > maxFlux * 0.15) {
-          climbCount++
-          if (flux[i] > worstClimb) {
-            worstClimb = flux[i]
-            climbX = x
-            climbY = y
+/**
+ * The Donald bar: a cell with `temp < 5°C` must not sit adjacent to a
+ * cell with `temp > 30°C AND moist < 0.2`. The planet has no air-mass
+ * that can step from "ice" to "Sahara" in one cell.
+ *
+ * Evidence lists the offending pair (the cold cell and its hostile neighbor).
+ * If several violations exist, the first 8 pairs are recorded.
+ */
+export function checkIceDesertDualism(world: World): Issue[] {
+  const { tempMean, moistMean } = world
+  const w = world.meta.width
+  const h = world.meta.height
+  const issues: Issue[] = []
+  const evidence: { x: number; y: number }[] = []
+  let count = 0
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = idx(w, x, y)
+      const t = tempMean[i]
+      if (t >= 5) continue // not an "ice-side" cell
+      for (const [dx, dy] of NEIGHBOR_OFFSETS_8) {
+        const nx = (x + dx + w) % w
+        const ny = y + dy
+        if (ny < 0 || ny >= h) continue
+        const j = ny * w + nx
+        const tn = tempMean[j]
+        const mn = moistMean[j]
+        if (tn > 30 && mn < 0.2) {
+          count++
+          if (evidence.length < 16) {
+            evidence.push({ x, y })
+            evidence.push({ x: nx, y: ny })
           }
         }
       }
     }
-
-    if (climbCount > w * h * 0.002) {
-      issues.push({
-        id: nextId(),
-        severity: climbCount > w * h * 0.01 ? 'critical' : 'major',
-        kind: 'hydro',
-        title: 'Rivers stall in basins',
-        critique: `Found ${climbCount} high-flow cells that don’t drain downhill. On a real map that usually means painted rivers ignoring topography, or pits with no outlet.`,
-        fix: 'Carve outlets, lower the pit floor, or redraw rivers along steepest-descent paths.',
-        at: { x: climbX / w, y: climbY / h },
-        confidence: 0.85,
-        evidence: `Worst local flux ≈ ${worstClimb.toFixed(1)}`,
-      })
-    }
-
-    // rivers crossing ridges: high flux on local high points
-    let ridgeCross = 0
-    let rx = 0
-    let ry = 0
-    for (let y = 2; y < h - 2; y++) {
-      for (let x = 2; x < w - 2; x++) {
-        const i = idx(x, y, w)
-        if (elev[i] < sea || flux[i] < maxFlux * 0.12) continue
-        let lower = 0
-        for (const [dx, dy] of DIRS) {
-          const nx = (x + dx + w) % w
-          const ny = y + dy
-          if (ny < 0 || ny >= h) continue
-          if (elev[idx(nx, ny, w)] < elev[i] - 0.01) lower++
-        }
-        // peak-like with big river
-        if (lower >= 6) {
-          ridgeCross++
-          rx = x
-          ry = y
-        }
-      }
-    }
-    if (ridgeCross > 4) {
-      issues.push({
-        id: nextId(),
-        severity: 'major',
-        kind: 'hydro',
-        title: 'Streams crest ridges',
-        critique: `${ridgeCross} strong-flow cells sit on local highs. Water doesn’t climb mountain spines for fun — that’s a classic fantasy-map tell.`,
-        fix: 'Move channels to valley floors; use flow accumulation from the DEM.',
-        at: { x: rx / w, y: ry / h },
-        confidence: 0.8,
-      })
-    }
-  } else {
+  }
+  if (count > 0) {
     issues.push({
-      id: nextId(),
-      severity: 'note',
-      kind: 'hydro',
-      title: 'No river / flux layer',
-      critique: 'Without flow data I can’t prove drainage mistakes — only elevation and climate heuristics.',
-      fix: 'Export a Geoform world (or include a flux grid) for a sharper hydro critique.',
-      confidence: 1,
+      id: 'ice-desert-dualism',
+      severity: 'critical',
+      title: 'Ice adjacent to tropical desert',
+      critique: `Found ${count} ice/desert boundary pairs: an ` +
+        `ice cell (T<5C) sits next to a neighbour with T>30C and ` +
+        `moist<0.2. That is the Donald bar violated — no air mass ` +
+        `can cover that gradient in one cell.`,
+      fix: 'Move the polar continent off the equator or rerun climate with a larger planetRadiusKm.',
+      evidence,
     })
   }
+  return issues
+}
 
-  // ——— Climate: lapse-ish ———
-  if (world.temp) {
-    const temp = world.temp
-    let samples = 0
-    let covET = 0
-    let meanE = 0
-    let meanT = 0
-    for (let i = 0; i < elev.length; i++) {
-      if (elev[i] < sea) continue
-      meanE += elev[i]
-      meanT += temp[i]
-      samples++
-    }
-    if (samples > 50) {
-      meanE /= samples
-      meanT /= samples
-      let varE = 0
-      for (let i = 0; i < elev.length; i++) {
-        if (elev[i] < sea) continue
-        const de = elev[i] - meanE
-        const dt = temp[i] - meanT
-        covET += de * dt
-        varE += de * de
-      }
-      const slope = varE > 1e-8 ? covET / varE : 0
-      // expect negative slope (higher = colder). temp often normalized 0..1
-      if (slope > 0.15) {
-        issues.push({
-          id: nextId(),
-          severity: 'critical',
-          kind: 'climate',
-          title: 'Hotter mountains than valleys',
-          critique: `Elevation and temperature correlate the wrong way (slope ${slope.toFixed(2)}). Real air cools ~6.5 °C/km — snowcaps shouldn’t be warmer than coasts.`,
-          fix: 'Drive temperature from latitude + lapse rate off the DEM, then layer climate noise.',
-          confidence: 0.9,
-          evidence: `∂T/∂elev ≈ ${slope.toFixed(3)}`,
-        })
-      } else if (slope > -0.05) {
-        issues.push({
-          id: nextId(),
-          severity: 'minor',
-          kind: 'climate',
-          title: 'Weak elevation cooling',
-          critique: 'Temperature barely drops with height. Tall ranges should read colder even if your art style is soft.',
-          fix: 'Apply a clearer lapse term so peaks feel alpine.',
-          confidence: 0.7,
-          evidence: `∂T/∂elev ≈ ${slope.toFixed(3)}`,
-        })
-      }
-    }
-  }
+// ---------------------------------------------------------------------------
+// 5. Rain-shadow check: prevailing west wind, windward must be wetter.
+// ---------------------------------------------------------------------------
 
-  // ——— Orography / rain shadow (assume prevailing west wind) ———
-  if (world.moist) {
-    const moist = world.moist
-    let violations = 0
-    let vx = 0
-    let vy = 0
-    for (let y = 2; y < h - 2; y += 2) {
-      for (let x = 4; x < w - 4; x += 2) {
-        const i = idx(x, y, w)
-        if (elev[i] < sea + 0.05) continue
-        // local ridge if higher than west and east neighbors
-        const west = elev[idx(x - 3, y, w)]
-        const east = elev[idx(x + 3, y, w)]
-        if (elev[i] < west + 0.08 || elev[i] < east + 0.08) continue
-        if (elev[i] < sea + 0.25) continue
-        const mWest = moist[idx(x - 3, y, w)]
-        const mEast = moist[idx(x + 3, y, w)]
-        // lee (east) wetter than windward (west) by a lot while ridge is tall
-        if (mEast > mWest + 0.18 && elev[i] - Math.min(west, east) > 0.12) {
-          violations++
-          vx = x
-          vy = y
+/**
+ * Heuristic: assume west-to-east prevailing wind. For every row, locate
+ * ridge candidates (cells visibly higher than both their upwind and
+ * downwind neighbours). Compare moistMean upwind vs. leeward. Any ridge
+ * with windward.mean < lee.mean is reported.
+ */
+export function checkRainShadow(world: World): Issue[] {
+  const { elev, moistMean } = world
+  const w = world.meta.width
+  const h = world.meta.height
+  const seaLevel = world.meta.seaLevel
+  const issues: Issue[] = []
+  const evidence: { x: number; y: number }[] = []
+  let violationCount = 0
+
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 4; x < w - 4; x++) {
+      const i = idx(w, x, y)
+      if (elev[i] < seaLevel + 0.15) continue // only consider real ridges
+      const westE = elev[idx(w, x - 4, y)]
+      const eastE = elev[idx(w, x + 4, y)]
+      if (elev[i] < westE + 0.15 || elev[i] < eastE + 0.15) continue // not a local high
+
+      // Windward slice: x-4..x-1. Lee slice: x+1..x+4. Land only.
+      let wSum = 0
+      let wN = 0
+      let eSum = 0
+      let eN = 0
+      for (let dx = -4; dx <= -1; dx++) {
+        const j = idx(w, x + dx, y)
+        if (elev[j] >= seaLevel) {
+          wSum += moistMean[j]
+          wN++
         }
       }
-    }
-    if (violations > 8) {
-      issues.push({
-        id: nextId(),
-        severity: 'major',
-        kind: 'orography',
-        title: 'Rain shadow flipped',
-        critique: `Assuming west winds, ${violations} ridge samples are wetter on the lee than the windward side. Mountains usually steal rain on the climb.`,
-        fix: 'Moisten the upwind flank; dry the downwind rain shadow — or document a different prevailing wind.',
-        at: { x: vx / w, y: vy / h },
-        confidence: 0.65,
-        evidence: 'Heuristic: west → east wind',
-      })
-    }
-  }
-
-  // ——— Settlement ———
-  if (world.cities?.length) {
-    for (const c of world.cities) {
-      const x = Math.round(c.x)
-      const y = Math.round(c.y)
-      if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue
-      const i = idx(x, y, w)
-      if (elev[i] < sea) {
-        issues.push({
-          id: nextId(),
-          severity: 'critical',
-          kind: 'settlement',
-          title: `${c.name || 'City'} is underwater`,
-          critique: 'A city marker sits below sea level. Unless it’s Atlantis, that’s a placement bug.',
-          fix: 'Move to the nearest coast or raise the land.',
-          at: { x: x / w, y: y / h },
-          confidence: 0.95,
-        })
-        continue
-      }
-      const slope =
-        Math.abs(elev[i] - elev[idx(x - 1, y, w)]) +
-        Math.abs(elev[i] - elev[idx(x + 1, y, w)]) +
-        Math.abs(elev[i] - elev[idx(x, y - 1, w)]) +
-        Math.abs(elev[i] - elev[idx(x, y + 1, w)])
-      if (slope > 0.35) {
-        issues.push({
-          id: nextId(),
-          severity: 'major',
-          kind: 'settlement',
-          title: `${c.name || 'City'} on a cliff`,
-          critique: 'Slope under this settlement is brutal. People can terrace or fortify, but daily life is harder.',
-          fix: 'Slide it downhill toward a river terrace or bay — or keep it as a deliberate high fortress.',
-          at: { x: x / w, y: y / h },
-          confidence: 0.8,
-          evidence: `local slope sum ${slope.toFixed(2)}`,
-        })
-      }
-      if (world.temp && world.temp[i] < 0.12 && elev[i] > 0.7) {
-        issues.push({
-          id: nextId(),
-          severity: 'minor',
-          kind: 'settlement',
-          title: `${c.name || 'City'} on a frozen summit`,
-          critique: 'Cold, high, and harsh — plausible as a fortress or mining hub, weak as a breadbasket capital.',
-          fix: 'Keep high sites military or industrial; put farm capitals in milder valleys.',
-          at: { x: x / w, y: y / h },
-          confidence: 0.7,
-        })
-      }
-      // far from water access
-      if (world.flux) {
-        let nearWater = elev[i] < sea + 0.04
-        for (let dy = -4; dy <= 4 && !nearWater; dy++) {
-          for (let dx = -4; dx <= 4; dx++) {
-            const nx = x + dx
-            const ny = y + dy
-            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
-            const j = idx(nx, ny, w)
-            if (elev[j] < sea || world.flux[j] > 40) nearWater = true
-          }
-        }
-        if (!nearWater) {
-          issues.push({
-            id: nextId(),
-            severity: 'minor',
-            kind: 'settlement',
-            title: `${c.name || 'City'} far from water`,
-            critique: 'No coast or strong stream nearby. Towns can still live on wells, trade, or seasonal water — but life is harder.',
-            fix: 'Nudge toward a river, lake, or harbor — or invent canals / aquifers on purpose.',
-            at: { x: x / w, y: y / h },
-            confidence: 0.6,
-          })
+      for (let dx = 1; dx <= 4; dx++) {
+        const j = idx(w, x + dx, y)
+        if (elev[j] >= seaLevel) {
+          eSum += moistMean[j]
+          eN++
         }
       }
+      if (wN < 2 || eN < 2) continue
+      const windward = wSum / wN
+      const lee = eSum / eN
+      if (windward < lee - 0.04) {
+        violationCount++
+        if (evidence.length < 8) evidence.push({ x, y })
+      }
     }
   }
 
-  // ——— Biome vs moisture quick sanity ———
-  if (world.biome && world.moist) {
-    let desertWet = 0
-    let rainforestDry = 0
-    let px = 0
-    let py = 0
-    for (let i = 0; i < world.biome.length; i++) {
-      if (elev[i] < sea) continue
-      const b = world.biome[i].toLowerCase()
-      const m = world.moist[i]
-      if (b.includes('desert') && m > 0.55) {
-        desertWet++
-        px = i % w
-        py = (i / w) | 0
-      }
-      if (b.includes('rain forest') && m < 0.25) {
-        rainforestDry++
-        px = i % w
-        py = (i / w) | 0
-      }
-    }
-    if (desertWet > w * h * 0.01) {
-      issues.push({
-        id: nextId(),
-        severity: 'major',
-        kind: 'climate',
-        title: 'Wet deserts',
-        critique: `${desertWet} desert-labeled cells are quite moist. Either the biome legend is lying or the moisture field is.`,
-        fix: 'Recompute biomes from temp + moisture, or fix the moisture map.',
-        at: { x: px / w, y: py / h },
-        confidence: 0.75,
-      })
-    }
-    if (rainforestDry > w * h * 0.008) {
-      issues.push({
-        id: nextId(),
-        severity: 'major',
-        kind: 'climate',
-        title: 'Parched rainforests',
-        critique: `${rainforestDry} rain-forest cells look dry. Labels and climate fields disagree.`,
-        fix: 'Align Holdridge / biome rules with the moisture grid.',
-        at: { x: px / w, y: py / h },
-        confidence: 0.75,
-      })
-    }
-  }
-
-  // ——— Plate / tectonic soft note ———
-  if (!issues.some((i) => i.kind === 'tectonic')) {
-    // mountain belt continuity: high elev should cluster
-    let high = 0
-    let highIsolated = 0
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
-        const i = idx(x, y, w)
-        if (elev[i] < 0.72) continue
-        high++
-        let neighbors = 0
-        for (const [dx, dy] of DIRS) {
-          if (elev[idx(x + dx, y + dy, w)] > 0.65) neighbors++
-        }
-        if (neighbors <= 1) highIsolated++
-      }
-    }
-    if (high > 30 && highIsolated / high > 0.35) {
-      issues.push({
-        id: nextId(),
-        severity: 'minor',
-        kind: 'tectonic',
-        title: 'Lonely peaks',
-        critique: 'Many high cells are isolated spikes. Real orogens form belts and arcs from plate boundaries — not salt-and-pepper mountains.',
-        fix: 'Sculpt continuous ranges along plate sutures; soften lone pinnacles.',
-        confidence: 0.55,
-        evidence: `${highIsolated}/${high} highs are isolated`,
-      })
-    }
-  }
-
-  const mass = landmassStats({
-    width: w,
-    height: h,
-    elev: elev instanceof Float32Array ? elev : Float32Array.from(elev),
-    seaLevel: sea,
-  })
-  if (mass.landCells > 80 && mass.speckleShare > 0.32) {
+  // Report any flipped shadow: a single ridge with reversed wets is enough
+  // evidence to flag. We do not require a majority flip — that just dilutes
+  // the message.
+  if (violationCount > 0) {
     issues.push({
-      id: nextId(),
+      id: 'rain-shadow-flipped',
+      severity: 'minor',
+      title: 'Rain shadow flipped',
+      critique: `${violationCount} ridge${violationCount === 1 ? '' : 's'} ` +
+        `${violationCount === 1 ? 'has' : 'have'} a drier windward (west) ` +
+        `face than lee. With prevailing west wind, upwind flanks should be ` +
+        `wetter.`,
+      fix: 'Moisten upwind slopes, dry the lee, or change prevailing wind.',
+      evidence,
+    })
+  }
+  return issues
+}
+
+// ---------------------------------------------------------------------------
+// 6. Continentality check: inland cells must have real seasonal swing.
+// ---------------------------------------------------------------------------
+
+/**
+ * Real inland cells (coastDist > 50) read large annual temperature
+ * ranges (continentality). If the median annual range over inland cells
+ * is below 15C, the planet has no seasons at depth.
+ */
+export function checkContinentality(world: World): Issue[] {
+  const { elev, tempRange } = world
+  const w = world.meta.width
+  const h = world.meta.height
+  const seaLevel = world.meta.seaLevel
+  const issues: Issue[] = []
+  const coastDist = computeCoastDistance(world)
+  const evidence: { x: number; y: number }[] = []
+  let inlandCells = 0
+  let flatCells = 0
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = idx(w, x, y)
+      if (elev[i] < seaLevel) continue
+      if (coastDist[i] <= 50) continue
+      inlandCells++
+      if (tempRange[i] < 15) {
+        flatCells++
+        if (evidence.length < 8) evidence.push({ x, y })
+      }
+    }
+  }
+
+  if (inlandCells >= 16 && flatCells / inlandCells > 0.5) {
+    issues.push({
+      id: 'no-continentality',
       severity: 'major',
-      kind: 'tectonic',
-      title: 'Green pimples, not continents',
-      critique: `${Math.round(mass.speckleShare * 100)}% of the land is speckle islands. A planet can be an archipelago on purpose — otherwise that is blue ocean with acne, not geography.`,
-      fix: 'Use Full continents, paint larger masses, or own the island-world choice.',
-      confidence: 0.8,
-      evidence: `${mass.components} scraps, largest ${Math.round(mass.largestShare * 100)}% of land`,
+      title: 'No continentality inland',
+      critique: `${flatCells} of ${inlandCells} inland cells ` +
+        `(coastDist > 50) have annual temperature range below 15C. ` +
+        `Continental interiors burn in summer and freeze in winter.`,
+      fix: 'Widen the seasonal swing on the climate model, or extend the land inward.',
+      evidence,
     })
   }
-  const fill = landBboxFill({
-    width: w,
-    height: h,
-    elev: elev instanceof Float32Array ? elev : Float32Array.from(elev),
-    seaLevel: sea,
-  })
-  if (mass.landCells > 40 && fill > 0.8 && mass.components <= 4) {
+  return issues
+}
+
+// ---------------------------------------------------------------------------
+// 7. Flux on local maxima: rivers do not climb hills.
+// ---------------------------------------------------------------------------
+
+/**
+ * Strict local maxima of the elevation field (higher than all 8
+ * neighbours) must not have positive flux. Water does not flow uphill.
+ */
+export function checkFluxOnMaxima(world: World): Issue[] {
+  const { elev, flux } = world
+  const w = world.meta.width
+  const h = world.meta.height
+  const seaLevel = world.meta.seaLevel
+  const issues: Issue[] = []
+  const evidence: { x: number; y: number }[] = []
+  let count = 0
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = idx(w, x, y)
+      if (elev[i] < seaLevel) continue
+      if (flux[i] <= 0) continue
+      const e = elev[i]
+      let isMax = true
+      for (const [dx, dy] of NEIGHBOR_OFFSETS_8) {
+        const nx = (x + dx + w) % w
+        const ny = y + dy
+        if (ny < 0 || ny >= h) continue
+        if (elev[ny * w + nx] >= e) {
+          isMax = false
+          break
+        }
+      }
+      if (isMax) {
+        count++
+        if (evidence.length < 12) evidence.push({ x, y })
+      }
+    }
+  }
+  if (count > 0) {
     issues.push({
-      id: nextId(),
-      severity: 'major',
-      kind: 'visual',
-      title: 'Rectangular coasts',
-      critique: `${Math.round(fill * 100)}% of the land’s bounding box is filled. Plates do not stamp a box in the middle of the sea.`,
-      fix: 'Break the walls with inlets and capes, or generate a new world.',
-      confidence: 0.78,
+      id: 'flux-on-maxima',
+      severity: 'critical',
+      title: 'Rivers cresting peaks',
+      critique: `${count} cells are higher than all 8 neighbours yet ` +
+        `carry downhill water flux. Water does not flow uphill.`,
+      fix: 'Carve a channel through the ridge, lower the high cell, or rerun flux.',
+      evidence,
     })
   }
+  return issues
+}
 
-  if (issues.length === 0) {
+// ---------------------------------------------------------------------------
+// 8. Mask lock check: world adds at most coast noise to the soft mask.
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a "current land" mask from elevation vs sea level, run the
+ * same big-component counter on it, and compare to the saved pre-count.
+ *
+ * The rule: the count must not move by more than 5% (relative). If it does,
+ * Make-sense rewrote the coastline more than the eye should be able to see.
+ *
+ * If `priorMask` is empty (length 0) the check is skipped — no prior data.
+ */
+export function checkMaskLock(
+  priorMask: Float32Array,
+  world: World,
+  threshold: number,
+): Issue[] {
+  const issues: Issue[] = []
+  if (priorMask.length === 0) return issues
+  const w = world.meta.width
+  const h = world.meta.height
+  const n = w * h
+  if (priorMask.length !== n) return issues
+
+  const preCount = countBigComponents(priorMask, w, h, threshold, 100)
+
+  // Reconstruct land from elevation vs sea level.
+  const post = new Float32Array(n)
+  const sea = world.meta.seaLevel
+  for (let i = 0; i < n; i++) {
+    post[i] = world.elev[i] >= sea ? 1 : 0
+  }
+  const postCount = countBigComponents(post, w, h, 0.5, 100)
+
+  const denom = Math.max(1, preCount + postCount)
+  const drift = Math.abs(preCount - postCount) / denom
+  if (drift > 0.05) {
     issues.push({
-      id: nextId(),
-      severity: 'note',
-      kind: 'visual',
-      title: 'No sharp violations found',
-      critique: 'Against these heuristics the map looks coherent. That doesn’t mean it’s Earth-accurate — only that the obvious cartoon mistakes aren’t screaming.',
-      fix: 'Try the accuracy roadmap labs next, or upload a second region for comparison.',
-      confidence: 0.5,
+      id: 'mask-drift',
+      severity: 'critical',
+      title: 'World rewrote the coastline',
+      critique: `Pre-Make-sense mask had ${preCount} big land ` +
+        `components (>=100 cells); the derived World has ${postCount}. ` +
+        `That's a ${(drift * 100).toFixed(1)}% shift — Make-sense is ` +
+        `supposed to add coast noise, not geography.`,
+      fix: 'Re-paint the mask, or rerun Make-sense with conservative step limits.',
+      evidence: [],
     })
   }
-
-  issues.sort(
-    (a, b) => severityScore(b.severity) * b.confidence - severityScore(a.severity) * a.confidence,
-  )
-
-  const score = grade(issues)
-  const criticals = issues.filter((i) => i.severity === 'critical').length
-  const majors = issues.filter((i) => i.severity === 'major').length
-  const summary =
-    score >= 80
-      ? `Mostly coherent (${score}/100). ${issues.length} notes — polish, don’t panic.`
-      : score >= 55
-        ? `Believable with cracks (${score}/100). ${majors} major issue${majors === 1 ? '' : 's'} worth fixing.`
-        : `Geographically noisy (${score}/100). ${criticals} critical, ${majors} major — the land is arguing with itself.`
-
-  const elevOut = elev instanceof Float32Array ? elev : Float32Array.from(elev)
-  const moistOut = world.moist
-    ? world.moist instanceof Float32Array
-      ? world.moist
-      : Float32Array.from(world.moist)
-    : undefined
-  const water = new Float32Array(w * h)
-  for (let i = 0; i < water.length; i++) water[i] = elevOut[i] < sea ? 1 : 0
-
-  return {
-    source,
-    label: world.label ?? 'Uploaded map',
-    width: w,
-    height: h,
-    score,
-    summary,
-    issues,
-    elev: elevOut,
-    moist: moistOut,
-    water,
-  }
+  return issues
 }

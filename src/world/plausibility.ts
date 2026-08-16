@@ -100,7 +100,7 @@ export function flagImpossibleGeography(world: World, mass?: ContinentMass): Geo
       id: 'pimples',
       severity: 'impossible',
       title: 'Green pimples on a blue ocean',
-      detail: `${Math.round(stats.speckleShare * 100)}% of the land is speckle islands. Full continents need a few large masses — switch to Island world if that is the point, or paint bigger land.`,
+      detail: `${Math.round(stats.speckleShare * 100)}% of the land is speckle islands. Complete continents need a few large masses — switch to Island world if that is the point, or paint bigger land.`,
     })
   } else if (want === 'continents' && stats.largestShare < 0.22 && stats.components > 12) {
     flags.push({

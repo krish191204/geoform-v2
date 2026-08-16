@@ -81,7 +81,7 @@ jobs:
         run: npm run typecheck
 
       - name: Run client tests
-        run: npm run test:client
+        run: npm run test:client -- --reporter=verbose
 
       - name: Build
         run: npm run build

@@ -1,7 +1,11 @@
 """Server settings loaded from environment variables (GEOFORM_*).
 
-Falls back to a tiny in-house `.env` loader if `python-dotenv` is not installed,
-so we don't add a dependency for the sake of a single config file.
+In v1 the server is a scaffold-only batch validator. The env surface is
+deliberately minimal: a data directory for any cached files the batch
+validator writes, and a timeout for ``POST /api/generate``.
+
+Falls back to a tiny in-house ``.env`` loader if ``python-dotenv`` is not
+installed, so we don't add a dependency for the sake of a single config file.
 """
 
 from __future__ import annotations
@@ -59,6 +63,13 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 
+def _env_str(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return str(raw)
+
+
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None or raw == "":
@@ -70,27 +81,9 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        log.warning("Invalid float for %s=%r; using default %s", name, raw, default)
-        return default
-
-
-def _env_str(name: str, default: str) -> str:
-    raw = os.getenv(name)
-    if raw is None or raw == "":
-        return default
-    return str(raw)
-
-
 @dataclass(frozen=True)
 class Settings:
-    """Process-wide settings."""
+    """Process-wide settings for the scaffold-only API."""
 
     host: str = field(default_factory=lambda: _env_str("GEOFORM_API_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: _env_int("GEOFORM_API_PORT", 8765))
@@ -98,35 +91,17 @@ class Settings:
         default_factory=lambda: Path(_env_str("GEOFORM_DATA_DIR", str(_REPO_ROOT / "data")))
     )
 
-    # Bounds (enforced server-side, see docs/contract.md)
-    min_width: int = field(default_factory=lambda: _env_int("GEOFORM_MIN_WIDTH", 32))
-    max_width: int = field(default_factory=lambda: _env_int("GEOFORM_MAX_WIDTH", 2048))
-    min_height: int = field(default_factory=lambda: _env_int("GEOFORM_MIN_HEIGHT", 32))
-    max_height: int = field(default_factory=lambda: _env_int("GEOFORM_MAX_HEIGHT", 2048))
-    min_plates: int = 1
-    max_plates: int = 100
-    min_seed: int = 0
-    max_seed: int = 65535
-
     # Timeouts (ms)
-    generate_timeout_ms: int = field(default_factory=lambda: _env_int("GEOFORM_GENERATE_TIMEOUT_MS", 180_000))
-    recompute_timeout_ms: int = field(default_factory=lambda: _env_int("GEOFORM_RECOMPUTE_TIMEOUT_MS", 60_000))
+    generate_timeout_ms: int = field(
+        default_factory=lambda: _env_int("GEOFORM_GENERATE_TIMEOUT_MS", 180_000)
+    )
 
     @property
     def generate_timeout_s(self) -> float:
         return self.generate_timeout_ms / 1000.0
 
-    @property
-    def recompute_timeout_s(self) -> float:
-        return self.recompute_timeout_ms / 1000.0
-
-    @property
-    def worlds_dir(self) -> Path:
-        return self.data_dir / "worlds"
-
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.worlds_dir.mkdir(parents=True, exist_ok=True)
 
 
 # Module-level cached singleton
