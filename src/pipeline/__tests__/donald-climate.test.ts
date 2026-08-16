@@ -41,6 +41,90 @@ import {
   makeSpeckleWorld,
 } from './fixtures'
 import type { TestWorld } from './fixtures'
+import { bigComponentsMask } from '../helpers'
+
+// ---------------------------------------------------------------------------
+// Coast-distance helper (BFS over the mask, no World type needed)
+// ---------------------------------------------------------------------------
+
+/**
+ * Distance in cells from the nearest coast. Coastal cells are land cells
+ * with at least one 8-neighbour ocean neighbour. Ocean cells stay at 0.
+ *
+ * The horizontal axis wraps; the vertical axis does not.
+ */
+function computeCoastDist(
+  mask: Float32Array,
+  width: number,
+  height: number,
+  threshold: number,
+): Float32Array {
+  const dist = new Float32Array(width * height)
+  if (width === 0 || height === 0) return dist
+  const queue = new Int32Array(width * height)
+  let head = 0
+  let tail = 0
+
+  const D8: ReadonlyArray<readonly [number, number]> = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+    [1, 1],
+    [1, -1],
+    [-1, 1],
+    [-1, -1],
+  ]
+
+  // Seed: every coastal land cell gets distance 1 and goes into the queue.
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x
+      if (mask[i] < threshold) continue
+      let isCoast = false
+      for (const [dx, dy] of D8) {
+        const nx = (x + dx + width) % width
+        const ny = y + dy
+        if (ny < 0 || ny >= height) continue
+        if (mask[ny * width + nx] < threshold) {
+          isCoast = true
+          break
+        }
+      }
+      if (isCoast) {
+        dist[i] = 1
+        queue[tail++] = i
+      }
+    }
+  }
+
+  // BFS outward: distance increases by one per ring.
+  while (head < tail) {
+    const i = queue[head++]
+    const cx = i % width
+    const cy = (i - cx) / width
+    const next = dist[i] + 1
+    const D4: ReadonlyArray<readonly [number, number]> = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ]
+    for (const [dx, dy] of D4) {
+      const nx = (cx + dx + width) % width
+      const ny = cy + dy
+      if (ny < 0 || ny >= height) continue
+      const j = ny * width + nx
+      if (mask[j] < threshold) continue
+      if (dist[j] === 0) {
+        dist[j] = next
+        queue[tail++] = j
+      }
+    }
+  }
+
+  return dist
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -198,6 +282,55 @@ describe('Donald bar: continentality', () => {
     }
     expect(nonzero).toBeGreaterThan(0)
   })
+
+  it('inland cells have larger annual temp range than coastal cells', async () => {
+    // The textbook continentality invariant: the further you are from the
+    // sea, the bigger your annual swing. This is the actual physical
+    // claim, not "tempRange is non-zero somewhere".
+    const tw = makeContinentWorld()
+    const meta = metaFromTest(tw, 1, 0.5)
+    const result = await evolve(tw, 1, 0.5)
+
+    // Find the largest landmass and use BFS to compute coast distance.
+    const big = bigComponentsMask(tw.mask, tw.width, tw.height, 0.5, 50)
+    const landMask = new Float32Array(tw.mask.length)
+    for (let i = 0; i < big.mask.length; i++) landMask[i] = big.mask[i]
+    const coastDists = computeCoastDist(landMask, tw.width, tw.height, 0.5)
+
+    // The continent fixture has radius 20, so the maximum coastDist is
+    // bounded by that. We define "inland" as cells at least a quarter of
+    // the way into the continent, and "coastal" as the cells within the
+    // first 3 cells of the coast. That gives us a meaningful contrast.
+    let maxDist = 0
+    for (let i = 0; i < coastDists.length; i++) {
+      if (coastDists[i] > maxDist) maxDist = coastDists[i]
+    }
+    const inlandThreshold = Math.max(5, Math.floor(maxDist / 2))
+    const coastalThreshold = 3
+
+    let inlandSum = 0
+    let inlandCount = 0
+    let coastalSum = 0
+    let coastalCount = 0
+    for (let i = 0; i < result.tempRange.length; i++) {
+      if (landMask[i] < 0.5) continue
+      if (coastDists[i] > inlandThreshold) {
+        inlandSum += result.tempRange[i]
+        inlandCount++
+      } else if (coastDists[i] > 0 && coastDists[i] <= coastalThreshold) {
+        coastalSum += result.tempRange[i]
+        coastalCount++
+      }
+    }
+    const inlandMean = inlandCount > 0 ? inlandSum / inlandCount : 0
+    const coastalMean = coastalCount > 0 ? coastalSum / coastalCount : 0
+    // Sanity: the world must have both coastal and inland cells in the
+    // large landmass for the comparison to be meaningful.
+    expect(inlandCount).toBeGreaterThan(0)
+    expect(coastalCount).toBeGreaterThan(0)
+    // The physics: inland reads a wider annual swing than coastal.
+    expect(inlandMean).toBeGreaterThan(coastalMean)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -293,6 +426,27 @@ describe('Donald bar: rain shadow', () => {
       const windward = windwardSum / windwardN
       const lee = leeSum / leeN
       expect(windward).toBeGreaterThanOrEqual(lee)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 3b. Conserved moisture: precip never exceeds the air moisture budget
+// ---------------------------------------------------------------------------
+
+describe('Donald bar: conserved moisture', () => {
+  it('precipitation never exceeds air moisture budget', async () => {
+    // The climate march is unit-conservative: the moisture budget of
+    // a cell caps at 1.0 (saturation). If summerMoist or winterMoist
+    // ever exceeds 1.0, the conservation of mass is broken.
+    const tw = makeContinentWorld()
+    const meta = metaFromTest(tw, 1, 0.5)
+    void meta
+    const result = await evolve(tw, 1, 0.5)
+    for (let i = 0; i < result.summerMoist.length; i++) {
+      if (tw.mask[i] < 0.5) continue
+      expect(result.summerMoist[i]).toBeLessThanOrEqual(1.0)
+      expect(result.winterMoist[i]).toBeLessThanOrEqual(1.0)
     }
   })
 })

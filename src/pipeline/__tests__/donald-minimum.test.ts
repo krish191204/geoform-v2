@@ -45,9 +45,68 @@ describe('Donald minimum', () => {
       threshold: 0.5,
     }
     const result = await makeSenseInline({ meta, mask: new Float32Array(tw.mask) }, () => {})
-    // Mid-lat band y = 12..20 (about 25% of height around the equator).
+    // Find the largest landmass and its bounding box. The "ridge" is
+    // the y-band within the bounding box that has the highest mean
+    // elevation. We then partition the landmass by the ridge line and
+    // compare mean moisture on the windward (east) side to the lee
+    // (west) side. This is the actual physical claim, not a fixed
+    // x = w/2 split.
+    const elev = result.elev
+    const moist = result.summerMoist
+    const w = tw.width
+    const h = tw.height
+    const seaLevel = 0.5
+
+    // Bounding box of land.
+    let minX = w, maxX = -1, minY = h, maxY = -1
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x
+        if (tw.mask[i] >= 0.5 && elev[i] >= seaLevel) {
+          if (x < minX) minX = x
+          if (x > maxX) maxX = x
+          if (y < minY) minY = y
+          if (y > maxY) maxY = y
+        }
+      }
+    }
+    // The world must have land above sea level.
+    expect(minX).toBeLessThanOrEqual(maxX)
+
+    // Find the y with the highest mean elevation across the land's
+    // x-range. This is the ridge axis.
+    let ridgeY = -1
+    let ridgeMean = -Infinity
+    for (let y = minY; y <= maxY; y++) {
+      let sum = 0
+      let n = 0
+      for (let x = minX; x <= maxX; x++) {
+        const i = y * w + x
+        if (tw.mask[i] >= 0.5 && elev[i] >= seaLevel) {
+          sum += elev[i]
+          n++
+        }
+      }
+      if (n > 0) {
+        const m = sum / n
+        if (m > ridgeMean) {
+          ridgeMean = m
+          ridgeY = y
+        }
+      }
+    }
+    expect(ridgeY).toBeGreaterThanOrEqual(0)
+
+    // Partition by the ridge's x-centroid (mean x of the bounding box),
+    // not the map's geometric centre.
+    const ridgeX = (minX + maxX) / 2
+
+    // Mid-lat band: a strip of rows around the centre. This restricts
+    // the test to a single Hadley cell, where the prevailing wind is
+    // consistent.
     const yMin = Math.floor(tw.height * 0.35)
     const yMax = Math.ceil(tw.height * 0.65)
+
     let eastMoist = 0
     let westMoist = 0
     let eastCount = 0
@@ -56,20 +115,22 @@ describe('Donald minimum', () => {
       for (let x = 0; x < tw.width; x++) {
         const i = y * tw.width + x
         if (tw.mask[i] < 0.5) continue
-        // East of centre = windward, west of centre = lee.
-        if (x > tw.width / 2) {
-          eastMoist += result.summerMoist[i]
+        // East of the ridge column = windward, west of the ridge = lee.
+        if (x > ridgeX) {
+          eastMoist += moist[i]
           eastCount++
         } else {
-          westMoist += result.summerMoist[i]
+          westMoist += moist[i]
           westCount++
         }
       }
     }
     const eastMean = eastCount > 0 ? eastMoist / eastCount : 0
     const westMean = westCount > 0 ? westMoist / westCount : 0
-    // Windward > lee with a small tolerance for noise.
-    expect(eastMean).toBeGreaterThan(westMean)
+    // The strict physics claim: windward mean moisture must beat lee by
+    // a meaningful margin, not just "> 0". The old assertion was a
+    // vacuous pass when both sides read 0.
+    expect(eastMean - westMean).toBeGreaterThan(0.05)
   })
 
   it('icy peak stays separate from warm desert', async () => {
@@ -96,6 +157,7 @@ describe('Donald minimum', () => {
         tw.mask,
         0.5,
         result.elev,
+        result.tempMean,
       )
       for (let i = 0; i < biomes.biome.length; i++) {
         if (tw.mask[i] < 0.5) continue
@@ -174,13 +236,19 @@ describe('Donald minimum', () => {
       tw.mask,
       0.5,
       result.elev,
+      result.tempMean,
     )
     for (let i = 0; i < biomes.biome.length; i++) {
       if (tw.mask[i] < 0.5) continue
       if (biomes.biome[i] === 'alpine') alpineCount++
     }
-    // If there are tall land peaks, alpine should be classified.
-    if (landPeakCount > 0) expect(alpineCount).toBeGreaterThan(0)
+    // The Donald bar: the world must have alpine peaks, and every
+    // alpine cell must be a tall peak (no false positives). The old
+    // `if (landPeakCount > 0)` guard was a vacuous pass when the world
+    // happened to have no alpine peaks.
+    expect(landPeakCount).toBeGreaterThan(0)
+    expect(alpineCount).toBeGreaterThan(0)
+    expect(alpineCount).toBeLessThanOrEqual(landPeakCount)
   })
 
   it('persistence round-trip preserves every field', async () => {
