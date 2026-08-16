@@ -14,8 +14,8 @@ import { describe, expect, it } from 'vitest'
 import { computeOrogeny } from './orogeny'
 import type { PlateAssignment } from './plates'
 import type { Boundary } from './types'
-import { idx } from './helpers'
-import { makeContinentWorld } from './__tests__/fixtures'
+import { idx, wrapX } from './helpers'
+import { makeContinentWorld, makeSmallTwinContinentWorld } from './__tests__/fixtures'
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -213,5 +213,69 @@ describe('computeOrogeny', () => {
       expect(a.elev[i]).toBe(b.elev[i])
       expect(a.boundaryUplift[i]).toBe(b.boundaryUplift[i])
     }
+  })
+
+  it('keeps the CC Gaussian on land in a twin-continent fixture (B03)', () => {
+    // Regression for B03: the CC Gaussian used to be stamped with applyTo=null,
+    // so it painted onto ocean cells within the 8-cell radius. With the
+    // land-only predicate, ocean cells stay at sea level even when many
+    // overlapping CC boundaries line the coast.
+    const { mask } = makeSmallTwinContinentWorld()
+    // Seed several CC boundaries along the seam between the two continents
+    // so the test exercises the worst case: many overlapping land Gaussians
+    // all centred on the boundary, with adjacent ocean on both sides.
+    const plates: PlateAssignment = {
+      plateId: new Int16Array(WIDTH * HEIGHT),
+      plateVx: new Float32Array(WIDTH * HEIGHT),
+      plateVy: new Float32Array(WIDTH * HEIGHT),
+      boundaries: [],
+      plates: [],
+    }
+    for (let y = 10; y < 22; y++) {
+      const landL = idx(WIDTH, 27, y)
+      const landR = idx(WIDTH, 28, y)
+      plates.boundaries.push({
+        i: landL,
+        ji: landR,
+        plateId: 1,
+        otherPlateId: 2,
+        class: 'convergent-cc',
+        relativeVx: 1,
+        relativeVy: 0,
+      })
+    }
+
+    const { elev } = computeOrogeny(plates, mask, WIDTH, HEIGHT, THRESHOLD)
+
+    // Count ocean cells within 2 cells (chebyshev distance) of any land cell
+    // that ended up above 5 m elevation. Pre-fix this was 140 cells with
+    // peaks of ~5838 m (mountains bleeding into the sea). Post-fix it
+    // should be < 5 — the structural zero, since the box-blur is mask-aware
+    // and so cannot leak land elevation into the ocean either.
+    const PROXIMITY = 2
+    const ELEV_THRESHOLD_M = 5
+    let offending = 0
+    for (let y = 0; y < HEIGHT; y++) {
+      for (let x = 0; x < WIDTH; x++) {
+        const i = idx(WIDTH, x, y)
+        if (mask[i] > THRESHOLD) continue // skip land cells
+        if (elev[i] <= ELEV_THRESHOLD_M) continue
+        // Is there a land cell within PROXIMITY?
+        let nearLand = false
+        for (let dy = -PROXIMITY; dy <= PROXIMITY && !nearLand; dy++) {
+          const ny = y + dy
+          if (ny < 0 || ny >= HEIGHT) continue
+          for (let dx = -PROXIMITY; dx <= PROXIMITY; dx++) {
+            const nx = wrapX(x + dx, WIDTH)
+            if (mask[idx(WIDTH, nx, ny)] > THRESHOLD) {
+              nearLand = true
+              break
+            }
+          }
+        }
+        if (nearLand) offending++
+      }
+    }
+    expect(offending).toBeLessThan(5)
   })
 })

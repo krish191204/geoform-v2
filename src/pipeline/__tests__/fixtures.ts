@@ -126,6 +126,47 @@ export function makeTwinContinentWorld(): TestWorld {
 }
 
 /**
+ * 64×32 world with two continents at (16, 16) and (48, 16), radius 12 each.
+ * Sized to match the orogeny.test.ts constants (WIDTH=64, HEIGHT=32) so a
+ * CC boundary placed between the two continents exercises a long shared
+ * land border with adjacent ocean — exactly the case the B03 fix targets.
+ */
+export function makeSmallTwinContinentWorld(): TestWorld {
+  const width = 64
+  const height = 32
+  const mask = emptyMask(width, height)
+  const continents = [
+    { cx: 16, cy: 16, r: 12 },
+    { cx: 48, cy: 16, r: 12 },
+  ]
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let hit = false
+      for (const c of continents) {
+        const bestDx = Math.min(
+          Math.abs(x - c.cx),
+          Math.abs(x - c.cx + width),
+          Math.abs(x - c.cx - width),
+        )
+        const dy = y - c.cy
+        if (bestDx * bestDx + dy * dy < c.r * c.r) {
+          hit = true
+          break
+        }
+      }
+      mask[y * width + x] = hit ? 1 : 0
+    }
+  }
+  return {
+    width,
+    height,
+    mask,
+    planetRadiusKm: DEFAULT_RADIUS_KM,
+    obliquityDeg: DEFAULT_OBLIQUITY_DEG,
+  }
+}
+
+/**
  * 64×32 world with a full-width polar strip of land from y = 0..3.
  * Used to exercise high-latitude climate behaviour and polar biome tagging.
  */
