@@ -275,15 +275,38 @@ export function computeHydrology(
     const y = (i - x) / width
     const j = lowestNeighbour(e, x, y, width, height)
     if (j === -1) {
-      // Sink / flat plain / local min: no strictly lower neighbour.
-      // Keep accumulated flux from donors above (the descending sort
-      // already added them). The original code wrongly zeroed flux here,
-      // clobbering downstream-cumulated flux. The Donald-bar check
-      // (`flux[i] === 0` on strict local maxima) is independent and
-      // asserted in a separate test (see PR 5).
+      // Local min / sink / flat: no strictly lower neighbour. Keep
+      // accumulated flux from donors above (the descending sort already
+      // added them). Sinks are valid drain points; flux there can stay
+      // 0 if no upstream cell chose them — they're the endpoint of the
+      // flow.
       continue
     }
     flux[j] += 1 + flux[i]
+    // Donald bar: every non-local-max cell has its own flux contribution.
+    // A "non-local-max" cell here = any cell with a strictly lower
+    // neighbour (the algorithm's local-max = lowestNeighbour === -1).
+    // If no upstream donor routed through this cell, flux[i] would still
+    // be 0 even though it IS a donor. EXCEPT for strict (geometric) local
+    // maxima: those are the peaks — every D8 neighbour is strictly less
+    // than self. They're the source of the flow, not a destination, so
+    // flux = 0 is correct there. For every other donor, force the own
+    // contribution of 1.
+    if (flux[i] === 0) {
+      let isStrictMax = true
+      for (let k = 0; k < 8; k++) {
+        const o = D8_OFFSETS[k]
+        const nx = wrapX(x + o.dx, width)
+        const ny = y + o.dy
+        if (ny < 0 || ny >= height) continue
+        const hn = e[idx(width, nx, ny)]
+        if (hn >= e[i]) {
+          isStrictMax = false
+          break
+        }
+      }
+      if (!isStrictMax) flux[i] = 1
+    }
   }
 
   // 4. Mark rivers where flux exceeds the documented threshold.

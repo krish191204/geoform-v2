@@ -145,11 +145,28 @@ describe('computeHydrology: invariants', () => {
     ])
     const mask = fill(w * h, 1)
     const { flux } = computeHydrology(elev, mask, w, h, THRESHOLD)
-    // The rightmost column (x=6) is the lowest on the ridge; every cell should
-    // drain into it. Each row has 7 cells => flux on the low end >= 6.
-    expect(flux[idx(w, 6, 0)]).toBeGreaterThan(1)
-    expect(flux[idx(w, 6, 1)]).toBeGreaterThan(1)
-    expect(flux[idx(w, 6, 2)]).toBeGreaterThan(1)
+    // The rightmost column (x=6) is the lowest on the ridge; the cells
+    // there receive the bulk of the upstream flow. Some coast-edge cells
+    // can be missed by D8 tie-breaking (e.g. (6, 2) is tied with (6, 1)
+    // for (5, 2)'s lowest-neighbour scan and loses by iteration order),
+    // so we assert the column receives flux > 1 in aggregate rather
+    // than per-cell. That's the Donald-bar signature: flow accumulates
+    // at the coast edge, and at least one coast-edge cell carries
+    // flux > 1.
+    const coastFlux = [
+      flux[idx(w, 6, 0)],
+      flux[idx(w, 6, 1)],
+      flux[idx(w, 6, 2)],
+    ]
+    expect(Math.max(...coastFlux)).toBeGreaterThan(1)
+    // And the rightmost column carries the highest flux in the world:
+    // for every other (x, y), flux is <= max(rightFlux).
+    const rightMax = Math.max(...coastFlux)
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w - 1; x++) {
+        expect(flux[idx(w, x, y)]).toBeLessThanOrEqual(rightMax)
+      }
+    }
   })
 
   it('every river cell satisfies flux[i] > RIVER_THRESHOLD', () => {
@@ -357,21 +374,25 @@ describe('computeHydrology: continent fixture', () => {
 
   it('with a ridged terrain, flux exceeds RIVER_THRESHOLD on at least one cell', () => {
     // A 12x6 slab with a single ridge funnel: every cell on the ridge
-    // drains to the one coastal cell at x=0, producing flux > 8 there.
+    // drains down the slope. With the formula below, x=0 is the highest
+    // (peak) and x=w-1 is the lowest (coast). Flow goes from x=0 toward
+    // x=w-1, with the wrap-around back-edge helping concentrate flux at
+    // the rightmost column. That column receives flux > RIVER_THRESHOLD.
     const w = 12
     const h = 6
     const elev = Float32Array.from({ length: w * h }, (_, i) => {
       const x = i % w
       const y = (i - x) / w
-      // High plateau with a single coastal outlet.
+      // High plateau descending to a single coastal outlet on the east.
       return 1 - x / w + 0.05 * Math.sin(y * 1.7)
     })
     const mask = Float32Array.from({ length: w * h }, () => 1)
     const { flux, rivers } = computeHydrology(elev, mask, w, h, THRESHOLD)
-    // Every land cell contributes 1 -> flux accumulates into the low end.
-    // With 6 rows x 12 cols = 72 cells, the leftmost column receives most.
-    const leftFlux = Array.from({ length: h }, (_, y) => flux[idx(w, 0, y)])
-    expect(Math.max(...leftFlux)).toBeGreaterThan(RIVER_THRESHOLD)
+    // Every land cell contributes 1 -> flux accumulates at the low end.
+    // With 6 rows x 12 cols = 72 cells, the rightmost column receives
+    // most of the flow (the coastline where every cell drains to).
+    const rightFlux = Array.from({ length: h }, (_, y) => flux[idx(w, w - 1, y)])
+    expect(Math.max(...rightFlux)).toBeGreaterThan(RIVER_THRESHOLD)
     let riverCount = 0
     for (let i = 0; i < rivers.length; i++) if (rivers[i] === 1) riverCount++
     expect(riverCount).toBeGreaterThan(0)
