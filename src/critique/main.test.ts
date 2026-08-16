@@ -304,14 +304,18 @@ describe('critiqueWorld', () => {
   })
 
   it('flags missing continentality as major', () => {
-    const w = makeWorld()
+    // The check requires coastDist > 50 (real interior). The default
+    // 32×16 fixture is too small — max coastDist ~13. Build a wide
+    // continent with NO top/bottom ocean strips so coastDist grows with
+    // the x dimension (max ~98 on a 200-wide grid).
+    const w = makeWorld({ meta: makeMeta({ width: 200, height: 16 }) })
     const w_ = w.meta.width
     const h = w.meta.height
-    // Build a wide continent: ocean strip top and bottom, big inland centre.
+    // Ocean strips on the LEFT and RIGHT only.
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w_; x++) {
         const k = y * w_ + x
-        const isOcean = y < 3 || y >= h - 3 || x < 3 || x >= w_ - 3
+        const isOcean = x < 3 || x >= w_ - 3
         w.elev[k] = isOcean ? -10 : 100
         w.tempRange[k] = isOcean ? 5 : 5 // flat — continentality missing
       }
@@ -379,28 +383,34 @@ describe('critiqueWorld', () => {
 
   it('issue ordering puts critical first when a critical and a major coexist', () => {
     // Critical: flux-on-maxima. Major: no-continentality (set up a wide
-    // continent, more than 50 cells deep from any coast).
-    const w = makeWorld({ meta: makeMeta({ width: 128, height: 32 }) })
+    // continent, more than 50 cells deep from any coast). The check uses
+    // coastDist > 50 for "real interior", so the world has to be wide
+    // enough along at least one axis — top/bottom ocean strips would cap
+    // coastDist at ~14 in y, never tripping the major.
+    const w = makeWorld({ meta: makeMeta({ width: 256, height: 16 }) })
     const w_ = w.meta.width
     const h = w.meta.height
+    // Ocean strips on the LEFT and RIGHT only.
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w_; x++) {
         const k = y * w_ + x
-        const isOcean = x < 4 || x >= w_ - 4 || y < 2 || y >= h - 2
+        const isOcean = x < 4 || x >= w_ - 4
         w.elev[k] = isOcean ? -10 : 100
         w.tempRange[k] = isOcean ? 5 : 5 // flat inland → no continentality
       }
     }
     // Local max with flux near the centre.
+    const peakX = 128
+    const peakY = 8
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         if (dx === 0 && dy === 0) {
-          w.elev[(16 + dy) * w_ + ((64 + dx) % w_)] = 5000
-          w.flux[(16 + dy) * w_ + ((64 + dx) % w_)] = 9
+          w.elev[(peakY + dy) * w_ + ((peakX + dx) % w_)] = 5000
+          w.flux[(peakY + dy) * w_ + ((peakX + dx) % w_)] = 9
           continue
         }
-        const nx = (64 + dx + w_) % w_
-        const ny = 16 + dy
+        const nx = (peakX + dx + w_) % w_
+        const ny = peakY + dy
         w.elev[ny * w_ + nx] = 0
       }
     }
