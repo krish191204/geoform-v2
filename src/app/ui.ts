@@ -32,6 +32,7 @@ import {
   type StrengthChangeDetail,
   type ToolChangeDetail,
 } from './stages'
+import { hasAnyLand, renderMaskToCanvas } from './canvas_paint'
 
 // ---------------------------------------------------------------------------
 // DOM helpers
@@ -329,6 +330,8 @@ export function mountSketchStage(state: ShellStateView): SketchStageRefs {
   // Center: canvas
   const canvas = makeCanvas('sketch')
   root.append(makeMapShell(canvas))
+  // Paint the initial mask view (all-ocean if no mask yet).
+  renderMaskToCanvas(canvas, state.mask, state.meta)
 
   // Right: meta controls + commit button
   const meta = state.meta
@@ -387,7 +390,7 @@ export function mountSketchStage(state: ShellStateView): SketchStageRefs {
   })
 
   const critiqueBtn = el('button', { type: 'button', class: 'primary' }, 'Critique')
-  critiqueBtn.disabled = !state.maskCommitted || state.isProcessing
+  critiqueBtn.disabled = state.isProcessing || !hasAnyLand(state.mask, state.meta.threshold)
   critiqueBtn.addEventListener('click', () => fire(APP_EVENTS.COMMIT_SKETCH))
 
   const right = el(
@@ -446,7 +449,8 @@ export function updateSketchStage(refs: SketchStageRefs, state: ShellStateView):
   refs.obliquityVal.textContent = String(state.meta.obliquityDeg)
   refs.seaLevelVal.textContent = String(state.meta.seaLevel)
   refs.thresholdVal.textContent = String(state.meta.threshold)
-  refs.critiqueBtn.disabled = !state.maskCommitted || state.isProcessing
+  refs.critiqueBtn.disabled = state.isProcessing || !hasAnyLand(state.mask, state.meta.threshold)
+  renderMaskToCanvas(refs.canvas, state.mask, state.meta)
 }
 
 // ---------------------------------------------------------------------------
@@ -467,6 +471,8 @@ export function mountCritiqueStage(state: ShellStateView): CritiqueStageRefs {
 
   const canvas = makeCanvas('critique')
   root.append(makeMapShell(canvas))
+  // Paint the mask view so the critique stage is not a blank canvas.
+  renderMaskToCanvas(canvas, state.mask, state.meta)
 
   const scoreEl = el('div', { class: 'score' }, formatScore(state.score))
 
@@ -501,6 +507,7 @@ export function updateCritiqueStage(refs: CritiqueStageRefs, state: ShellStateVi
   refs.scoreEl.textContent = formatScore(state.score)
   renderIssues(refs.issueList, state.issues)
   refs.makeSenseBtn.disabled = state.score <= 0 || state.isProcessing
+  renderMaskToCanvas(refs.canvas, state.mask, state.meta)
 }
 
 function formatScore(score: number): string {
@@ -547,6 +554,8 @@ export function mountMakeSenseStage(state: ShellStateView): MakeSenseStageRefs {
 
   const canvas = makeCanvas('make-sense')
   root.append(makeMapShell(canvas))
+  // Paint the mask view so the make-sense stage is not a blank canvas.
+  renderMaskToCanvas(canvas, state.mask, state.meta)
 
   const progressList = el('ol', { class: 'progress-list' })
   renderProgress(progressList, state.makeSenseComplete ? MAKE_SENSE_STEPS.length : 0)
@@ -582,6 +591,10 @@ export function updateMakeSenseStage(refs: MakeSenseStageRefs, state: ShellState
   renderProgress(refs.progressList, completed)
   refs.cancelBtn.disabled = !state.isProcessing
   refs.worldbuildBtn.disabled = !state.makeSenseComplete || state.isProcessing
+  // Once the world is derived, paint the world mask; otherwise paint the
+  // authored sketch mask so the canvas is not blank.
+  const paintMask = state.world ? state.world.mask : state.mask
+  renderMaskToCanvas(refs.canvas, paintMask, state.meta)
 }
 
 function renderProgress(list: HTMLElement, completedCount: number): void {
@@ -650,6 +663,8 @@ export function mountWorldbuildStage(state: ShellStateView): WorldbuildStageRefs
 
   const canvas = makeCanvas('worldbuild')
   root.append(makeMapShell(canvas))
+  // Paint the mask view (cities are drawn on top by the worldbuild stage).
+  renderMaskToCanvas(canvas, state.world ? state.world.mask : state.mask, state.meta)
 
   const backBtn = el('button', { type: 'button' }, 'Back to Sketch')
   backBtn.addEventListener('click', () => fire(APP_EVENTS.BACK_TO_SKETCH))
@@ -674,6 +689,9 @@ export function updateWorldbuildStage(refs: WorldbuildStageRefs, state: ShellSta
   const citiesCount = state.world ? state.world.cities.length : 0
   const countEl = refs.root.querySelector<HTMLElement>('.cities-count')
   if (countEl) countEl.textContent = `Cities: ${citiesCount}`
+  // Paint the world mask (preferred) or the authored sketch mask.
+  const paintMask = state.world ? state.world.mask : state.mask
+  renderMaskToCanvas(refs.canvas, paintMask, state.meta)
 }
 
 // ---------------------------------------------------------------------------
