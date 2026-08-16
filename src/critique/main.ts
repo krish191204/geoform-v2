@@ -75,6 +75,98 @@ function polarLaneFraction(mask: Float32Array, w: number, h: number, threshold: 
   return total === 0 ? 0 : land / total
 }
 
+/** Hard cap on per-component cell sample for shape diagnostics. */
+const MAX_DETAIL_CELLS = 256
+
+/** Shape data for the single biggest connected component (or null). */
+interface BiggestComponent {
+  area: number
+  bbox: { x1: number; y1: number; x2: number; y2: number }
+  cells: { x: number; y: number }[]
+}
+
+/**
+ * BFS over the mask and return the biggest component (by area). Tracks
+ * the bounding box and the first `MAX_DETAIL_CELLS` cells so callers can
+ * run shape heuristics (rectangle-as-continent, line-as-continent).
+ */
+function analyseBiggestComponent(
+  mask: Float32Array,
+  w: number,
+  h: number,
+  threshold: number,
+): BiggestComponent | null {
+  if (w <= 0 || h <= 0 || mask.length !== w * h) return null
+  const visited = new Uint8Array(mask.length)
+  const queue = new Int32Array(mask.length)
+  let best: BiggestComponent | null = null
+  for (let y = 0; y < h; y++) {
+    const rowBase = y * w
+    for (let x = 0; x < w; x++) {
+      const seed = rowBase + x
+      if (visited[seed] !== 0) continue
+      if (mask[seed] < threshold) {
+        visited[seed] = 1
+        continue
+      }
+      let head = 0
+      let tail = 0
+      queue[tail++] = seed
+      visited[seed] = 1
+      let area = 0
+      let x1 = x
+      let y1 = y
+      let x2 = x
+      let y2 = y
+      const cells: { x: number; y: number }[] = []
+      while (head < tail) {
+        const i = queue[head++]
+        area++
+        const cx = i % w
+        const cy = (i - cx) / w
+        if (cx < x1) x1 = cx
+        if (cx > x2) x2 = cx
+        if (cy < y1) y1 = cy
+        if (cy > y2) y2 = cy
+        if (cells.length < MAX_DETAIL_CELLS) cells.push({ x: cx, y: cy })
+        const neighbours = [
+          [cx === 0 ? w - 1 : cx - 1, cy],
+          [cx === w - 1 ? 0 : cx + 1, cy],
+          [cx, cy - 1],
+          [cx, cy + 1],
+        ] as const
+        for (const [nx, ny] of neighbours) {
+          if (ny < 0 || ny >= h) continue
+          const j = ny * w + nx
+          if (visited[j] !== 0) continue
+          if (mask[j] < threshold) continue
+          visited[j] = 1
+          queue[tail++] = j
+        }
+      }
+      if (best === null || area > best.area) {
+        best = { area, bbox: { x1, y1, x2, y2 }, cells }
+      }
+    }
+  }
+  return best
+}
+
+/**
+ * Tighten the score from `scoreFromIssues` so a flattery floor cannot
+ * hide a clearly-bad mask. Rules:
+ *   - Two or more criticals → score capped at 50.
+ *   - Five or more issues (any severity) → score capped at 50.
+ */
+function applyScoreFloor(score: number, issues: Issue[]): number {
+  let criticalCount = 0
+  for (const i of issues) if (i.severity === 'critical') criticalCount++
+  let out = score
+  if (criticalCount >= 2) out = Math.min(out, 50)
+  if (issues.length >= 5) out = Math.min(out, 50)
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // 3. Pre-Make-sense critic: critiqueMask.
 // ---------------------------------------------------------------------------
@@ -98,25 +190,38 @@ export function critiqueMask(
   // 3.1 — land share
   const landPct = landFraction(mask, w, h, threshold) * 100
   if (landPct < 5) {
+    // Build a small evidence sample: the first 20 land cells we find.
+    const landCells: { x: number; y: number }[] = []
+    for (let i = 0; i < mask.length && landCells.length < 20; i++) {
+      if (mask[i] >= threshold) {
+        landCells.push({ x: i % w, y: Math.floor(i / w) })
+      }
+    }
     issues.push({
       id: 'too-little-land',
       severity: 'critical',
       title: 'Map is mostly ocean',
-      critique: `Only ${landPct.toFixed(1)}% of the map is land. There ` +
-        `is nothing for geography to grip — climate will spin idle.`,
-      fix: 'Paint more land or change the world type to "island world".',
-      evidence: [],
+      critique: `Only ${landPct.toFixed(1)}% of cells are land. Real ` +
+        `continents cover 30-40% of Earth's surface.`,
+      fix: 'Paint more land. Even a single continent adds orogeny + climate + rivers.',
+      evidence: landCells,
     })
   }
   if (landPct > 95) {
+    // Build a small evidence sample: the first 20 sea cells we find.
+    const seaCells: { x: number; y: number }[] = []
+    for (let i = 0; i < mask.length && seaCells.length < 20; i++) {
+      if (mask[i] <= threshold) {
+        seaCells.push({ x: i % w, y: Math.floor(i / w) })
+      }
+    }
     issues.push({
       id: 'too-much-land',
       severity: 'critical',
       title: 'Map is mostly land',
-      critique: `${landPct.toFixed(1)}% of the map is land. There is ` +
-        `no ocean for climate to drive, so Make-sense cannot initialize.`,
-      fix: 'Paint at least some ocean so wind and currents can circulate.',
-      evidence: [],
+      critique: `${landPct.toFixed(1)}% of cells are land. Almost no ocean.`,
+      fix: 'Erase sea in some regions. Continents need coastlines.',
+      evidence: seaCells,
     })
   }
 
@@ -154,12 +259,52 @@ export function critiqueMask(
     })
   }
 
+  // 3.4 — shape-based checks. Real continents are fractal; rectangular or
+  // line-shaped land masses are user artefacts (or a sign the brush was
+  // dragged in a straight line across the polar lane).
+  const biggest = analyseBiggestComponent(mask, w, h, threshold)
+  if (biggest && biggest.area > 600) {
+    const bw = biggest.bbox.x2 - biggest.bbox.x1 + 1
+    const bh = biggest.bbox.y2 - biggest.bbox.y1 + 1
+    const aspect = Math.max(bw, bh) / Math.max(1, Math.min(bw, bh))
+    if (aspect > 3) {
+      issues.push({
+        id: 'rectangle-continent',
+        severity: 'major',
+        title: 'Continental shape is too rectangular',
+        critique:
+          `The largest landmass has an aspect ratio of ${aspect.toFixed(1)}. ` +
+          `Real continents have fractal coastlines.`,
+        fix: 'Add peninsulas, islands, or reshape the contour. Mountains will appear automatically after Make sense.',
+        evidence: biggest.cells.slice(0, 20),
+      })
+    }
+  }
+
+  if (biggest && biggest.area > 100) {
+    const bw = biggest.bbox.x2 - biggest.bbox.x1 + 1
+    const bh = biggest.bbox.y2 - biggest.bbox.y1 + 1
+    if (Math.min(bw, bh) <= 2 && Math.max(bw, bh) >= 8) {
+      issues.push({
+        id: 'line-continent',
+        severity: 'minor',
+        title: 'Land is a thin strip',
+        critique:
+          `The largest landmass is ${Math.min(bw, bh)} cells wide and ` +
+          `${Math.max(bw, bh)} cells long.`,
+        fix: 'Add width or break the strip into multiple landmasses.',
+        evidence: biggest.cells.slice(0, 10),
+      })
+    }
+  }
+
   // Remember for checkMaskLock.
   setPriorMask(mask, meta)
 
   const sorted = sortIssuesBySeverity(issues)
+  const baseScore = scoreFromIssues(sorted)
   return {
-    score: scoreFromIssues(sorted),
+    score: applyScoreFloor(baseScore, sorted),
     issues: sorted,
     pre: true,
   }
