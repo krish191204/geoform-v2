@@ -75,6 +75,7 @@ function toWorld(result: Awaited<ReturnType<typeof makeSenseInline>>, meta: Worl
     flux: result.flux,
     rivers: result.rivers,
     biome: result.biome as World['biome'],
+    suitability: result.suitability,
     cities: [],
   } as World
 }
@@ -163,14 +164,22 @@ describe('golden seeds are distinct', () => {
     expect(a.biome).not.toEqual(b.biome)
   })
 
-  it('all five seeds produce different mask areas', async () => {
-    const areas = new Set<number>()
+  it('all five seeds produce different elevation sums', async () => {
+    // outputMaskArea is deterministic from the input mask (which is the
+    // same across seeds), so test against a seed-dependent field instead.
+    // The sum of `elev` over land cells varies with seed because plate
+    // assignment and orogeny are seeded.
+    const sums = new Set<number>()
     for (const seed of FIXED_SEEDS) {
       const result = await evolve(seed)
-      areas.add(result.provenance.outputMaskArea)
+      let s = 0
+      for (let i = 0; i < result.elev.length; i++) {
+        if (TW.mask[i] >= 0.5) s += result.elev[i]
+      }
+      sums.add(Math.round(s))
     }
     // With overwhelming probability, all five worlds have distinct
-    // output mask areas.
-    expect(areas.size).toBeGreaterThanOrEqual(2)
+    // land-elevation sums.
+    expect(sums.size).toBeGreaterThanOrEqual(2)
   })
 })
