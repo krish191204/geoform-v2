@@ -114,16 +114,27 @@ def recompute_from_world(
     simulation.  This is deterministic and byte-stable: the same world + the
     same sculpt list always produces the same World.
 
+    Sculpt source resolution (in priority order):
+      1. The explicit `sculpt_ops` argument (for tests or one-shot previews).
+      2. The persisted `world_obj.sculpt` list (the canonical save-format
+         field that accumulates every brush stroke the client has made).
+      3. None.
+
     Implementation:
       1. Snapshot the global numpy RNG, seed it from `world_obj.seed`.
       2. Build a fresh World with `world_gen` (plates -> center -> noise ->
          border oceans -> ocean initialization -> downstream sims).
-      3. If sculpt ops were supplied, apply them to the freshly built
+      3. If sculpt ops are present, apply them to the freshly built
          elevation, then re-derive the ocean layer and re-run the
          downstream sims (since both depend on elevation).
       4. Replace `world_obj.layers` with the freshly built layers and
          restore the global RNG.
     """
+    if not sculpt_ops:
+        # Fall back to the persisted sculpt log on the world document. This is
+        # the canonical save-format location; the explicit `sculpt_ops`
+        # argument is reserved for one-shot previews and tests.
+        sculpt_ops = list(getattr(world_obj, "sculpt", []) or [])
     # Pull the original generation parameters off the world.
     temps = list(getattr(world_obj, "temps", DEFAULT_TEMPS))
     humids = list(getattr(world_obj, "humids", DEFAULT_HUMIDS))
@@ -345,7 +356,7 @@ def to_dict(world: World) -> Dict[str, Any]:
         "gamma_curve": float(world.gamma_curve),
         "curve_offset": float(world.curve_offset),
         "layers": layers,
-        "sculpt": [],
+        "sculpt": list(getattr(world, "sculpt", []) or []),
         "settlements": None,
     }
     return payload
@@ -422,6 +433,14 @@ def from_dict(d: Mapping[str, Any]) -> World:
                 w.humidity = (arr, {})  # type: ignore[assignment]
         else:
             setattr(w, attr, arr)
+
+    # Preserve the persisted sculpt log so `recompute_from_world` can re-apply
+    # every brush stroke from scratch (the contract's determinism model).
+    sculpt_in = d.get("sculpt")
+    if isinstance(sculpt_in, list):
+        w.sculpt = sculpt_in  # type: ignore[attr-defined]
+    elif not hasattr(w, "sculpt"):
+        w.sculpt = []  # type: ignore[attr-defined]
 
     return w
 

@@ -22,6 +22,7 @@ export interface SavedWorld {
   rawElevMax: number
   rawSeaThreshold: number
   engine: World['engine']
+  sculpt: World['sculpt']
 }
 
 export function serializeWorld(world: World): SavedWorld {
@@ -44,6 +45,7 @@ export function serializeWorld(world: World): SavedWorld {
     rawElevMax: world.rawElevMax,
     rawSeaThreshold: world.rawSeaThreshold,
     engine: world.engine,
+    sculpt: world.sculpt.slice(),
   }
 }
 
@@ -70,6 +72,7 @@ export function deserializeWorld(data: SavedWorld): World {
     rawElevMax: data.rawElevMax,
     rawSeaThreshold: data.rawSeaThreshold,
     engine: data.engine,
+    sculpt: Array.isArray(data.sculpt) ? data.sculpt.slice() : [],
   }
   recomputeSuitability(world)
   return world

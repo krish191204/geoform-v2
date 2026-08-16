@@ -47,6 +47,22 @@ describe('generate', () => {
     expect(after).toBeLessThan(before)
   })
 
+  it('paintElevation records each stroke in world.sculpt for server recompute', () => {
+    const world = generateWorld(24, 16, 5)
+    expect(world.sculpt).toEqual([])
+    paintElevation(world, 10, 8, 3, 0.4)
+    paintElevation(world, 5, 5, 2, -0.3)
+    paintElevation(world, 20, 12, 4, 0.7)
+    expect(world.sculpt.length).toBe(3)
+    expect(world.sculpt[0]).toMatchObject({ x: 10, y: 8, radius: 3, delta: 0.4, tool: 'raise' })
+    expect(world.sculpt[1]).toMatchObject({ x: 5, y: 5, radius: 2, delta: -0.3, tool: 'lower' })
+    expect(world.sculpt[2]).toMatchObject({ x: 20, y: 12, radius: 4, delta: 0.7, tool: 'raise' })
+    // Out-of-bounds brush centers must be clipped, not throw.
+    paintElevation(world, -5, 100, 2, 0.2)
+    expect(world.sculpt[world.sculpt.length - 1].x).toBe(0)
+    expect(world.sculpt[world.sculpt.length - 1].y).toBe(15)
+  })
+
   it('nextCityName returns unique names', () => {
     const world = generateWorld(16, 12, 42)
     const n1 = nextCityName(world)

@@ -44,6 +44,9 @@ export interface World {
   rawElevMax: number
   rawSeaThreshold: number
   engine: 'worldengine' | 'local'
+  /** Brush-stroke log; sent to /api/recompute so the server can re-apply
+   *  every stroke from scratch on a fresh elevation derived from `seed`. */
+  sculpt: Array<{ x: number; y: number; radius: number; delta: number; tool: 'raise' | 'lower' }>
 }
 
 const FALLBACK_BIOME = '#6e7f6a'

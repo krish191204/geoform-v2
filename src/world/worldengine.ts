@@ -103,6 +103,7 @@ export function worldFromPayload(
     rawElevMax: payload.rawElevMax,
     rawSeaThreshold: payload.rawSeaThreshold,
     engine: 'worldengine',
+    sculpt: [],
   }
   recomputeSuitability(world)
   return world
@@ -181,6 +182,7 @@ export function worldFromContractWorld(
     rawElevMax,
     rawSeaThreshold: seaLevel,
     engine: 'worldengine',
+    sculpt: (Array.isArray(doc.sculpt) ? doc.sculpt.slice() : []) as World['sculpt'],
   }
   recomputeSuitability(world)
   return world
@@ -240,7 +242,7 @@ export function worldToContractWorld(world: World): ContractWorld {
       watermap: { data: reshape1D(world.flux, width, height) },
       biome: { data: reshapeBiomes(world.biome, width, height) },
     },
-    sculpt: [],
+    sculpt: Array.isArray(world.sculpt) ? world.sculpt.slice() : [],
     settlements: null,
   }
 }

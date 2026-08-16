@@ -211,6 +211,7 @@ export function generateWorld(width: number, height: number, seed: number): Worl
     rawElevMax: 1,
     rawSeaThreshold: seaLevel,
     engine: 'local',
+    sculpt: [],
   }
 
   recomputeDerived(world)
@@ -237,6 +238,18 @@ export function paintElevation(
       elev[i] = Math.max(0, Math.min(1, elev[i] + amount * falloff * falloff))
     }
   }
+  // Record the stroke so /api/recompute can re-apply every brush stroke from
+  // scratch on the authoritative WorldEngine pipeline. The contract is: the
+  // server regenerates elevation from the saved seed and re-applies the full
+  // sculpt log; the client never sends raw elevation deltas over the wire.
+  if (!Array.isArray(world.sculpt)) world.sculpt = []
+  world.sculpt.push({
+    x: Math.max(0, Math.min(w - 1, cx | 0)),
+    y: Math.max(0, Math.min(h - 1, cy | 0)),
+    radius,
+    delta: amount,
+    tool: amount >= 0 ? 'raise' : 'lower',
+  })
   // Local preview while WorldEngine recompute is in flight / debounced
   recomputeDerived(world, false)
 }

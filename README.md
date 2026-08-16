@@ -178,6 +178,7 @@ MIT — see [`LICENSE`](LICENSE). Geoform vendors [WorldEngine](https://github.c
 - **`ModuleNotFoundError: No module named 'worldengine'`** → the editable install was skipped: `.venv/bin/pip install -e vendor/worldengine`.
 - **`Address already in use` on 8765** → another API process (or the other server implementation) is running. Stop it, or set `GEOFORM_API_PORT` and update the proxy `target` in `vite.config.ts` to match.
 - **Vite returns 502 for `/api/*`** → the API isn't running; start it with `npm start`.
+- **Status reads `WorldEngine error: Bad Gateway. Is the API running?` and won't go away** → the SPA fired its boot-time `loadWorld` (`src/main.ts:138`) while the API was down or restarting, and the client does not auto-retry. The API may now be fine — reload the page, or click **Randomize** in the toolbar to trigger a fresh `/api/generate`. Verify with `curl http://127.0.0.1:8765/health` and `curl http://127.0.0.1:5173/health` (both should return `{"status":"ok"}`).
 - **`vitest: not found` / `Cannot find package 'rolldown'`** → stale `node_modules`: `rm -rf node_modules && npm ci`.
 - **Generation times out** on large maps → raise `GEOFORM_GENERATE_TIMEOUT_MS`, or generate smaller (bounds cap at 2048×2048, 100 plates).
 - **`pytest: command not found`** → use the venv: `.venv/bin/python -m pytest tests -q` (or `npm run test:api`).
