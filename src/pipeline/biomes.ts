@@ -12,30 +12,13 @@
  */
 
 import { meanLand, sumLand } from './helpers'
+import type { CellBiome } from '../world/types'
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
-export type CellBiome =
-  | 'ocean'
-  | 'ice'
-  | 'polar desert'
-  | 'tundra'
-  | 'taiga'
-  | 'boreal desert'
-  | 'alpine'
-  | 'temperate forest'
-  | 'steppe'
-  | 'temperate desert'
-  | 'savanna'
-  | 'tropical desert'
-  | 'rainforest'
-  | 'mediterranean'
+export type { CellBiome }
 
 export interface BiomesResult {
   /** Per-cell biome label; one entry per cell. */
-  biome: string[]
+  biome: CellBiome[]
   /** Annual mean temperature per cell, °C. */
   tempMean: Float32Array
   /** Annual temperature swing (summer − winter) per cell, °C, always ≥ 0. */
@@ -114,8 +97,8 @@ export function classifyBiome(
   // 9. Savanna = hot, mid-wet.
   if (tempMean > 20 && summerMoist >= 0.2 && summerMoist <= 0.5) return 'savanna'
 
-  // 10. Temperate desert = mid-latitude very dry.
-  if (tempMean >= 5 && tempMean <= 25 && summerMoist < 0.15) return 'temperate-desert'
+  // 10. Mid-latitude very dry — atlas has no separate temperate desert, so steppe.
+  if (tempMean >= 5 && tempMean <= 25 && summerMoist < 0.15) return 'steppe'
 
   // 11. Steppe = mid-latitude dry.
   if (tempMean >= 5 && tempMean <= 25 && summerMoist < 0.3) return 'steppe'
@@ -174,7 +157,7 @@ export function computeBiomes(
   const tempMean = new Float32Array(n)
   const tempRange = new Float32Array(n)
   const moistMean = new Float32Array(n)
-  const biome: string[] = new Array(n)
+  const biome: CellBiome[] = new Array(n)
 
   // Pre-pass: combine the seasonal fields. Doing this once up-front keeps
   // the inner loop to a single conditional and lets the matcher read its

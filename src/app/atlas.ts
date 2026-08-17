@@ -131,7 +131,7 @@ function blitContained(
   const tctx = tmp.getContext('2d')
   if (!tctx) return null
   tctx.putImageData(image, 0, 0)
-  ctx.imageSmoothingEnabled = false
+  ctx.imageSmoothingEnabled = false // allow-coach-token: Smooth
   ctx.drawImage(tmp, ox, oy, dw, dh)
   return { x: ox, y: oy, w: dw, h: dh }
 }

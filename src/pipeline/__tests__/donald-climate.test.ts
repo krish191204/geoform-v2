@@ -301,7 +301,6 @@ describe('Donald bar: continentality', () => {
     // sea, the bigger your annual swing. This is the actual physical
     // claim, not "tempRange is non-zero somewhere".
     const tw = makeContinentWorld()
-    const meta = metaFromTest(tw, 1, 0.5)
     const result = await evolve(tw, 1, 0.5)
 
     // Find the largest landmass and use BFS to compute coast distance.

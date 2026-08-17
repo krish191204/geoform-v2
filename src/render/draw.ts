@@ -181,24 +181,28 @@ function ramp(v: number | undefined): number {
 // ---------------------------------------------------------------------------
 
 /**
- * Banded elevation ramp, no hillshade, no rivers.
- * Used by the Elevation layer and as the base for Relief.
+ * Banded elevation ramp in metres. Ocean is the mask, not `meta.seaLevel`
+ * (that field is a 0..1 freeze threshold leftover and would paint every
+ * 200 m plain as snow).
  */
-function elevBandColor(e: number, sea: number): [number, number, number] {
-  if (!Number.isFinite(e) || !Number.isFinite(sea)) return [120, 120, 120]
-  if (e < sea) {
-    const t = sea > 0 ? e / sea : 0
+function elevBandColor(e: number, ocean: boolean): [number, number, number] {
+  if (!Number.isFinite(e)) return [120, 120, 120]
+  if (ocean) {
+    const t = e < 0 ? ramp(1 + e / 1200) : 0.82
     if (t < 0.45) return mix([8, 28, 48], [18, 62, 92], t / 0.45)
     if (t < 0.85) return mix([18, 62, 92], [36, 110, 128], (t - 0.45) / 0.4)
     return mix([36, 110, 128], [70, 150, 148], (t - 0.85) / 0.15)
   }
-  const t = (e - sea) / Math.max(1e-6, 1 - sea)
-  if (t < 0.08) return mix([168, 176, 122], [92, 138, 72], t / 0.08)
-  if (t < 0.28) return mix([92, 138, 72], [58, 112, 58], (t - 0.08) / 0.2)
-  if (t < 0.5) return mix([58, 112, 58], [110, 118, 72], (t - 0.28) / 0.22)
-  if (t < 0.72) return mix([110, 118, 72], [128, 112, 88], (t - 0.5) / 0.22)
-  if (t < 0.88) return mix([128, 112, 88], [168, 162, 152], (t - 0.72) / 0.16)
-  return mix([168, 162, 152], [246, 248, 250], (t - 0.88) / 0.12)
+  if (e < 80) return mix([168, 176, 122], [92, 138, 72], ramp(e / 80))
+  if (e < 400) return mix([92, 138, 72], [58, 112, 58], (e - 80) / 320)
+  if (e < 1200) return mix([58, 112, 58], [110, 118, 72], (e - 400) / 800)
+  if (e < 2500) return mix([110, 118, 72], [128, 112, 88], (e - 1200) / 1300)
+  if (e < 4000) return mix([128, 112, 88], [168, 162, 152], (e - 2500) / 1500)
+  return mix([168, 162, 152], [246, 248, 250], ramp((e - 4000) / 2500))
+}
+
+function isOceanCell(world: World, i: number): boolean {
+  return world.mask[i] < world.meta.threshold
 }
 
 /**
@@ -270,16 +274,16 @@ function elevAt(world: World, x: number, y: number): number {
 }
 
 function isCoast(world: World, x: number, y: number): boolean {
-  const { width: w, height: h, seaLevel } = world.meta
+  const { width: w, height: h } = world.meta
   if (x < 0 || y < 0 || x >= w || y >= h) return false
-  const land = world.elev[y * w + x] >= seaLevel
+  const land = !isOceanCell(world, y * w + x)
   for (let dy = -1; dy <= 1; dy++) {
     for (let dx = -1; dx <= 1; dx++) {
       if (!dx && !dy) continue
       const nx = x + dx
       const ny = y + dy
       if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
-      const nLand = world.elev[ny * w + nx] >= seaLevel
+      const nLand = !isOceanCell(world, ny * w + nx)
       if (nLand !== land) return true
     }
   }
@@ -302,15 +306,16 @@ function cellColor(
   y: number,
   showRivers: boolean,
 ): [number, number, number] {
-  const { width: w, height: h, seaLevel } = world.meta
+  const { width: w, height: h } = world.meta
   if (x < 0 || y < 0 || x >= w || y >= h) return [0, 0, 0]
   const i = y * w + x
   const e = world.elev[i]
+  const ocean = isOceanCell(world, i)
   let rgb: [number, number, number]
 
   switch (layer) {
     case 'relief': {
-      rgb = elevBandColor(e, seaLevel)
+      rgb = elevBandColor(e, ocean)
       // Hillshade: soft directional light from the NW corner.
       const er = elevAt(world, x + 1, y)
       const ed = elevAt(world, x, y + 1)
@@ -319,19 +324,19 @@ function cellColor(
       const shade = clamp(0.72 + dx + dy, 0.55, 1.25)
       rgb = [clamp(rgb[0] * shade), clamp(rgb[1] * shade), clamp(rgb[2] * shade)]
       // River overlay: lit cells that are flagged as river.
-      if (showRivers && e >= seaLevel && world.rivers[i] === 1) {
+      if (showRivers && !ocean && world.rivers[i] === 1) {
         rgb = mix(rgb, [55, 140, 190], 0.6)
       }
       break
     }
     case 'elevation': {
       // Banded ramp only — no hillshade, no rivers.
-      rgb = elevBandColor(e, seaLevel)
+      rgb = elevBandColor(e, ocean)
       break
     }
     case 'plates': {
       rgb = plateColor(world.plateId[i])
-      if (e < seaLevel) rgb = mix(rgb, [20, 50, 70], 0.55)
+      if (ocean) rgb = mix(rgb, [20, 50, 70], 0.55)
       break
     }
     case 'moisture': {
@@ -358,8 +363,8 @@ function cellColor(
   }
 
   // Coastal ink/foam — applies to topographical layers, never to plates.
-  if (layer !== 'plates' && isCoast(world, x, y)) {
-    rgb = e < seaLevel ? mix(rgb, [210, 230, 230], 0.28) : mix(rgb, [30, 42, 36], 0.22)
+  if (layer !== 'plates' && layer !== 'biome' && isCoast(world, x, y)) {
+    rgb = ocean ? mix(rgb, [210, 230, 230], 0.28) : mix(rgb, [30, 42, 36], 0.22)
   }
 
   return rgb

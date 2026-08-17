@@ -27,6 +27,7 @@ import { makeSenseInline } from '../makeSense_inline'
 import { computeHydrology } from '../hydrology'
 import { computeBiomes } from '../biomes'
 import { serializeWorld, deserializeWorld } from '../../world/persist'
+import type { CellBiome } from '../../world/types'
 import { makeContinentWorld } from './fixtures'
 
 describe('Donald minimum', () => {
@@ -280,7 +281,7 @@ describe('Donald minimum', () => {
       moistMean: result.moistMean,
       flux: result.flux,
       rivers: result.rivers,
-      biome: result.biome,
+      biome: result.biome as CellBiome[],
       cities: [],
       suitability: result.suitability,
     }

@@ -1,45 +1,43 @@
 /**
- * Shell module: the 4-stage editor surface.
+ * Shell: 4-stage editor. Geoform-1 chrome, v2 World.
  *
- * Owns the `EditorState` (the source of truth) plus the shell-only
- * flags (`mask`, `maskCommitted`, `makeSenseComplete`, `score`) that
- * the stage gates need to read but `EditorState` does not declare.
- *
- * Listens for:
- *   - `app:*` events fired by the UI (topbar buttons, stage buttons,
- *     sliders, tool picks).
- *   - `coach:message` events fired by anyone — passed through to the
- *     coach-bar UI.
- *   - canvas pointer events on the Sketch stage — wired by the shell
- *     to `paintMask` from the brush module.
- *
- * On every state change the shell re-renders the affected DOM regions
- * via the `ui` module. There is no external state library.
+ * Writers paint land on empty ocean. Critique names what is wrong.
+ * Make sense derives the closest geographically honest planet.
+ * Worldbuild places cities on that planet.
  */
 
-import type { EditorState } from '../world/types'
+import type { EditorState, Layer } from '../world/types'
 import { DEFAULT_META } from '../world/types'
 import {
   APP_EVENTS,
+  MAKE_SENSE_STEP_INDEX,
   STAGES,
   type BrushChangeDetail,
+  type LayerChangeDetail,
   type MetaChangeDetail,
+  type SeasonChangeDetail,
   type ShellStateView,
   type StageTransitionDetail,
-  type StrengthChangeDetail,
   type ToolChangeDetail,
 } from './stages'
 import {
-  mountCoachBar,
-  mountStageBody,
-  mountStageUI,
-  mountTopbar,
-  updateStageUI,
-  updateTopbar,
-  type StageRefs,
+  emptyInspectHint,
+  mountChrome,
+  mountInspector,
+  mountMapShell,
+  mountStageTools,
+  mountStageWork,
+  sketchInspectHtml,
+  updateChrome,
+  updateInspector,
+  updateMapShell,
+  updateStageTools,
+  worldInspectHtml,
+  type ToolsRefs,
 } from './ui'
-import { renderMaskToCanvas } from './canvas_paint'
-import { createMaskBrushes } from '../sketch/maskBrushes'
+import { cellFromPointer, paintAtlas } from './atlas'
+import { inspectCell } from '../render/draw'
+import { createMaskBrushes, fireCommitHook } from '../sketch/maskBrushes'
 import { placeCity, removeNearestCity } from '../sketch/worldbuild'
 import {
   makeSenseInline,
@@ -55,23 +53,15 @@ import {
 } from '../world/persist'
 import { announce as announceCoach } from './coach'
 
-// ---------------------------------------------------------------------------
-// Internal state
-// ---------------------------------------------------------------------------
-
-/**
- * Shell-owned flags not in `EditorState`. Kept separate so `EditorState`
- * stays clean and gates read a single combined view.
- */
 interface ShellFlags {
-  /** Live mask being painted during Sketch; null until the user dabs. */
   mask: Float32Array | null
-  /** True iff the user clicked the Sketch Critique button (committed the mask). */
   maskCommitted: boolean
-  /** True iff Make-sense produced a `World`. */
   makeSenseComplete: boolean
-  /** Latest Critique score; 0 if Critique has not run. */
   score: number
+  layer: Layer
+  season: 'summer' | 'winter'
+  pipelineStep: number
+  inspectHtml: string
 }
 
 interface ShellBundle {
@@ -79,15 +69,14 @@ interface ShellBundle {
   flags: ShellFlags
 }
 
-/** Build the initial state + flags for a fresh session. */
 function makeInitialBundle(): ShellBundle {
   const state: EditorState = {
     stage: 'sketch',
     world: null,
     meta: { ...DEFAULT_META },
     tool: 'draw-land',
-    brushSize: 8,
-    strength: 0.5,
+    brushSize: 14,
+    strength: 1,
     issues: [],
     provenance: null,
     isProcessing: false,
@@ -97,16 +86,19 @@ function makeInitialBundle(): ShellBundle {
     maskCommitted: false,
     makeSenseComplete: false,
     score: 0,
+    layer: 'relief',
+    season: 'summer',
+    pipelineStep: 0,
+    inspectHtml: emptyInspectHint(),
   }
   return { state, flags }
 }
 
-/** Snapshot the current bundle into a `ShellStateView` the gates / UI can read. */
 function buildView(bundle: ShellBundle): ShellStateView {
   return { ...bundle.state, ...bundle.flags }
 }
 
-/** Dispatch a coach message — exported so external code can talk to the coach-bar. */
+/** Dispatch a coach message — kept for pipeline failures without a CoachEvent. */
 export function announce(
   tone: 'info' | 'success' | 'warn' | 'error',
   text: string,
@@ -116,72 +108,132 @@ export function announce(
   )
 }
 
-// ---------------------------------------------------------------------------
-// mountApp — the single entry point
-// ---------------------------------------------------------------------------
-
-/**
- * Mount the 4-stage editor into `root`. Wires up all global event
- * listeners. Returns nothing — the shell owns state for the lifetime
- * of the page.
- */
 export function mountApp(root: HTMLElement): void {
   const bundle = makeInitialBundle()
   const { state, flags } = bundle
-
-  // ----- Boot: always start with an empty ocean per the Phase 0 spec. ---
-  // The user can opt in to resume a saved sketch via a future "Resume"
-  // button; for Phase 0 we leave the canvas untouched until the user
-  // paints. This also keeps the boot deterministic for tests.
-
-  // Mask brush module — owns the dab logic. Created once, reused for
-  // every canvas pointer event.
   const { brushes, bindMask } = createMaskBrushes()
 
-  // Mount the three regions: topbar, stage body, coach bar.
-  const topbarRefs = mountTopbar()
-  const stageBody = mountStageBody()
-  const coachBar = mountCoachBar()
+  root.classList.add('app')
 
-  root.append(topbarRefs.root)
-  root.append(stageBody.root)
-  root.append(coachBar)
+  const chrome = mountChrome()
+  const map = mountMapShell()
+  const inspector = mountInspector()
+  const toolsHost = document.createElement('aside')
+  toolsHost.className = 'panel tools-panel'
+  const layout = document.createElement('div')
+  layout.className = 'layout'
+  layout.append(toolsHost, map.root, inspector.root)
+  root.append(chrome.root, layout)
 
-  // Currently mounted stage UI; null until the first render.
-  let currentStageUI: StageRefs | null = null
+  let toolsRefs: ToolsRefs | null = null
+  let paintRaf = 0
 
-  function render(): void {
+  function render(opts: { remount?: boolean } = {}): void {
     const view = buildView(bundle)
-    updateTopbar(topbarRefs, view)
-    if (currentStageUI === null || currentStageUI.stage !== state.stage) {
-      const next = mountStageUI(view)
-      // Wire canvas pointer events to the brush. The canvas is in the
-      // SketchStageRefs only; the other stages don't have one. When the
-      // stage changes, we re-attach the listener.
-      const sketchRefs = next.refs as { canvas?: HTMLCanvasElement } | undefined
-      if (sketchRefs?.canvas) {
-        attachCanvasDab(sketchRefs.canvas)
-      }
-      stageBody.mount(next.refs.root)
-      currentStageUI = next
+    updateChrome(chrome, view)
+    updateMapShell(map, view)
+    updateInspector(inspector, view)
+    const remount = opts.remount || !toolsRefs || toolsRefs.stage !== state.stage
+    if (remount) {
+      toolsRefs = mountStageTools(view)
+      toolsHost.replaceChildren(toolsRefs.root)
+      inspector.workHost.replaceChildren(mountStageWork(view))
     } else {
-      updateStageUI(currentStageUI, view)
+      updateStageTools(toolsRefs, view)
+      inspector.workHost.replaceChildren(mountStageWork(view))
     }
+    requestPaint()
   }
 
-  /** Bind a single `pointerdown` + `pointermove` to the brush / city router. */
-  function attachCanvasDab(canvas: HTMLCanvasElement): void {
-    let painting = false
-    const dab = (clientX: number, clientY: number) => {
-      const rect = canvas.getBoundingClientRect()
-      const x = Math.floor(((clientX - rect.left) / rect.width) * state.meta.width)
-      const y = Math.floor(((clientY - rect.top) / rect.height) * state.meta.height)
-      if (x < 0 || x >= state.meta.width || y < 0 || y >= state.meta.height) return
+  function requestPaint(): void {
+    if (paintRaf) return
+    paintRaf = requestAnimationFrame(() => {
+      paintRaf = 0
+      paintNow()
+    })
+  }
 
-      // Worldbuild tools route to city placement; sketch tools route to the
-      // mask brushes. The routing is tool-driven so the same canvas
-      // listener works on every stage.
+  function paintNow(): void {
+    const showWorld = Boolean(state.world) && state.stage !== 'sketch'
+    paintAtlas(map.canvas, {
+      world: showWorld ? state.world : null,
+      mask: flags.mask,
+      meta: state.meta,
+      layer: flags.layer,
+      season: flags.season,
+      issues: state.stage === 'critique' ? state.issues : [],
+      showCities: state.stage === 'worldbuild',
+    })
+  }
+
+  function ensureMask(): Float32Array {
+    if (!flags.mask) {
+      flags.mask = new Float32Array(state.meta.width * state.meta.height)
+      bindMask(flags.mask)
+    }
+    return flags.mask
+  }
+
+  function invalidateDerivedWorld(): void {
+    if (!state.world && !flags.makeSenseComplete) return
+    state.world = null
+    state.provenance = null
+    flags.makeSenseComplete = false
+    flags.pipelineStep = 0
+    flags.maskCommitted = false
+    flags.score = 0
+    state.issues = []
+  }
+
+  function inspectAt(x: number, y: number, speak = false): void {
+    const i = y * state.meta.width + x
+    if (state.world && state.stage !== 'sketch') {
+      const cell = inspectCell(state.world, x, y)
+      const land = state.world.mask[i] >= state.world.meta.threshold
+      flags.inspectHtml = worldInspectHtml(cell.display, x, y, land)
+      if (speak) {
+        announceCoach({
+          kind: 'inspector.cell',
+          x,
+          y,
+          elevM: cell.elev ?? NaN,
+          plateId: cell.plateId ?? NaN,
+          tempSummerC: cell.tempSummer ?? NaN,
+          tempWinterC: cell.tempWinter ?? NaN,
+          tempRangeC: cell.tempRange ?? NaN,
+          moistSummer: cell.moistSummer ?? NaN,
+          moistWinter: cell.moistWinter ?? NaN,
+          biome: cell.biome,
+        })
+      }
+    } else {
+      const land = Boolean(flags.mask && flags.mask[i] >= state.meta.threshold)
+      flags.inspectHtml = sketchInspectHtml(x, y, land)
+    }
+    updateInspector(inspector, buildView(bundle))
+  }
+
+  function attachCanvas(): void {
+    const canvas = map.canvas
+    let painting = false
+
+    const onPoint = (clientX: number, clientY: number, isDown: boolean) => {
+      const cell = cellFromPointer(
+        canvas,
+        clientX,
+        clientY,
+        state.meta.width,
+        state.meta.height,
+      )
+      if (!cell) return
+      const { x, y } = cell
+
+      inspectAt(x, y, state.tool === 'inspect' && isDown)
+      if (state.tool === 'inspect') return
+      if (!isDown && !painting) return
+
       if (state.tool === 'place-city' || state.tool === 'remove-city') {
+        if (!isDown) return
         if (!state.world) {
           announce('warn', 'No derived world yet — run Make sense first.')
           return
@@ -190,48 +242,62 @@ export function mountApp(root: HTMLElement): void {
           const next = `City ${state.world.cities.length + 1}`
           const result = placeCity(state.world, x, y, next)
           if (result.rejected) {
-            announce('warn', 'No city placed — need land, suitability ≥ 0.4, no neighbour within 5 cells.')
+            announce(
+              'warn',
+              'No city placed — need land, suitability ≥ 0.4, no neighbour within 5 cells.',
+            )
           } else if (result.city) {
-            announce('success', `Placed ${result.city.name} at (${x}, ${y}).`)
+            announceCoach({
+              kind: 'inspector.cell',
+              x,
+              y,
+              elevM: state.world.elev[y * state.meta.width + x],
+              plateId: state.world.plateId[y * state.meta.width + x],
+              tempSummerC: state.world.summer[y * state.meta.width + x],
+              tempWinterC: state.world.winter[y * state.meta.width + x],
+              tempRangeC: state.world.tempRange[y * state.meta.width + x],
+              moistSummer: state.world.summerMoist[y * state.meta.width + x],
+              moistWinter: state.world.winterMoist[y * state.meta.width + x],
+              biome: String(state.world.biome[y * state.meta.width + x]),
+            })
           }
         } else {
           const result = removeNearestCity(state.world, x, y)
-          if (result.matched && result.removed) {
-            announce('info', `Removed ${result.removed.name}.`)
-          } else {
-            announce('warn', 'No city within range.')
-          }
+          if (!result.matched) announce('warn', 'No city within range.')
         }
         render()
         return
       }
 
-      // Sketch tool: mutate the mask.
-      if (!flags.mask) {
-        flags.mask = new Float32Array(state.meta.width * state.meta.height)
-        bindMask(flags.mask)
-      }
-      const tool = state.tool === 'erase-land' ? 'erase-land' : 'draw-land'
+      if (state.stage !== 'sketch') return
+      if (state.tool !== 'draw-land' && state.tool !== 'erase-land') return
+
+      if (state.world) invalidateDerivedWorld()
+
+      const mask = ensureMask()
       brushes.dab({
-        mask: flags.mask,
+        mask,
         meta: state.meta,
         cx: x,
         cy: y,
         brushSize: state.brushSize,
         strength: state.strength,
-        tool,
+        tool: state.tool,
       })
-      // Always repaint the canvas so the user sees the new dab.
-      renderMaskToCanvas(canvas, flags.mask, state.meta)
-      flagOnlyMaskDirty()
+      inspectAt(x, y, false)
+      updateChrome(chrome, buildView(bundle))
+      updateInspector(inspector, buildView(bundle))
+      if (toolsRefs) updateStageTools(toolsRefs, buildView(bundle))
+      requestPaint()
     }
+
     canvas.addEventListener('pointerdown', (e) => {
       painting = true
-      dab(e.clientX, e.clientY)
+      canvas.setPointerCapture(e.pointerId)
+      onPoint(e.clientX, e.clientY, true)
     })
     canvas.addEventListener('pointermove', (e) => {
-      if (!painting) return
-      dab(e.clientX, e.clientY)
+      onPoint(e.clientX, e.clientY, false)
     })
     canvas.addEventListener('pointerup', () => {
       painting = false
@@ -240,22 +306,6 @@ export function mountApp(root: HTMLElement): void {
       painting = false
     })
   }
-
-  /**
-   * Re-render once after a mask dab. Updates the topbar (so the
-   * "Critique" button enables as soon as the mask has any land) AND
-   * the current stage UI (so any in-stage sliders/badges refresh).
-   * Cheap enough that we don't bother with throttling.
-   */
-  function flagOnlyMaskDirty(): void {
-    const view = buildView(bundle)
-    updateTopbar(topbarRefs, view)
-    if (currentStageUI !== null) {
-      updateStageUI(currentStageUI, view)
-    }
-  }
-
-  // ----- Topbar events ---------------------------------------------------
 
   window.addEventListener(APP_EVENTS.STAGE_TRANSITION, (ev) => {
     const detail = (ev as CustomEvent).detail as StageTransitionDetail | undefined
@@ -267,126 +317,149 @@ export function mountApp(root: HTMLElement): void {
       announce('warn', `Cannot enter ${target} yet.`)
       return
     }
-    STAGES[state.stage].leave(view)
+    const from = state.stage
+    STAGES[from].leave(view)
     state.stage = target
-    render()
+    if (target === 'worldbuild' && state.tool !== 'place-city' && state.tool !== 'remove-city') {
+      state.tool = 'place-city'
+    }
+    if (target === 'sketch' && state.tool !== 'draw-land' && state.tool !== 'erase-land' && state.tool !== 'inspect') {
+      state.tool = 'draw-land'
+    }
+    render({ remount: true })
     STAGES[target].enter(view)
+    announceCoach({ kind: 'app.stage', from, to: target, trigger: 'user' })
   })
 
   window.addEventListener(APP_EVENTS.SAVE, () => {
-    // Save whatever is currently mounted. If we have a derived world,
-    // save it; otherwise save the mask. Both succeed or fail honestly —
-    // a bare "Saved (seed N)" message without any storage write is B02.
     if (state.world) {
       const json = serializeWorld(state.world)
       const bytes = json.length
       const ok = saveWorld(state.world)
-      if (ok) {
-        announceCoach({ kind: 'persist.saved', key: 'world', bytes, ok: true })
-      } else {
-        announceCoach({
-          kind: 'persist.failed',
-          key: 'world',
-          reason: 'quota',
-          bytes,
-        })
-      }
+      announceCoach(
+        ok
+          ? { kind: 'persist.saved', key: 'world', bytes, ok: true }
+          : { kind: 'persist.failed', key: 'world', reason: 'quota', bytes },
+      )
     } else if (flags.mask) {
       const json = serializeMask(state.meta, flags.mask)
       const bytes = json.length
       const ok = saveMask(state.meta, flags.mask)
-      if (ok) {
-        announceCoach({ kind: 'persist.saved', key: 'mask', bytes, ok: true })
-      } else {
-        announceCoach({
-          kind: 'persist.failed',
-          key: 'mask',
-          reason: 'quota',
-          bytes,
-        })
-      }
+      announceCoach(
+        ok
+          ? { kind: 'persist.saved', key: 'mask', bytes, ok: true }
+          : { kind: 'persist.failed', key: 'mask', reason: 'quota', bytes },
+      )
     } else {
-      announceCoach({
-        kind: 'persist.failed',
-        key: 'mask',
-        reason: 'shape',
-        bytes: 0,
-      })
+      announceCoach({ kind: 'persist.failed', key: 'mask', reason: 'shape', bytes: 0 })
     }
   })
 
-  window.addEventListener(APP_EVENTS.RESET, () => {
-    if (state.stage !== 'make-sense') return
-    state.world = null
-    state.provenance = null
-    state.issues = []
+  window.addEventListener(APP_EVENTS.CLEAR_SEA, () => {
+    const w = state.meta.width
+    const h = state.meta.height
+    flags.mask = new Float32Array(w * h)
+    bindMask(flags.mask)
+    invalidateDerivedWorld()
+    state.stage = 'sketch'
+    state.tool = 'draw-land'
     state.isProcessing = false
-    flags.makeSenseComplete = false
-    flags.score = 0
-    announce('warn', 'Derived world cleared.')
-    render()
+    flags.inspectHtml = emptyInspectHint()
+    announceCoach({
+      kind: 'sketch.ready',
+      width: w,
+      height: h,
+      landCells: 0,
+    })
+    render({ remount: true })
   })
 
-  window.addEventListener(APP_EVENTS.TOGGLE_INSPECTOR, () => {
-    announce('info', 'Inspector toggled.')
+  window.addEventListener(APP_EVENTS.RESET, () => {
+    window.dispatchEvent(new Event(APP_EVENTS.CLEAR_SEA))
   })
-
-  // ----- Stage button events --------------------------------------------
 
   window.addEventListener(APP_EVENTS.COMMIT_SKETCH, () => {
     if (state.stage !== 'sketch') return
+    const mask = ensureMask()
     flags.maskCommitted = true
-    // Run the real pre-Make-sense critique on the mask. Score now comes
-    // from the real grader, not a hardcoded 0.6 demo.
-    const result = critiqueMask(flags.mask ?? new Float32Array(0), state.meta, state.meta.threshold)
+    const result = critiqueMask(mask, state.meta, state.meta.threshold)
     state.issues = result.issues
     flags.score = result.score
-    announce('info', `Sketch committed. Critique score: ${result.score}.`)
-    render()
+    fireCommitHook(brushes, state.meta, mask)
+    const crit = { critical: 0, major: 0, minor: 0 }
+    for (const issue of result.issues) crit[issue.severity]++
+    announceCoach({
+      kind: 'critique.grade',
+      score: result.score,
+      issueCount: result.issues.length,
+      criticalCount: crit.critical,
+      majorCount: crit.major,
+      minorCount: crit.minor,
+    })
+    state.stage = 'critique'
+    render({ remount: true })
   })
 
   window.addEventListener(APP_EVENTS.MAKE_SENSE, () => {
-    if (state.stage !== 'critique') return
+    if (state.stage !== 'critique' && state.stage !== 'make-sense') return
     const view = buildView(bundle)
-    if (!STAGES['make-sense'].canEnter(view)) return
+    if (!STAGES['make-sense'].canEnter(view) && state.stage !== 'make-sense') return
     void runMakeSense()
   })
 
-  /** The actual Make-sense pipeline run. */
   async function runMakeSense(): Promise<void> {
     STAGES[state.stage].leave(buildView(bundle))
     state.stage = 'make-sense'
     state.isProcessing = true
-    render()
-    announce('info', 'Make-sense running…')
+    flags.pipelineStep = 0
+    render({ remount: true })
+    const mask = ensureMask()
+    announceCoach({
+      kind: 'makeSense.start',
+      cellCount: mask.length,
+      plateTarget: 8,
+    })
     try {
-      const mask =
-        flags.mask ?? new Float32Array(state.meta.width * state.meta.height)
-      const result = await makeSenseInline(
-        { meta: state.meta, mask },
-        () => {},
-      )
+      const result = await makeSenseInline({ meta: state.meta, mask }, (step) => {
+        flags.pipelineStep = MAKE_SENSE_STEP_INDEX[step.stepName] ?? flags.pipelineStep
+        inspector.workHost.replaceChildren(mountStageWork(buildView(bundle)))
+      })
       const world = worldFromMakeSense(result, state.meta, mask)
       const provenance = provenanceFromResult(result)
       state.world = world
-      // Post-Make-sense critique on the derived world.
       const c = critiqueWorld(world)
       provenance.scoreAfter = c.score
+      provenance.scoreBefore = flags.score
       state.provenance = provenance
       state.issues = c.issues
       flags.score = c.score
       flags.makeSenseComplete = true
+      flags.pipelineStep = 7
+      flags.layer = 'relief'
       state.isProcessing = false
       const riverCells = world.rivers.reduce((n, v) => n + v, 0)
-      announce(
-        'success',
-        `Make-sense complete. Score ${c.score}. Mask moved ${provenance.maskDeltaPct.toFixed(2)}%. Rivers ${riverCells}.`,
-      )
+      let rangeSum = 0
+      let rangeN = 0
+      for (let i = 0; i < world.tempRange.length; i++) {
+        if (world.mask[i] >= world.meta.threshold && Number.isFinite(world.tempRange[i])) {
+          rangeSum += world.tempRange[i]
+          rangeN++
+        }
+      }
+      announceCoach({
+        kind: 'makeSense.complete',
+        provenanceSteps: provenance.steps.length,
+        maskDeltaPct: provenance.maskDeltaPct,
+        scoreBefore: provenance.scoreBefore,
+        scoreAfter: provenance.scoreAfter,
+        riversCount: riverCells,
+        rangeAvgC: rangeN ? rangeSum / rangeN : 0,
+      })
     } catch (err) {
       state.isProcessing = false
       announce('error', `Make-sense failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
-      render()
+      render({ remount: true })
     }
   }
 
@@ -394,7 +467,7 @@ export function mountApp(root: HTMLElement): void {
     if (state.stage !== 'make-sense') return
     state.isProcessing = false
     flags.makeSenseComplete = false
-    announce('warn', 'Make-sense cancelled.')
+    announceCoach({ kind: 'makeSense.cancelled', atStep: String(flags.pipelineStep) })
     render()
   })
 
@@ -404,33 +477,33 @@ export function mountApp(root: HTMLElement): void {
     if (!STAGES[state.stage].canLeave(view)) return
     STAGES[state.stage].leave(view)
     state.stage = 'worldbuild'
-    announce('success', 'Worldbuild active.')
-    render()
+    state.tool = 'place-city'
+    render({ remount: true })
     STAGES[state.stage].enter(view)
+    announceCoach({ kind: 'app.stage', from: 'make-sense', to: 'worldbuild', trigger: 'user' })
   })
 
   window.addEventListener(APP_EVENTS.BACK_TO_SKETCH, () => {
-    if (state.stage !== 'worldbuild') return
     const view = buildView(bundle)
     STAGES[state.stage].leave(view)
     state.stage = 'sketch'
-    // Cities are preserved per spec — they live on `state.world.cities`.
-    announce('info', 'Back to Sketch. Cities preserved.')
-    render()
+    state.tool = 'draw-land'
+    render({ remount: true })
+    announceCoach({ kind: 'app.stage', from: 'worldbuild', to: 'sketch', trigger: 'user' })
   })
-
-  // ----- Within-stage controls ------------------------------------------
 
   window.addEventListener(APP_EVENTS.TOOL_CHANGE, (ev) => {
     const detail = (ev as CustomEvent).detail as ToolChangeDetail | undefined
     if (!detail) return
     state.tool = detail.tool
+    announceCoach({ kind: 'tool.changed', tool: detail.tool })
     render()
   })
 
   window.addEventListener(APP_EVENTS.META_CHANGE, (ev) => {
     const detail = (ev as CustomEvent).detail as MetaChangeDetail | undefined
     if (!detail) return
+    if (flags.makeSenseComplete) return
     state.meta = { ...state.meta, ...detail.meta }
     render()
   })
@@ -439,32 +512,52 @@ export function mountApp(root: HTMLElement): void {
     const detail = (ev as CustomEvent).detail as BrushChangeDetail | undefined
     if (!detail) return
     state.brushSize = detail.size
-    render()
+    if (toolsRefs) updateStageTools(toolsRefs, buildView(bundle))
+    updateMapShell(map, buildView(bundle))
   })
 
-  window.addEventListener(APP_EVENTS.STRENGTH_CHANGE, (ev) => {
-    const detail = (ev as CustomEvent).detail as StrengthChangeDetail | undefined
-    if (!detail) return
-    state.strength = detail.strength
-    render()
+  window.addEventListener(APP_EVENTS.LAYER_CHANGE, (ev) => {
+    const detail = (ev as CustomEvent).detail as LayerChangeDetail | undefined
+    if (!detail || !state.world) return
+    flags.layer = detail.layer
+    updateMapShell(map, buildView(bundle))
+    requestPaint()
   })
 
-  // ----- coach:message passthrough --------------------------------------
-
-  // The coach-bar's UI already updates itself on `coach:message`. The
-  // shell also forwards the event onto its own listener so any future
-  // shell-side state (e.g., toasts) can react. For Phase 0 this is a
-  // pass-through: re-dispatch on a `shell:coach-message` channel so
-  // downstream modules can subscribe without touching `window` directly.
-  window.addEventListener('coach:message', (ev) => {
-    root.dispatchEvent(
-      new CustomEvent('shell:coach-message', {
-        detail: (ev as CustomEvent).detail,
-        bubbles: false,
-      }),
-    )
+  window.addEventListener(APP_EVENTS.SEASON_CHANGE, (ev) => {
+    const detail = (ev as CustomEvent).detail as SeasonChangeDetail | undefined
+    if (!detail || !state.world) return
+    flags.season = detail.season
+    updateMapShell(map, buildView(bundle))
+    requestPaint()
   })
 
-  // First render
-  render()
+  window.addEventListener('resize', () => requestPaint())
+
+  window.addEventListener('keydown', (e) => {
+    const t = e.target
+    if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return
+    if (state.stage === 'sketch') {
+      if (e.key === '1') state.tool = 'draw-land'
+      else if (e.key === '2') state.tool = 'erase-land'
+      else if (e.key === 'i' || e.key === 'I') state.tool = 'inspect'
+      else return
+      render()
+    }
+  })
+
+  attachCanvas()
+  render({ remount: true })
+  announceCoach({
+    kind: 'sketch.ready',
+    width: state.meta.width,
+    height: state.meta.height,
+    landCells: 0,
+  })
+  announceCoach({
+    kind: 'app.boot',
+    stage: 'sketch',
+    resumedFromMask: false,
+    resumedFromWorld: false,
+  })
 }

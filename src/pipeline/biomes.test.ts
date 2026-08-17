@@ -33,7 +33,7 @@ describe('classifyBiome — spec table', () => {
   })
 
   it('tempMean=15, tempRange=5, summerMoist=0.1  →  temperate desert', () => {
-    expect(classifyBiome(15, 5, 0.1)).toBe('temperate-desert')
+    expect(classifyBiome(15, 5, 0.1)).toBe('steppe')
   })
 
   // A few bonus cases that pin down the priority order.

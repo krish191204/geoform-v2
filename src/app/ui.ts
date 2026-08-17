@@ -10,7 +10,7 @@
  * work block. Buttons dispatch `app:*` events; the shell owns state.
  */
 
-import type { Layer, Tool } from '../world/types'
+import type { Layer, Stage, Tool } from '../world/types'
 import {
   APP_EVENTS,
   MAKE_SENSE_STEPS,
@@ -64,7 +64,7 @@ function fire<T>(type: string, detail?: T): void {
 
 export interface ChromeRefs {
   readonly root: HTMLElement
-  readonly stageButtons: Readonly<Record<import('../world/types').Stage, HTMLButtonElement>>
+  readonly stageButtons: Record<Stage, HTMLButtonElement>
   readonly saveBtn: HTMLButtonElement
   readonly clearSeaBtn: HTMLButtonElement
   readonly saveMeta: HTMLElement
@@ -469,14 +469,14 @@ function mountWorldbuildTools(state: ShellStateView): HTMLElement {
 
 export function updateStageTools(refs: ToolsRefs, state: ShellStateView): void {
   if (refs.stage !== state.stage) return
-  for (const btn of refs.root.querySelectorAll<HTMLButtonElement>('[data-tool]')) {
+  for (const btn of Array.from(refs.root.querySelectorAll<HTMLButtonElement>('[data-tool]'))) {
     btn.classList.toggle('active', btn.dataset.tool === state.tool)
   }
   const brushVal = refs.root.querySelector('#brushVal')
   if (brushVal) brushVal.textContent = String(state.brushSize)
   const radiusVal = refs.root.querySelector('#planetRadiusVal')
   if (radiusVal) radiusVal.textContent = String(state.meta.planetRadiusKm)
-  const critiqueBtn = [...refs.root.querySelectorAll('button')].find((b) => b.textContent === 'Critique')
+  const critiqueBtn = Array.from(refs.root.querySelectorAll('button')).find((b) => b.textContent === 'Critique')
   if (critiqueBtn) {
     critiqueBtn.disabled = state.isProcessing || !hasAnyLand(state.mask, state.meta.threshold)
   }
