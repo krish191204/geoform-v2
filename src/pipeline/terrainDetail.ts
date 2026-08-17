@@ -43,7 +43,7 @@ const RIDGE_FROM_UPLIFT = 0.22
 const RIDGE_MIN_UPLIFT_M = 50
 
 /** Hydraulic sweeps. Far below dandrino's ~1.4×dim; enough to incise valleys. */
-const ERODE_ITERS = 10
+const ERODE_ITERS = 14
 /** Water added per land cell per sweep (dimensionless). */
 const RAIN = 0.035
 /** Fraction of water that evaporates after each sweep. */
@@ -53,7 +53,7 @@ const CAPACITY_K = 0.12
 /** Fraction of (capacity − sediment) dissolved from the cell. */
 const DISSOLVE = 0.18
 /** Hard cap on incision per cell per sweep, in metres. */
-const MAX_CUT_M = 8
+const MAX_CUT_M = 12
 /** Fraction of over-capacity sediment dropped in place. */
 const DEPOSIT_RATE = 0.35
 /** Fraction of water (and all sediment) sent to the steepest downhill neighbour. */

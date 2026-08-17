@@ -320,12 +320,18 @@ describe('Donald bar: continentality', () => {
     const inlandThreshold = Math.max(5, Math.floor(maxDist / 2))
     const coastalThreshold = 3
 
+    // Same-latitude slice: polar coasts have huge seasonality for a
+    // different reason. Continentality is inland vs coastal at one band.
+    const y0 = Math.floor(tw.height * 0.35)
+    const y1 = Math.ceil(tw.height * 0.65)
     let inlandSum = 0
     let inlandCount = 0
     let coastalSum = 0
     let coastalCount = 0
     for (let i = 0; i < result.tempRange.length; i++) {
       if (landMask[i] < 0.5) continue
+      const y = Math.floor(i / tw.width)
+      if (y < y0 || y >= y1) continue
       if (coastDists[i] > inlandThreshold) {
         inlandSum += result.tempRange[i]
         inlandCount++

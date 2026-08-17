@@ -1,11 +1,10 @@
 /**
  * Pipeline step: plate assignment.
  *
- * Given a soft land mask and planet parameters, partitions the map into tectonic
- * plates. Each landmass is Voronoi-split on its own (small islands stay one
- * plate). Ocean cells share a residual ocean plate (`id = 0`). Each plate gets
- * a random drift velocity seeded from `seed + 1`. Boundaries are classified
- * by relative motion and lithology.
+ * Landmasses get 1–3 plates (islands stay one; a continent is not pizza).
+ * Ocean is Voronoi-split into several oceanic plates — never a residual
+ * `id = 0` sea. Distances are noise-warped so boundaries wiggle instead
+ * of tracing a stained-glass mesh. Velocities come from `seed + 1`.
  *
  * Deterministic: same mask + same seed → identical `plateId` / `plateVx` /
  * `plateVy`. Driven by Mulberry32 from `helpers.ts`; never touches `Math.random`.
@@ -15,7 +14,6 @@ import {
   idx,
   wrapX,
   createRng,
-  plateCountForArea,
   cellDistanceKm,
   D4_OFFSETS,
 } from './helpers'
@@ -28,9 +26,10 @@ import type { Plate, Boundary, BoundaryClass } from './types'
 /**
  * Result of running Voronoi plate assignment against a soft mask.
  *
- * - `plateId[i]` is `0` for ocean (residual ocean plate) or `1..N` for land.
+ * - `plateId[i]` is `1..N` for every cell (land and ocean). Never 0 after
+ *   a successful assignment with any land or sea.
  * - `plateVx[i]` / `plateVy[i]` are the drift velocity (cells / Myr) of the
- *   plate cell `i` belongs to; zeroed for ocean cells.
+ *   plate cell `i` belongs to.
  * - `boundaries` is dedup'd by unordered `(i, ji)` cell pair.
  */
 export interface PlateAssignment {
@@ -60,9 +59,11 @@ export function assignPlatesUnderMask(
   threshold: number = 0.5,
 ): PlateAssignment {
   const N = width * height
-  const plateId = new Int16Array(N) // 0 = ocean
+  const plateId = new Int16Array(N)
   const rngCenter = createRng(seed)
   const components = collectLandComponents(mask, width, height, threshold)
+  const warpAmp = Math.max(3, width / 28)
+  const warpSeed = (seed * 1103515245 + 12345) >>> 0
 
   // Plate ids are 1-indexed and unique across the whole map. Each
   // landmass is partitioned on its own so a global Voronoi does not
@@ -87,28 +88,31 @@ export function assignPlatesUnderMask(
       centersByPlate[nextPlateId] = centers[c]
       nextPlateId++
     }
-    for (let k = 0; k < cells.length; k++) {
-      const i = cells[k]
-      const x = i % width
-      const y = (i - x) / width
-      let nearest = localIds[0]
-      let nearestDist = Number.POSITIVE_INFINITY
+    paintVoronoi(plateId, cells, centers, localIds, width, height, planetRadiusKm, warpAmp, warpSeed)
+  }
+
+  const oceanCells: number[] = []
+  for (let i = 0; i < N; i++) {
+    if (mask[i] < threshold) oceanCells.push(i)
+  }
+  const oceanWant = oceanPlateCount(oceanCells.length)
+  if (oceanCells.length > 0 && oceanWant > 0) {
+    const centers = pickCenters(
+      oceanCells,
+      oceanWant,
+      rngCenter,
+      width,
+      height,
+      planetRadiusKm,
+    )
+    if (centers.length > 0) {
+      const localIds: number[] = []
       for (let c = 0; c < centers.length; c++) {
-        const d = cellDistanceKm(
-          x,
-          y,
-          centers[c].x,
-          centers[c].y,
-          width,
-          height,
-          planetRadiusKm,
-        )
-        if (d < nearestDist) {
-          nearestDist = d
-          nearest = localIds[c]
-        }
+        localIds.push(nextPlateId)
+        centersByPlate[nextPlateId] = centers[c]
+        nextPlateId++
       }
-      plateId[i] = nearest
+      paintVoronoi(plateId, oceanCells, centers, localIds, width, height, planetRadiusKm, warpAmp, warpSeed ^ 0x9e3779b9)
     }
   }
 
@@ -177,14 +181,12 @@ export function assignPlatesUnderMask(
   // -----------------------------------------------------------------
   const boundaries: Boundary[] = []
   const seenPair = new Set<number>()
-  const OCEAN_VX = 0
-  const OCEAN_VY = 0
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = idx(width, x, y)
       const myPlateId = plateId[i]
-      if (myPlateId === 0) continue // skip ocean for performance
+      if (myPlateId <= 0) continue
 
       const myVx = plates[myPlateId - 1].vx
       const myVy = plates[myPlateId - 1].vy
@@ -195,7 +197,7 @@ export function assignPlatesUnderMask(
         if (ny < 0 || ny >= height) continue
         const ji = idx(width, nx, ny)
         const theirPlateId = plateId[ji]
-        if (theirPlateId === myPlateId) continue
+        if (theirPlateId === myPlateId || theirPlateId <= 0) continue
 
         // Dedupe by unordered cell pair so (i, ji) and (ji, i) collide.
         const lo = i < ji ? i : ji
@@ -204,11 +206,8 @@ export function assignPlatesUnderMask(
         if (seenPair.has(key)) continue
         seenPair.add(key)
 
-        // Relative velocity: their plate minus mine, in cells/Myr.
-        const theirVx =
-          theirPlateId > 0 ? plates[theirPlateId - 1].vx : OCEAN_VX
-        const theirVy =
-          theirPlateId > 0 ? plates[theirPlateId - 1].vy : OCEAN_VY
+        const theirVx = plates[theirPlateId - 1].vx
+        const theirVy = plates[theirPlateId - 1].vy
         const relVx = theirVx - myVx
         const relVy = theirVy - myVy
 
@@ -269,9 +268,79 @@ const SMALL_LANDMASS_CELLS = 400
 
 function platesForComponent(area: number): number {
   if (area < SMALL_LANDMASS_CELLS) return 1
-  const byArea = plateCountForArea(area)
-  const bySize = Math.max(2, Math.floor(area / 200))
-  return Math.min(byArea, bySize)
+  if (area < 8000) return 2
+  return 3
+}
+
+function oceanPlateCount(area: number): number {
+  if (area < 80) return 1
+  if (area < 2000) return 3
+  if (area < 20000) return 4
+  return 5
+}
+
+function paintVoronoi(
+  plateId: Int16Array,
+  cells: number[],
+  centers: { x: number; y: number }[],
+  localIds: number[],
+  width: number,
+  height: number,
+  planetRadiusKm: number,
+  warpAmp: number,
+  warpSeed: number,
+): void {
+  for (let k = 0; k < cells.length; k++) {
+    const i = cells[k]
+    const x = i % width
+    const y = (i - x) / width
+    const wx = x + (valueNoise2(x * 0.08, y * 0.08, warpSeed) - 0.5) * warpAmp
+    const wy = Math.max(
+      0,
+      Math.min(height - 1, y + (valueNoise2(x * 0.08 + 40, y * 0.08, warpSeed + 19) - 0.5) * warpAmp),
+    )
+    let nearest = localIds[0]
+    let nearestDist = Number.POSITIVE_INFINITY
+    for (let c = 0; c < centers.length; c++) {
+      const d = cellDistanceKm(
+        wx,
+        wy,
+        centers[c].x,
+        centers[c].y,
+        width,
+        height,
+        planetRadiusKm,
+      )
+      if (d < nearestDist) {
+        nearestDist = d
+        nearest = localIds[c]
+      }
+    }
+    plateId[i] = nearest
+  }
+}
+
+function hash01(x: number, y: number, seed: number): number {
+  let n = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + seed
+  n = (n ^ (n >>> 13)) >>> 0
+  n = Math.imul(n, 1274126177)
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296
+}
+
+function valueNoise2(x: number, y: number, seed: number): number {
+  const x0 = Math.floor(x)
+  const y0 = Math.floor(y)
+  const fx = x - x0
+  const fy = y - y0
+  const u = fx * fx * (3 - 2 * fx)
+  const v = fy * fy * (3 - 2 * fy)
+  const n00 = hash01(x0, y0, seed)
+  const n10 = hash01(x0 + 1, y0, seed)
+  const n01 = hash01(x0, y0 + 1, seed)
+  const n11 = hash01(x0 + 1, y0 + 1, seed)
+  const nx0 = n00 + u * (n10 - n00)
+  const nx1 = n01 + u * (n11 - n01)
+  return nx0 + v * (nx1 - nx0)
 }
 
 function collectLandComponents(
@@ -420,7 +489,8 @@ function cleanupPlateSpeckle(
   for (let pass = 0; pass < passes; pass++) {
     next.set(plateId)
     for (let i = 0; i < n; i++) {
-      if (mask[i] < threshold || plateId[i] <= 0) continue
+      if (plateId[i] <= 0) continue
+      const land = mask[i] >= threshold
       const x = i % width
       const y = (i - x) / width
       const counts = new Map<number, number>()
@@ -430,7 +500,8 @@ function cleanupPlateSpeckle(
         const ny = y + dy
         if (ny < 0 || ny >= height) continue
         const j = idx(width, nx, ny)
-        if (mask[j] < threshold || plateId[j] <= 0) continue
+        if ((mask[j] >= threshold) !== land) continue
+        if (plateId[j] <= 0) continue
         counts.set(plateId[j], (counts.get(plateId[j]) ?? 0) + 1)
         total++
       }

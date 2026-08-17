@@ -79,7 +79,7 @@ const LAND_TEMP_MIN_C = -40
 const LAND_TEMP_MAX_C = 48
 const OCEAN_SST_MIN_C = -1.8
 const OCEAN_SST_MAX_C = 30
-const PRECIP_PER_KM_UPSLOPE = 0.45
+const PRECIP_PER_KM_UPSLOPE = 0.65
 const OCEAN_EVAP = 0.18
 const WINTER_PRECIP_SCALE = 0.5
 const EARTH_OBLIQUITY_DEG = 23.5
@@ -186,12 +186,12 @@ export function computeSeasonalClimate(
       const i = idx(width, x, y)
       const isOcean = mask[i] < threshold
       const coastality = 1 / (1 + coastDist[i] / COASTALITY_SCALE_CELLS)
-      const wet = isOcean ? base + 0.14 : base * (0.55 + 0.45 * coastality)
+      const wet = isOcean ? base + 0.14 : base * (0.80 + 0.20 * coastality)
       const upstreamI = idx(width, wrapX(x - 1, width), y)
-      const descending = !isOcean && orogeny.elev[i] < orogeny.elev[upstreamI]
-      const foehn = descending ? 0.6 : 1
-      summerMoist[i] = clampNum(summerMoist[i] + wet * 0.85 * foehn, 0, 1)
-      winterMoist[i] = clampNum(winterMoist[i] + wet * 0.85 * WINTER_PRECIP_SCALE * foehn, 0, 1)
+      const drop = orogeny.elev[upstreamI] - orogeny.elev[i]
+      const foehn = !isOcean && drop > 280 ? 0.78 : 1
+      summerMoist[i] = clampNum(summerMoist[i] + wet * foehn, 0, 1)
+      winterMoist[i] = clampNum(winterMoist[i] + wet * WINTER_PRECIP_SCALE * foehn, 0, 1)
     }
   }
 
@@ -209,7 +209,7 @@ export function computeSeasonalClimate(
  */
 function latitudePrecip(lat: number): number {
   const deg = Math.abs(lat) * (180 / Math.PI)
-  const itcz = Math.exp(-(deg * deg) / 196) * 0.48
+  const itcz = Math.exp(-(deg * deg) / 324) * 0.62
   const storm = Math.exp(-((deg - 50) * (deg - 50)) / 144) * 0.36
   const subtrop = Math.exp(-((deg - 27) * (deg - 27)) / 64) * 0.18
   return clampNum(0.1 + itcz + storm - subtrop, 0.05, 0.85)

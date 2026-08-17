@@ -429,3 +429,134 @@ export function checkMaskLock(
   }
   return issues
 }
+
+// ---------------------------------------------------------------------------
+// 9. Stained-glass plates: too much land is a plate edge.
+// ---------------------------------------------------------------------------
+
+/**
+ * A continent that is pizza-sliced has a huge fraction of land cells
+ * sitting on a land–land plate boundary. A suture or two is a thin
+ * belt; Voronoi stained glass is a mesh.
+ */
+export function checkPlateStainedGlass(world: World): Issue[] {
+  const { plateId, mask, meta } = world
+  const w = meta.width
+  const h = meta.height
+  const threshold = meta.threshold
+  let land = 0
+  let edge = 0
+  const evidence: { x: number; y: number }[] = []
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = idx(w, x, y)
+      if (mask[i] < threshold) continue
+      if (plateId[i] <= 0) continue
+      land++
+      let isEdge = false
+      for (const [dx, dy] of NEIGHBOR_OFFSETS_4) {
+        const nx = (x + dx + w) % w
+        const ny = y + dy
+        if (ny < 0 || ny >= h) continue
+        const j = ny * w + nx
+        if (mask[j] < threshold) continue
+        if (plateId[j] > 0 && plateId[j] !== plateId[i]) {
+          isEdge = true
+          break
+        }
+      }
+      if (isEdge) {
+        edge++
+        if (evidence.length < 12) evidence.push({ x, y })
+      }
+    }
+  }
+  if (land < 80) return []
+  const ratio = edge / land
+  if (ratio <= 0.12) return []
+  return [
+    {
+      id: 'plate-stained-glass',
+      severity: 'major',
+      title: 'Plates look like stained glass',
+      critique:
+        `${edge} of ${land} land cells (${(ratio * 100).toFixed(0)}%) ` +
+        `sit on a land–land plate edge. That is a Voronoi mesh, not ` +
+        `a handful of tectonic belts.`,
+      fix: 'Fewer plates per landmass, oceanic plates in the sea, wiggly sutures — not pizza.',
+      evidence,
+    },
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// 10. Uniform biome: one label ate the continent.
+// ---------------------------------------------------------------------------
+
+/**
+ * A grounded planet has more than one land biome. Skip cells still
+ * labelled ocean (unclassified test fixtures).
+ */
+export function checkUniformBiome(world: World): Issue[] {
+  const { biome, mask, meta } = world
+  const n = meta.width * meta.height
+  const counts = new Map<string, number>()
+  let land = 0
+  for (let i = 0; i < n; i++) {
+    if (mask[i] < meta.threshold) continue
+    const b = biome[i]
+    if (!b || b === 'ocean') continue
+    land++
+    counts.set(b, (counts.get(b) ?? 0) + 1)
+  }
+  if (land < 80) return []
+  let best = ''
+  let bestN = 0
+  for (const [id, c] of counts) {
+    if (c > bestN) {
+      bestN = c
+      best = id
+    }
+  }
+  const share = bestN / land
+  if (share <= 0.72) return []
+  return [
+    {
+      id: 'uniform-biome',
+      severity: 'major',
+      title: 'One biome ate the continent',
+      critique:
+        `${bestN} of ${land} classified land cells (${(share * 100).toFixed(0)}%) ` +
+        `are ${best}. A planet that size has coasts, interiors, and altitude.`,
+      fix: 'Raise interior rain, keep orographic shadows local, and do not default mid-latitudes to steppe.',
+      evidence: [],
+    },
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// 11. Every town is a capital.
+// ---------------------------------------------------------------------------
+
+/**
+ * Auto-founding should mix roles. Five or more seats of power and
+ * nothing else is a placement bug, not a civilisation.
+ */
+export function checkAllCapitals(world: World): Issue[] {
+  const cities = world.cities
+  if (cities.length < 5) return []
+  const allSeats = cities.every((c) => (c.role ?? 'seat_of_power') === 'seat_of_power')
+  if (!allSeats) return []
+  return [
+    {
+      id: 'all-capitals',
+      severity: 'major',
+      title: 'Every town is a seat of power',
+      critique:
+        `${cities.length} settlements and every one is a capital. ` +
+        `A continent has farms, ports, and mines — not 17 thrones.`,
+      fix: 'Quota mix: one seat, then farmland, fishing, mining, trade, pastoral.',
+      evidence: cities.slice(0, 8).map((c) => ({ x: c.x, y: c.y })),
+    },
+  ]
+}

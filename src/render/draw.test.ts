@@ -293,7 +293,7 @@ describe('inspectCell', () => {
     expect(view.display.tempRange).toBe('32°C')
   })
 
-  it('formats moisture to two decimals', () => {
+  it('formats moisture as a 0–1 index', () => {
     const world = makeWorld({
       width: 4,
       height: 4,
@@ -301,8 +301,8 @@ describe('inspectCell', () => {
       winterMoist: () => 0.123,
     })
     const view = inspectCell(world, 0, 0)
-    expect(view.display.moistSummer).toBe('0.46')
-    expect(view.display.moistWinter).toBe('0.12')
+    expect(view.display.moistSummer).toBe('0.46 · 0–1')
+    expect(view.display.moistWinter).toBe('0.12 · 0–1')
   })
 })
 

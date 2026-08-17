@@ -63,9 +63,9 @@ const PEAK_DIVERGENT_M = -500
 const PEAK_SHELF_M = 50
 
 /** CC Gaussian radius in cells (peak ~8 cells falloff). */
-const CC_RADIUS = 8
+const CC_RADIUS = 11
 /** CC Gaussian standard deviation in cells. */
-const CC_SIGMA = 3.0
+const CC_SIGMA = 4.2
 /** OC Gaussian radius in cells (peak ~6 cells falloff). */
 const OC_RADIUS = 6
 /** OC Gaussian standard deviation in cells. */

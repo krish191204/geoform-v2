@@ -345,6 +345,22 @@ describe('computeSeasonalClimate', () => {
     expect(violations).toBe(0)
   })
 
+  it('gives equatorial land enough summer moisture to grow forest, not only steppe', () => {
+    const w = 24
+    const h = 12
+    const world = flatWorld(w, h, (_x, y) => y >= 4 && y <= 7)
+    const result = run(world)
+    let wetLand = 0
+    let land = 0
+    for (let i = 0; i < result.summerMoist.length; i++) {
+      if (world.mask[i] < THRESHOLD) continue
+      land++
+      if (result.summerMoist[i] > 0.4) wetLand++
+    }
+    expect(land).toBeGreaterThan(0)
+    expect(wetLand / land).toBeGreaterThanOrEqual(0.5)
+  })
+
   it('reports sensible continental means on the standard continent', () => {
     // Sanity-check the conductor's measurements: every cell should
     // be finite and inside the clamp range, and the two means

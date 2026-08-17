@@ -121,7 +121,8 @@ export function updateChrome(refs: ChromeRefs, state: ShellStateView): void {
     const reachable = isActive || STAGES[stage].canEnter(state)
     btn.classList.toggle('active', isActive)
     btn.disabled = !reachable
-    btn.setAttribute('aria-current', isActive ? 'step' : 'false')
+    if (isActive) btn.setAttribute('aria-current', 'step')
+    else btn.removeAttribute('aria-current')
   }
   refs.clearSeaBtn.disabled = state.isProcessing
 }
@@ -136,8 +137,6 @@ export interface MapShellRefs {
   readonly globe: HTMLCanvasElement
   readonly overlay: HTMLElement
   readonly seasonBar: HTMLElement
-  readonly hudTool: HTMLElement
-  readonly hudSeason: HTMLElement
   readonly viewAtlas: HTMLButtonElement
   readonly viewPlanet: HTMLButtonElement
   readonly loading: HTMLElement
@@ -149,8 +148,6 @@ export function mountMapShell(): MapShellRefs {
   const globe = el('canvas', { id: 'globe', hidden: true })
   const overlay = el('div', { class: 'map-overlay', id: 'layers' })
   const seasonBar = el('div', { class: 'map-seasons' })
-  const hudTool = el('span', { id: 'hudTool' }, 'Land')
-  const hudSeason = el('span', { id: 'hudSeason' }, 'Summer')
   const viewAtlas = el(
     'button',
     { type: 'button', class: 'view-toggle active', id: 'viewAtlas', title: 'Flat atlas' },
@@ -169,7 +166,7 @@ export function mountMapShell(): MapShellRefs {
     const detail: ViewChangeDetail = { view: 'planet' }
     fire(APP_EVENTS.VIEW_CHANGE, detail)
   })
-  const hud = el('div', { class: 'map-hud' }, hudSeason, viewAtlas, viewPlanet, hudTool)
+  const hud = el('div', { class: 'map-hud' }, viewAtlas, viewPlanet)
   const loading = el('div', { class: 'loading', id: 'loading', hidden: true }, 'Grounding the doodle…')
   const hint = el('div', { class: 'map-hint', id: 'mapHint' }, 'Paint land on the empty ocean')
 
@@ -190,8 +187,6 @@ export function mountMapShell(): MapShellRefs {
     globe,
     overlay,
     seasonBar,
-    hudTool,
-    hudSeason,
     viewAtlas,
     viewPlanet,
     loading,
@@ -239,14 +234,6 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
     refs.seasonBar.append(btn)
   }
 
-  refs.hudTool.textContent = state.world
-    ? (LAYER_CHIPS.find((chip) => chip.id === state.layer)?.label ?? 'Atlas')
-    : toolHudLabel(state.tool)
-  refs.hudSeason.textContent = state.world
-    ? state.season === 'summer'
-      ? 'Summer'
-      : 'Winter'
-    : 'Sketch'
   refs.viewAtlas.classList.toggle('active', state.viewMode === 'atlas')
   refs.viewPlanet.classList.toggle('active', state.viewMode === 'planet')
   refs.viewPlanet.disabled = !state.world
@@ -255,23 +242,6 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
   refs.loading.hidden = !state.isProcessing
   const empty = !hasAnyLand(state.mask, state.meta.threshold) && !state.world
   refs.hint.hidden = !empty || state.stage !== 'sketch'
-}
-
-function toolHudLabel(tool: Tool): string {
-  switch (tool) {
-    case 'draw-land':
-      return 'Land'
-    case 'erase-land':
-      return 'Ocean'
-    case 'inspect':
-      return 'Inspect'
-    case 'place-city':
-      return 'Place city'
-    case 'remove-city':
-      return 'Remove city'
-    default:
-      return 'Cursor'
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +258,7 @@ export interface InspectorRefs {
 
 export function mountInspector(): InspectorRefs {
   const coach = el('div', { id: 'coach', class: 'coach-card', role: 'status', 'aria-live': 'polite' })
-  coach.append(el('p', { class: 'coach-empty' }, 'Ready'))
+  coach.append(el('p', { class: 'coach-empty' }, 'Empty ocean. Paint land. Critique when the blob looks like a continent.'))
   const workHost = el('div', { id: 'stageWork', class: 'stage-work' })
   const inspect = el('div', { id: 'inspect' })
   inspect.append(
@@ -414,7 +384,7 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
     type: 'range',
     min: 2000,
     max: 50000,
-    step: 50,
+    step: 1,
     value: state.meta.planetRadiusKm,
   }) as HTMLInputElement
   radiusSlider.addEventListener('input', () => {
@@ -635,8 +605,10 @@ function renderProgress(list: HTMLElement, completedCount: number): void {
 // Inspect markup
 // ---------------------------------------------------------------------------
 
-export function emptyInspectHint(): string {
-  return `<p class="hint">Hover the map. After Make sense, this cell is real geography.</p>`
+export function emptyInspectHint(hasWorld = false): string {
+  return hasWorld
+    ? `<p class="hint">Hover a cell. This readout is the derived geography.</p>`
+    : `<p class="hint">Hover the map. After Make sense, this cell is real geography.</p>`
 }
 
 export function sketchInspectHtml(
@@ -674,8 +646,8 @@ export function worldInspectHtml(display: {
       <dt>Summer</dt><dd>${display.tempSummer}</dd>
       <dt>Winter</dt><dd>${display.tempWinter}</dd>
       <dt>Range</dt><dd>${display.tempRange}</dd>
-      <dt>Summer rain</dt><dd>${display.moistSummer}</dd>
-      <dt>Winter rain</dt><dd>${display.moistWinter}</dd>
+      <dt>Summer moisture</dt><dd>${display.moistSummer}</dd>
+      <dt>Winter moisture</dt><dd>${display.moistWinter}</dd>
       <dt>Biome</dt><dd>${display.biome}</dd>
     </dl>
   `

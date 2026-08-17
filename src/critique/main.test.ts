@@ -484,6 +484,42 @@ describe('critiqueWorld', () => {
     expect(hasMajor).toBe(true)
     expect(r.issues[0].severity).toBe('critical')
   })
+
+  it('flags stained-glass plates as major', () => {
+    const w = makeWorld()
+    const w_ = w.meta.width
+    const h = w.meta.height
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w_; x++) {
+        const k = y * w_ + x
+        w.mask[k] = 0.9
+        w.plateId[k] = ((x + y) % 8) + 1
+      }
+    }
+    const r = critiqueWorld(w)
+    expect(r.issues.some((i) => i.id === 'plate-stained-glass')).toBe(true)
+    expect(r.score).toBeLessThanOrEqual(90)
+  })
+
+  it('flags a uniform steppe continent as major', () => {
+    const w = makeWorld()
+    for (let i = 0; i < w.biome.length; i++) w.biome[i] = 'steppe'
+    const r = critiqueWorld(w)
+    expect(r.issues.some((i) => i.id === 'uniform-biome')).toBe(true)
+  })
+
+  it('flags an all-capital city list as major', () => {
+    const w = makeWorld()
+    w.cities = Array.from({ length: 8 }, (_, i) => ({
+      x: i,
+      y: 1,
+      name: `Cap${i}`,
+      seasonal: 0.5,
+      role: 'seat_of_power' as const,
+    }))
+    const r = critiqueWorld(w)
+    expect(r.issues.some((i) => i.id === 'all-capitals')).toBe(true)
+  })
 })
 
 // ---------------------------------------------------------------------------

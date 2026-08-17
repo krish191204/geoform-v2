@@ -21,6 +21,9 @@ import {
   checkContinentality,
   checkFluxOnMaxima,
   checkMaskLock,
+  checkPlateStainedGlass,
+  checkUniformBiome,
+  checkAllCapitals,
 } from './analyzeWorld'
 
 // ---------------------------------------------------------------------------
@@ -657,6 +660,9 @@ export function critiqueWorld(world: World): CritiqueResult {
   issues.push(...checkRainShadow(world))
   issues.push(...checkContinentality(world))
   issues.push(...checkFluxOnMaxima(world))
+  issues.push(...checkPlateStainedGlass(world))
+  issues.push(...checkUniformBiome(world))
+  issues.push(...checkAllCapitals(world))
 
   if (PRIOR && PRIOR.meta.width === world.meta.width && PRIOR.meta.height === world.meta.height) {
     issues.push(...checkMaskLock(PRIOR.mask, world, PRIOR.meta.threshold))

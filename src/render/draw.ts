@@ -91,7 +91,7 @@ function fmtCelsius(v: number | undefined): string {
 }
 
 function fmtMoist(v: number | undefined): string {
-  return v !== undefined && Number.isFinite(v) ? v.toFixed(2) : '—'
+  return v !== undefined && Number.isFinite(v) ? `${v.toFixed(2)} · 0–1` : '—'
 }
 
 function fmtPlateId(v: number | undefined): string {

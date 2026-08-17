@@ -188,6 +188,34 @@ describe('assignPlatesUnderMask', () => {
     expect([...north][0]).not.toBe([...south][0])
   })
 
+  it('assigns every ocean cell a non-zero plateId and uses more than one ocean plate', () => {
+    const { mask, width, height } = makeVariedMask()
+    const result = assignPlatesUnderMask(mask, width, height, SEED, 6371, 23.5)
+    const oceanIds = new Set<number>()
+    const N = width * height
+    for (let i = 0; i < N; i++) {
+      if (!isLand(mask[i])) {
+        expect(result.plateId[i]).toBeGreaterThan(0)
+        oceanIds.add(result.plateId[i])
+      }
+    }
+    expect(oceanIds.size).toBeGreaterThanOrEqual(2)
+  })
+
+  it('keeps a typical continent on at most three land plates', () => {
+    const mask = emptyMask(WIDTH, HEIGHT)
+    for (let y = 6; y < 26; y++) {
+      for (let x = 8; x < 56; x++) mask[y * WIDTH + x] = 1
+    }
+    const result = assignPlatesUnderMask(mask, WIDTH, HEIGHT, 5, 6371, 23.5)
+    const landIds = new Set<number>()
+    for (let i = 0; i < mask.length; i++) {
+      if (mask[i] >= 0.5) landIds.add(result.plateId[i])
+    }
+    expect(landIds.size).toBeGreaterThanOrEqual(1)
+    expect(landIds.size).toBeLessThanOrEqual(3)
+  })
+
   it('produces identical plateId/plateVx/plateVy for the same world and seed', () => {
     const { mask, width, height } = makeVariedMask()
     const a = assignPlatesUnderMask(mask, width, height, 99, 6371, 23.5)

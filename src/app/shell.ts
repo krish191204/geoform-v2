@@ -230,27 +230,12 @@ export function mountApp(root: HTMLElement): void {
     state.issues = []
   }
 
-  function inspectAt(x: number, y: number, speak = false): void {
+  function inspectAt(x: number, y: number): void {
     const i = y * state.meta.width + x
     if (state.world && state.stage !== 'sketch') {
       const cell = inspectCell(state.world, x, y)
       const land = state.world.mask[i] >= state.world.meta.threshold
       flags.inspectHtml = worldInspectHtml(cell.display, x, y, land)
-      if (speak) {
-        announceCoach({
-          kind: 'inspector.cell',
-          x,
-          y,
-          elevM: cell.elev ?? NaN,
-          plateId: cell.plateId ?? NaN,
-          tempSummerC: cell.tempSummer ?? NaN,
-          tempWinterC: cell.tempWinter ?? NaN,
-          tempRangeC: cell.tempRange ?? NaN,
-          moistSummer: cell.moistSummer ?? NaN,
-          moistWinter: cell.moistWinter ?? NaN,
-          biome: cell.biome,
-        })
-      }
     } else {
       const land = Boolean(flags.mask && flags.mask[i] >= state.meta.threshold)
       flags.inspectHtml = sketchInspectHtml(x, y, land)
@@ -273,7 +258,7 @@ export function mountApp(root: HTMLElement): void {
       if (!cell) return
       const { x, y } = cell
 
-      inspectAt(x, y, state.tool === 'inspect' && isDown)
+      inspectAt(x, y)
       if (state.tool === 'inspect') return
       if (!isDown && !painting) return
 
@@ -293,19 +278,7 @@ export function mountApp(root: HTMLElement): void {
             )
           } else if (result.city) {
             result.city.role = inferSettlementRole(state.world, x, y)
-            announceCoach({
-              kind: 'inspector.cell',
-              x,
-              y,
-              elevM: state.world.elev[y * state.meta.width + x],
-              plateId: state.world.plateId[y * state.meta.width + x],
-              tempSummerC: state.world.summer[y * state.meta.width + x],
-              tempWinterC: state.world.winter[y * state.meta.width + x],
-              tempRangeC: state.world.tempRange[y * state.meta.width + x],
-              moistSummer: state.world.summerMoist[y * state.meta.width + x],
-              moistWinter: state.world.winterMoist[y * state.meta.width + x],
-              biome: String(state.world.biome[y * state.meta.width + x]),
-            })
+            announce('success', `${result.city.name} founded.`)
           }
         } else {
           const result = removeNearestCity(state.world, x, y)
@@ -330,8 +303,9 @@ export function mountApp(root: HTMLElement): void {
         strength: state.strength,
         tool: state.tool,
       })
-      inspectAt(x, y, false)
+      inspectAt(x, y)
       updateChrome(chrome, buildView(bundle))
+      updateMapShell(map, buildView(bundle))
       updateInspector(inspector, buildView(bundle))
       if (toolsRefs) updateStageTools(toolsRefs, buildView(bundle))
       requestPaint()
@@ -369,7 +343,7 @@ export function mountApp(root: HTMLElement): void {
         planet.render()
       } else if (state.world) {
         const cell = planet.pick(e.clientX, e.clientY, state.world)
-        if (cell) inspectAt(cell.x, cell.y, false)
+        if (cell) inspectAt(cell.x, cell.y)
       }
     })
     globe.addEventListener('pointerup', (e) => {
@@ -380,7 +354,7 @@ export function mountApp(root: HTMLElement): void {
       if (!moved) {
         const cell = planet.pick(e.clientX, e.clientY, state.world)
         if (cell) {
-          inspectAt(cell.x, cell.y, state.tool === 'inspect')
+          inspectAt(cell.x, cell.y)
           if (state.tool === 'place-city' || state.tool === 'remove-city') {
             const { x, y } = cell
             if (state.tool === 'place-city') {
@@ -393,6 +367,7 @@ export function mountApp(root: HTMLElement): void {
                 )
               } else if (result.city) {
                 result.city.role = inferSettlementRole(state.world, x, y)
+                announce('success', `${result.city.name} founded.`)
               }
             } else {
               const result = removeNearestCity(state.world, x, y)
@@ -421,7 +396,7 @@ export function mountApp(root: HTMLElement): void {
     const view = buildView(bundle)
     if (target === state.stage) return
     if (!STAGES[target].canEnter(view)) {
-      announce('warn', `Cannot enter ${target} yet.`)
+      announce('warn', 'That stage is not open yet.')
       return
     }
     const from = state.stage
@@ -545,6 +520,7 @@ export function mountApp(root: HTMLElement): void {
       flags.makeSenseComplete = true
       flags.pipelineStep = 7
       flags.layer = 'relief'
+      flags.inspectHtml = emptyInspectHint(true)
       state.isProcessing = false
       const riverCells = world.rivers.reduce((n, v) => n + v, 0)
       let rangeSum = 0
@@ -683,11 +659,5 @@ export function mountApp(root: HTMLElement): void {
     width: state.meta.width,
     height: state.meta.height,
     landCells: 0,
-  })
-  announceCoach({
-    kind: 'app.boot',
-    stage: 'sketch',
-    resumedFromMask: false,
-    resumedFromWorld: false,
   })
 }
