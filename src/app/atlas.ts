@@ -7,8 +7,8 @@
 
 import type { Issue, Layer, World, WorldMeta } from '../world/types'
 import {
+  bakeWorldImageDataSmooth,
   clientToContainedBitmap,
-  draw,
   type Season,
 } from '../render/draw'
 import { drawIssueOverlays } from '../critique/preview'
@@ -85,27 +85,34 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
   ctx.fillRect(0, 0, cw, ch)
 
   const { meta } = opts
+  const aspect = meta.width / Math.max(1, meta.height)
+  const box = letterbox(cw, ch, aspect)
+
   const image = opts.world
-    ? draw(opts.world, opts.season, opts.layer, {
+    ? bakeWorldImageDataSmooth(opts.world, opts.season, opts.layer, box.w, {
         showRivers: opts.layer === 'relief' || opts.layer === 'biome',
-        scale: opts.layer === 'plates' || opts.layer === 'biome' ? 1 : 2,
-        smooth: opts.layer !== 'plates' && opts.layer !== 'biome',
         bakeCities: false,
       })
-    : maskImageData(opts.mask, meta)
+    : upsampleMask(opts.mask, meta, box.w, box.h)
 
-  const smooth =
-    Boolean(opts.world) && opts.layer !== 'plates' && opts.layer !== 'biome'
-  const box = blitContained(ctx, image, cw, ch, smooth)
+  const tmp = document.createElement('canvas')
+  tmp.width = image.width
+  tmp.height = image.height
+  const tctx = tmp.getContext('2d')
+  if (!tctx) return
+  tctx.putImageData(image, 0, 0)
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(tmp, box.x, box.y, box.w, box.h)
 
-  if (opts.issues && opts.issues.length > 0 && box) {
+  if (opts.issues && opts.issues.length > 0) {
     ctx.save()
     ctx.translate(box.x, box.y)
     drawIssueOverlays(ctx, box.w, box.h, meta.width, meta.height, [...opts.issues], null)
     ctx.restore()
   }
 
-  if (opts.showCities && opts.world && box) {
+  if (opts.showCities && opts.world) {
     paintCities(ctx, opts.world, box)
   }
 }
@@ -117,48 +124,64 @@ interface BlitBox {
   h: number
 }
 
-function blitContained(
-  ctx: CanvasRenderingContext2D,
-  image: ImageData,
-  cw: number,
-  ch: number,
-  smooth: boolean,
-): BlitBox | null {
-  const bw = image.width
-  const bh = image.height
-  if (bw <= 0 || bh <= 0) return null
-  const scale = Math.min(cw / bw, ch / bh)
-  const dw = Math.max(1, Math.floor(bw * scale))
-  const dh = Math.max(1, Math.floor(bh * scale))
-  const ox = Math.floor((cw - dw) / 2)
-  const oy = Math.floor((ch - dh) / 2)
-
-  const tmp = document.createElement('canvas')
-  tmp.width = bw
-  tmp.height = bh
-  const tctx = tmp.getContext('2d')
-  if (!tctx) return null
-  tctx.putImageData(image, 0, 0)
-  ctx.imageSmoothingEnabled = smooth
-  if (smooth) ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(tmp, ox, oy, dw, dh)
-  return { x: ox, y: oy, w: dw, h: dh }
+function letterbox(cw: number, ch: number, aspect: number): BlitBox {
+  let dw: number
+  let dh: number
+  if (cw / Math.max(1, ch) > aspect) {
+    dh = ch
+    dw = Math.max(1, Math.round(ch * aspect))
+  } else {
+    dw = cw
+    dh = Math.max(1, Math.round(cw / Math.max(1e-6, aspect)))
+  }
+  return {
+    x: Math.floor((cw - dw) / 2),
+    y: Math.floor((ch - dh) / 2),
+    w: dw,
+    h: dh,
+  }
 }
 
-function maskImageData(mask: Float32Array | null, meta: WorldMeta): ImageData {
+function upsampleMask(
+  mask: Float32Array | null,
+  meta: WorldMeta,
+  outW: number,
+  outH: number,
+): ImageData {
   const w = meta.width
   const h = meta.height
-  const image = new ImageData(w, h)
+  const cw = Math.max(1, outW)
+  const ch = Math.max(1, outH)
+  const image = new ImageData(cw, ch)
   const data = image.data
   const threshold = meta.threshold
-  for (let i = 0; i < w * h; i++) {
-    const land = mask ? mask[i] >= threshold : false
-    const rgb = land ? LAND_RGB : SEA_RGB
-    const o = i * 4
-    data[o] = rgb[0]
-    data[o + 1] = rgb[1]
-    data[o + 2] = rgb[2]
-    data[o + 3] = 255
+  const wrap = (x: number) => ((x % w) + w) % w
+  const sample = (xf: number, yf: number): number => {
+    if (!mask) return 0
+    const x0 = wrap(Math.floor(xf))
+    const y0 = Math.max(0, Math.min(h - 1, Math.floor(yf)))
+    const x1 = wrap(x0 + 1)
+    const y1 = Math.max(0, Math.min(h - 1, y0 + 1))
+    const fx = xf - Math.floor(xf)
+    const fy = yf - Math.floor(yf)
+    const v00 = mask[y0 * w + x0]
+    const v10 = mask[y0 * w + x1]
+    const v01 = mask[y1 * w + x0]
+    const v11 = mask[y1 * w + x1]
+    return (v00 * (1 - fx) + v10 * fx) * (1 - fy) + (v01 * (1 - fx) + v11 * fx) * fy
+  }
+  for (let py = 0; py < ch; py++) {
+    const yf = ((py + 0.5) * h) / ch
+    for (let px = 0; px < cw; px++) {
+      const xf = ((px + 0.5) * w) / cw
+      const t = sample(xf, yf)
+      const k = Math.max(0, Math.min(1, (t - threshold + 0.15) / 0.3))
+      const o = (py * cw + px) * 4
+      data[o] = Math.round(SEA_RGB[0] + (LAND_RGB[0] - SEA_RGB[0]) * k)
+      data[o + 1] = Math.round(SEA_RGB[1] + (LAND_RGB[1] - SEA_RGB[1]) * k)
+      data[o + 2] = Math.round(SEA_RGB[2] + (LAND_RGB[2] - SEA_RGB[2]) * k)
+      data[o + 3] = 255
+    }
   }
   return image
 }

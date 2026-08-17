@@ -30,12 +30,25 @@ const ROLES: readonly SettlementRole[] = [
   'pastoral',
 ]
 
+/** Auto-fill never founds a second throne. Weights scale to leftover slots. */
+const MIX_PLAN: readonly { role: SettlementRole; weight: number }[] = [
+  { role: 'farmland', weight: 2 },
+  { role: 'fishing', weight: 1 },
+  { role: 'mining', weight: 1 },
+  { role: 'trade', weight: 1 },
+  { role: 'pastoral', weight: 1 },
+  { role: 'hunting', weight: 1 },
+]
+
+const NON_SEAT_ROLES: readonly SettlementRole[] = MIX_PLAN.map((p) => p.role)
+
 const MIN_SUIT = 0.28
 const ALPINE_M = 3500
 const MAX_TOWNS = 48
-const MIN_SPACING = 5
+const MIN_SPACING = 4
 const MAX_SPACING = 16
 const DEFAULT_COVERAGE = 0.35
+const MIX_FLOOR = 1 + MIX_PLAN.reduce((s, p) => s + p.weight, 0)
 
 function wrapX(x: number, w: number): number {
   return ((x % w) + w) % w
@@ -150,10 +163,26 @@ export function scoreSettlementRole(
   return Math.max(0, Math.min(1, score))
 }
 
-export function inferSettlementRole(world: World, x: number, y: number): SettlementRole {
+export function worldHasSeat(world: World): boolean {
+  return world.cities.some((c) => c.role === 'seat_of_power')
+}
+
+/**
+ * Best-fit role at a cell. Auto-fill and Found city skip `seat_of_power`
+ * once a capital already exists — otherwise argmax always picks the throne
+ * because that role scores high on any decent site.
+ */
+export function inferSettlementRole(
+  world: World,
+  x: number,
+  y: number,
+  opts: { allowSeat?: boolean } = {},
+): SettlementRole {
+  const allowSeat = opts.allowSeat ?? !worldHasSeat(world)
+  const roles = allowSeat ? ROLES : NON_SEAT_ROLES
   let best: SettlementRole = 'trade'
   let bestScore = -1
-  for (const role of ROLES) {
+  for (const role of roles) {
     const s = scoreSettlementRole(world, x, y, role)
     if (s > bestScore) {
       bestScore = s
@@ -161,6 +190,33 @@ export function inferSettlementRole(world: World, x: number, y: number): Settlem
     }
   }
   return best
+}
+
+/** Largest-remainder mix of non-seat roles for `remaining` slots. */
+export function mixQuotas(remaining: number): Record<SettlementRole, number> {
+  const out = {} as Record<SettlementRole, number>
+  for (const role of ROLES) out[role] = 0
+  if (remaining <= 0) return out
+  const totalW = MIX_PLAN.reduce((s, p) => s + p.weight, 0)
+  const parts = MIX_PLAN.map((p) => {
+    const exact = (remaining * p.weight) / totalW
+    const n = Math.floor(exact)
+    return { role: p.role, n, frac: exact - n }
+  })
+  let assigned = 0
+  for (const p of parts) {
+    out[p.role] = p.n
+    assigned += p.n
+  }
+  const byFrac = [...parts].sort((a, b) => b.frac - a.frac)
+  let i = 0
+  while (assigned < remaining) {
+    const p = byFrac[i % byFrac.length]
+    out[p.role]++
+    assigned++
+    i++
+  }
+  return out
 }
 
 function countInhabitable(world: World): number {
@@ -216,10 +272,15 @@ function collectSites(world: World): { x: number; y: number; score: number }[] {
 
 /**
  * Place a mix of towns covering `coverage` of inhabitable land.
+ * One seat of power, then farmland / fishing / mining / trade / pastoral / hunting.
  * Does not mutate `world.cities` — the caller appends.
  */
 export function suggestSettlementsCovering(world: World, coverage = DEFAULT_COVERAGE): City[] {
-  const target = Math.max(1, Math.round(Math.max(0, Math.min(1, coverage)) * capacity(world)))
+  const packed = capacity(world)
+  const target = Math.max(
+    Math.min(MIX_FLOOR, packed),
+    Math.round(Math.max(0, Math.min(1, coverage)) * packed),
+  )
   if (target <= 0 || countInhabitable(world) === 0) return []
   const inhabitable = countInhabitable(world)
   const spacing = Math.max(
@@ -231,6 +292,7 @@ export function suggestSettlementsCovering(world: World, coverage = DEFAULT_COVE
   const scratch = [...world.cities]
   const w = world.meta.width
   const used = new Set(scratch.map((c) => c.name))
+  const occupied = new Set(scratch.map((c) => `${c.x},${c.y}`))
 
   const nextName = (): string => {
     for (let i = 0; i < 400; i++) {
@@ -249,20 +311,41 @@ export function suggestSettlementsCovering(world: World, coverage = DEFAULT_COVE
       role,
     }
     used.add(city.name)
+    occupied.add(`${c.x},${c.y}`)
     placed.push(city)
     scratch.push(city)
   }
 
-  for (const c of collectCandidates(world, 'seat_of_power')) {
-    if (tooClose(scratch, c.x, c.y, w, spacing)) continue
-    take(c, 'seat_of_power')
-    break
+  const tryPlace = (c: { x: number; y: number; score: number }, role: SettlementRole): boolean => {
+    if (placed.length >= target) return false
+    if (occupied.has(`${c.x},${c.y}`)) return false
+    if (tooClose(scratch, c.x, c.y, w, spacing)) return false
+    take(c, role)
+    return true
   }
 
+  if (!worldHasSeat({ ...world, cities: scratch })) {
+    for (const c of collectCandidates(world, 'seat_of_power')) {
+      if (tryPlace(c, 'seat_of_power')) break
+    }
+  }
+
+  const quotas = mixQuotas(target - placed.length)
+  for (const { role } of MIX_PLAN) {
+    let need = quotas[role]
+    if (need <= 0) continue
+    for (const c of collectCandidates(world, role)) {
+      if (need <= 0 || placed.length >= target) break
+      if (tryPlace(c, role)) need--
+    }
+  }
+
+  const fillWorld = { ...world, cities: scratch }
   for (const c of collectSites(world)) {
     if (placed.length >= target) break
-    if (tooClose(scratch, c.x, c.y, w, spacing)) continue
-    take(c, inferSettlementRole(world, c.x, c.y))
+    if (tryPlace(c, inferSettlementRole(fillWorld, c.x, c.y, { allowSeat: false }))) {
+      fillWorld.cities = scratch
+    }
   }
   return placed
 }

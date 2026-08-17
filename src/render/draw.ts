@@ -285,6 +285,44 @@ function elevAt(world: World, x: number, y: number): number {
   return world.elev[cy * w + cx]
 }
 
+function maskAt(world: World, x: number, y: number): number {
+  const { width: w, height: h } = world.meta
+  const cx = wrapX(x, w)
+  const cy = Math.max(0, Math.min(h - 1, y))
+  return world.mask[cy * w + cx]
+}
+
+/** Bilinear elevation so globe bump/displacement is not a voxel lattice. */
+function sampleElev(world: World, x: number, y: number): number {
+  const { width: w, height: h } = world.meta
+  const x0 = wrapX(Math.floor(x), w)
+  const y0 = Math.max(0, Math.min(h - 1, Math.floor(y)))
+  const x1 = wrapX(x0 + 1, w)
+  const y1 = Math.max(0, Math.min(h - 1, y0 + 1))
+  const fx = x - Math.floor(x)
+  const fy = y - Math.floor(y)
+  const e00 = world.elev[y0 * w + x0]
+  const e10 = world.elev[y0 * w + x1]
+  const e01 = world.elev[y1 * w + x0]
+  const e11 = world.elev[y1 * w + x1]
+  return lerp(lerp(e00, e10, fx), lerp(e01, e11, fx), fy)
+}
+
+function sampleMask(world: World, x: number, y: number): number {
+  const { width: w, height: h } = world.meta
+  const x0 = wrapX(Math.floor(x), w)
+  const y0 = Math.max(0, Math.min(h - 1, Math.floor(y)))
+  const x1 = wrapX(x0 + 1, w)
+  const y1 = Math.max(0, Math.min(h - 1, y0 + 1))
+  const fx = x - Math.floor(x)
+  const fy = y - Math.floor(y)
+  return lerp(
+    lerp(maskAt(world, x0, y0), maskAt(world, x1, y0), fx),
+    lerp(maskAt(world, x0, y1), maskAt(world, x1, y1), fx),
+    fy,
+  )
+}
+
 /** Characteristic relief so rolling hills and ranges both shade. Elev is metres. */
 const SHADE_M = 600
 /** Flux above this tints as a tributary (matches hydrology river cutoff). */
@@ -477,7 +515,7 @@ export function draw(
         data[o + 3] = 255
       }
     }
-  } else if (smooth && layer !== 'plates' && layer !== 'biome') {
+  } else if (smooth && layer !== 'plates') {
     for (let py = 0; py < outH; py++) {
       const yf = py / scale
       for (let px = 0; px < outW; px++) {
@@ -506,6 +544,7 @@ export function draw(
   }
 
   if (bakeCities) stampCities(image, world, scale)
+  applyVignette(image)
   return image
 }
 
@@ -529,6 +568,25 @@ function sampleBilinear(
   const c01 = cellColor(world, season, layer, x0, y1, showRivers)
   const c11 = cellColor(world, season, layer, x1, y1, showRivers)
   return mix(mix(c00, c10, fx), mix(c01, c11, fx), fy)
+}
+
+/** Soft polar/limb darkening so the atlas doesn't read as a flat stamp. */
+function applyVignette(image: ImageData): void {
+  const cw = image.width
+  const ch = image.height
+  const data = image.data
+  for (let py = 0; py < ch; py++) {
+    const ny = ((py + 0.5) / ch) * 2 - 1
+    for (let px = 0; px < cw; px++) {
+      const nx = ((px + 0.5) / cw) * 2 - 1
+      const v = Math.min(1, Math.sqrt(nx * nx * 0.7 + ny * ny * 0.95))
+      const dark = 1 - v * v * 0.18
+      const o = (py * cw + px) * 4
+      data[o] = Math.round(data[o] * dark)
+      data[o + 1] = Math.round(data[o + 1] * dark)
+      data[o + 2] = Math.round(data[o + 2] * dark)
+    }
+  }
 }
 
 function stampCities(image: ImageData, world: World, scale: number): void {
@@ -574,7 +632,7 @@ export function bakeWorldImageDataSmooth(
   const image = new ImageData(cw, ch)
   const data = image.data
   const scale = cw / w
-  const smooth = layer !== 'plates' && layer !== 'biome'
+  const smooth = layer !== 'plates'
   for (let py = 0; py < ch; py++) {
     const yf = py / scale
     for (let px = 0; px < cw; px++) {
@@ -597,23 +655,24 @@ export function bakeWorldImageDataSmooth(
     }
   }
   if (options.bakeCities ?? true) stampCities(image, world, scale)
+  applyVignette(image)
   return image
 }
 
-/** Grey bump: ocean dark, highlands bright. Elev is metres. */
+/** Grey bump: ocean dark, highlands bright. Elev is metres. Bilinear so the globe is not voxels. */
 export function bakeBumpImageData(world: World, scale = 2): ImageData {
   const { width: w, height: h } = world.meta
   const cw = Math.max(1, w * scale)
   const ch = Math.max(1, h * scale)
   const image = new ImageData(cw, ch)
   const data = image.data
+  const threshold = world.meta.threshold
   for (let py = 0; py < ch; py++) {
-    const y = Math.min(h - 1, (py / scale) | 0)
+    const yf = (py + 0.5) / scale
     for (let px = 0; px < cw; px++) {
-      const x = Math.min(w - 1, (px / scale) | 0)
-      const i = y * w + x
-      const e = world.elev[i]
-      const ocean = isOceanCell(world, i)
+      const xf = (px + 0.5) / scale
+      const e = sampleElev(world, xf, yf)
+      const ocean = sampleMask(world, xf, yf) < threshold
       const v = ocean
         ? Math.round(Math.max(0, 18 + (e < 0 ? (1 + e / 4000) * 50 : 40)))
         : Math.round(90 + clamp(e / 8000, 0, 1) * 165)
@@ -634,15 +693,16 @@ export function bakeNormalImageData(world: World, scale = 2): ImageData {
   const ch = Math.max(1, h * scale)
   const image = new ImageData(cw, ch)
   const data = image.data
+  const threshold = world.meta.threshold
   for (let py = 0; py < ch; py++) {
-    const y = Math.min(h - 1, (py / scale) | 0)
+    const yf = (py + 0.5) / scale
     for (let px = 0; px < cw; px++) {
-      const x = Math.min(w - 1, (px / scale) | 0)
-      const i = y * w + x
-      const e = world.elev[i]
-      const dx = (elevAt(world, x + 1, y) - elevAt(world, x - 1, y)) / 400
-      const dy = (elevAt(world, x, y + 1) - elevAt(world, x, y - 1)) / 400
-      const dz = isOceanCell(world, i) ? 0.45 : 0.85 + clamp(e / 8000, 0, 1) * 0.4
+      const xf = (px + 0.5) / scale
+      const e = sampleElev(world, xf, yf)
+      const dx = (sampleElev(world, xf + 1, yf) - sampleElev(world, xf - 1, yf)) / 400
+      const dy = (sampleElev(world, xf, yf + 1) - sampleElev(world, xf, yf - 1)) / 400
+      const ocean = sampleMask(world, xf, yf) < threshold
+      const dz = ocean ? 0.45 : 0.85 + clamp(e / 8000, 0, 1) * 0.4
       const len = Math.hypot(dx, dy, dz) || 1
       const o = (py * cw + px) * 4
       data[o] = Math.round((-dx / len) * 0.5 * 255 + 128)
@@ -661,13 +721,14 @@ export function bakeDisplacementImageData(world: World, scale = 2): ImageData {
   const ch = Math.max(1, h * scale)
   const image = new ImageData(cw, ch)
   const data = image.data
+  const threshold = world.meta.threshold
   for (let py = 0; py < ch; py++) {
-    const y = Math.min(h - 1, (py / scale) | 0)
+    const yf = (py + 0.5) / scale
     for (let px = 0; px < cw; px++) {
-      const x = Math.min(w - 1, (px / scale) | 0)
-      const i = y * w + x
-      const e = world.elev[i]
-      const v = isOceanCell(world, i)
+      const xf = (px + 0.5) / scale
+      const e = sampleElev(world, xf, yf)
+      const ocean = sampleMask(world, xf, yf) < threshold
+      const v = ocean
         ? Math.round(40 + (e < 0 ? clamp(1 + e / 4000, 0, 1) * 30 : 20))
         : Math.round(110 + clamp(e / 8000, 0, 1) * 145)
       const o = (py * cw + px) * 4
@@ -687,13 +748,14 @@ export function bakeRoughnessImageData(world: World, scale = 2): ImageData {
   const ch = Math.max(1, h * scale)
   const image = new ImageData(cw, ch)
   const data = image.data
+  const threshold = world.meta.threshold
   for (let py = 0; py < ch; py++) {
-    const y = Math.min(h - 1, (py / scale) | 0)
+    const yf = (py + 0.5) / scale
     for (let px = 0; px < cw; px++) {
-      const x = Math.min(w - 1, (px / scale) | 0)
-      const i = y * w + x
-      const e = world.elev[i]
-      const v = isOceanCell(world, i)
+      const xf = (px + 0.5) / scale
+      const e = sampleElev(world, xf, yf)
+      const ocean = sampleMask(world, xf, yf) < threshold
+      const v = ocean
         ? Math.round(28 + (e < 0 ? clamp(1 + e / 4000, 0, 1) * 18 : 12))
         : Math.round(165 + clamp(e / 8000, 0, 1) * 55)
       const o = (py * cw + px) * 4

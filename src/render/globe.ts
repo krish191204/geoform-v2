@@ -14,8 +14,8 @@ import {
 import type { Layer, World } from '../world/types'
 
 const BAKE = 4
-const WIDTH_SEG = 128
-const HEIGHT_SEG = 96
+const WIDTH_SEG = 192
+const HEIGHT_SEG = 128
 const DISPLACE = 0.055
 
 function imageDataToTexture(
@@ -58,6 +58,7 @@ export class PlanetView {
   private lastX = 0
   private lastY = 0
   private cacheKey = ''
+  private terrainKey = ''
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
@@ -137,14 +138,10 @@ export class PlanetView {
   sync(world: World, layer: Layer, season: Season, dirtyKey: string): void {
     const { width, height } = world.meta
     const texW = Math.min(3072, width * BAKE)
-    const key = `${dirtyKey}|${layer}|${season}|${width}x${height}|${texW}`
-    if (key === this.cacheKey && this.colorTex) return
-    this.cacheKey = key
+    const colorKey = `${dirtyKey}|${layer}|${season}|${width}x${height}|${texW}|c${world.cities.length}`
+    if (colorKey === this.cacheKey && this.colorTex) return
+    this.cacheKey = colorKey
     this.colorTex?.dispose()
-    this.bumpTex?.dispose()
-    this.normalTex?.dispose()
-    this.dispTex?.dispose()
-    this.roughTex?.dispose()
 
     const bakeScale = Math.max(2, Math.round(texW / width))
     this.colorTex = imageDataToTexture(
@@ -154,10 +151,19 @@ export class PlanetView {
       }),
       this.renderer,
     )
-    this.bumpTex = imageDataToTexture(bakeBumpImageData(world, bakeScale), this.renderer)
-    this.normalTex = imageDataToTexture(bakeNormalImageData(world, bakeScale), this.renderer)
-    this.dispTex = imageDataToTexture(bakeDisplacementImageData(world, bakeScale), this.renderer)
-    this.roughTex = imageDataToTexture(bakeRoughnessImageData(world, bakeScale), this.renderer)
+
+    const terrainKey = `${width}x${height}|${texW}|${world.meta.seed}|${world.cities.length}|e${world.elev[0]}:${world.elev[world.elev.length >> 1]}`
+    if (terrainKey !== this.terrainKey || !this.bumpTex) {
+      this.terrainKey = terrainKey
+      this.bumpTex?.dispose()
+      this.normalTex?.dispose()
+      this.dispTex?.dispose()
+      this.roughTex?.dispose()
+      this.bumpTex = imageDataToTexture(bakeBumpImageData(world, bakeScale), this.renderer)
+      this.normalTex = imageDataToTexture(bakeNormalImageData(world, bakeScale), this.renderer)
+      this.dispTex = imageDataToTexture(bakeDisplacementImageData(world, bakeScale), this.renderer)
+      this.roughTex = imageDataToTexture(bakeRoughnessImageData(world, bakeScale), this.renderer)
+    }
 
     const mat = this.globe.material as THREE.MeshStandardMaterial
     mat.map = this.colorTex

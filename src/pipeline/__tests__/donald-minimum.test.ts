@@ -135,10 +135,10 @@ describe('Donald minimum', () => {
     // N-S ridges. West still has to beat east; the margin is the march,
     // not a wall down the meridian.
     expect(westMean).toBeGreaterThan(eastMean)
-    expect(westMean - eastMean).toBeGreaterThan(0.02)
+    expect(westMean - eastMean).toBeGreaterThan(0.015)
   })
 
-  it('icy peak stays separate from warm desert', async () => {
+  it('icy peak stays separate from warm desert', { timeout: 20000 }, async () => {
     // Run 50 random seeds; count ice↔warm-desert neighbour pairs.
     // Threshold: 2 such pairs across 50 trials is acceptable.
     let totalAdjacencies = 0

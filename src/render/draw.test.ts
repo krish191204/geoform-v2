@@ -362,6 +362,22 @@ describe('globe bakes', () => {
     expect(color.height).toBe(8)
     expect(color.data[3]).toBe(255)
   })
+
+  it('bilinear-samples bump so neighbouring cells blend instead of voxel blocks', () => {
+    const world = makeWorld({
+      width: 4,
+      height: 2,
+      elev: (x) => (x < 2 ? 200 : 4000),
+    })
+    const bump = bakeBumpImageData(world, 4)
+    const at = (px: number, py: number) => bump.data[(py * bump.width + px) * 4]
+    const low = at(2, 2)
+    const high = at(10, 2)
+    const mid = at(7, 2)
+    expect(low).toBeLessThan(high)
+    expect(mid).toBeGreaterThan(low)
+    expect(mid).toBeLessThan(high)
+  })
 })
 
 // ---------------------------------------------------------------------------

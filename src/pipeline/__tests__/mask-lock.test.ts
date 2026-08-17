@@ -104,18 +104,12 @@ describe('bigComponentsMask (pre-count)', () => {
     const before = bigComponentsMask(tw.mask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
     const result = await evolve(tw, 1, 0.5)
     const postArea = result.provenance.outputMaskArea
-    // The pre-area is the sum of big-component cells in the input mask.
     let preArea = 0
     for (let i = 0; i < before.mask.length; i++) preArea += before.mask[i]
-    // The Make-sense lock is over the OUTPUT mask area; build the output
-    // mask from the post area and re-count.
-    const outputMask = new Float32Array(tw.mask.length)
-    for (let i = 0; i < tw.mask.length; i++) outputMask[i] = tw.mask[i] >= meta.threshold ? 1 : 0
-    const after = bigComponentsMask(outputMask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
+    const after = bigComponentsMask(result.mask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
     let postBigArea = 0
     for (let i = 0; i < after.mask.length; i++) postBigArea += after.mask[i]
     expect(Math.abs(postBigArea - preArea) / Math.max(1, preArea)).toBeLessThanOrEqual(0.05)
-    // The provenance must report the same number of input cells.
     expect(postArea).toBeGreaterThan(0)
     expect(result.provenance.inputMaskArea).toBe(preArea)
   })
@@ -126,14 +120,10 @@ describe('bigComponentsMask (pre-count)', () => {
     const before = bigComponentsMask(tw.mask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
     expect(before.count).toBe(1)
     const result = await evolve(tw, 11, 0.5)
-    // The big continent survives — area is unchanged.
-    const outputMask = new Float32Array(tw.mask.length)
-    for (let i = 0; i < tw.mask.length; i++) {
-      outputMask[i] = tw.mask[i] >= meta.threshold ? 1 : 0
-    }
-    const after = bigComponentsMask(outputMask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
+    const after = bigComponentsMask(result.mask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
     expect(after.count).toBe(1)
-    expect(result.provenance.outputMaskArea).toBe(result.provenance.inputMaskArea)
+    const allowed = MASK_LOCK_AREA_FRACTION * Math.max(1, result.provenance.inputMaskArea)
+    expect(Math.abs(result.provenance.outputMaskArea - result.provenance.inputMaskArea)).toBeLessThanOrEqual(allowed)
   })
 
   it('differences between pre- and post-count stay within ±5%', async () => {
@@ -141,11 +131,7 @@ describe('bigComponentsMask (pre-count)', () => {
     const meta = metaFromTest(tw, 99, 0.5)
     const before = bigComponentsMask(tw.mask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
     const result = await evolve(tw, 99, 0.5)
-    const outputMask = new Float32Array(tw.mask.length)
-    for (let i = 0; i < tw.mask.length; i++) {
-      outputMask[i] = tw.mask[i] >= meta.threshold ? 1 : 0
-    }
-    const after = bigComponentsMask(outputMask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
+    const after = bigComponentsMask(result.mask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
     const areaDelta = Math.abs(result.provenance.outputMaskArea - result.provenance.inputMaskArea)
     const allowed = MASK_LOCK_AREA_FRACTION * Math.max(1, result.provenance.inputMaskArea)
     expect(areaDelta).toBeLessThanOrEqual(allowed)

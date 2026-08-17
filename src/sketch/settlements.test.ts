@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { seedSettlements, suggestSettlementsCovering } from './settlements'
+import { inferSettlementRole, mixQuotas, seedSettlements, suggestSettlementsCovering } from './settlements'
 import { makeContinentWorld } from '../pipeline/__tests__/fixtures'
 import { makeSenseInline, worldFromMakeSense } from '../pipeline/makeSense'
 
@@ -37,6 +37,62 @@ describe('seedSettlements', () => {
 
     expect(seedSettlements(world)).toHaveLength(0)
     expect(world.cities.length).toBe(added.length)
+  })
+
+  it('founds at most one seat of power and mixes the rest', async () => {
+    const tw = makeContinentWorld()
+    const meta = {
+      seed: 42,
+      width: tw.width,
+      height: tw.height,
+      planetRadiusKm: tw.planetRadiusKm,
+      obliquityDeg: tw.obliquityDeg,
+      seaLevel: 0.5,
+      threshold: 0.5,
+    }
+    const world = worldFromMakeSense(
+      await makeSenseInline({ meta, mask: new Float32Array(tw.mask) }, () => {}),
+      meta,
+      tw.mask,
+    )
+    const added = seedSettlements(world)
+    expect(added.length).toBeGreaterThanOrEqual(5)
+    const seats = world.cities.filter((c) => c.role === 'seat_of_power')
+    expect(seats).toHaveLength(1)
+    const roles = new Set(world.cities.map((c) => c.role))
+    expect(roles.has('seat_of_power')).toBe(true)
+    expect(roles.size).toBeGreaterThanOrEqual(3)
+    expect(world.cities.every((c) => c.role === 'seat_of_power')).toBe(false)
+  })
+
+  it('inferSettlementRole will not found a second seat', async () => {
+    const tw = makeContinentWorld()
+    const meta = {
+      seed: 42,
+      width: tw.width,
+      height: tw.height,
+      planetRadiusKm: tw.planetRadiusKm,
+      obliquityDeg: tw.obliquityDeg,
+      seaLevel: 0.5,
+      threshold: 0.5,
+    }
+    const world = worldFromMakeSense(
+      await makeSenseInline({ meta, mask: new Float32Array(tw.mask) }, () => {}),
+      meta,
+      tw.mask,
+    )
+    world.cities.push({ x: 32, y: 16, name: 'Throne', seasonal: 0.9, role: 'seat_of_power' })
+    const role = inferSettlementRole(world, 28, 16)
+    expect(role).not.toBe('seat_of_power')
+  })
+
+  it('mixQuotas always sums to the remaining slots', () => {
+    for (const n of [0, 1, 6, 7, 16, 23]) {
+      const q = mixQuotas(n)
+      const sum = Object.values(q).reduce((s, v) => s + v, 0)
+      expect(sum).toBe(n)
+      expect(q.seat_of_power).toBe(0)
+    }
   })
 
   it('is deterministic for the same world', async () => {

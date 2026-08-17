@@ -134,6 +134,7 @@ export function mountApp(root: HTMLElement): void {
   let planet: import('../render/globe').PlanetView | null = null
   let planetLoad: Promise<import('../render/globe').PlanetView | null> | null = null
   let planetLayout = { w: 0, h: 0 }
+  let planetPaintGen = 0
 
   async function ensurePlanet(): Promise<import('../render/globe').PlanetView | null> {
     if (planet) return planet
@@ -184,17 +185,16 @@ export function mountApp(root: HTMLElement): void {
   function paintNow(): void {
     const showWorld = Boolean(state.world) && state.stage !== 'sketch'
     if (flags.viewMode === 'planet' && showWorld && state.world) {
+      const gen = ++planetPaintGen
+      const layer = flags.layer
+      const season = flags.season
+      const src = state.world
+      const dirty = `${src.meta.seed}|${src.meta.width}|${src.cities.length}|${layer}|${season}`
       void (async () => {
         const view = await ensurePlanet()
-        if (!view || !state.world) return
+        if (!view || planetPaintGen !== gen || flags.viewMode !== 'planet' || state.world !== src) return
         layoutPlanet()
-        const src = state.world
-        view.sync(
-          src,
-          flags.layer,
-          flags.season,
-          `${src.meta.seed}|${src.meta.width}|${src.elev[0]}|${src.cities.length}|${flags.layer}|${flags.season}`,
-        )
+        view.sync(src, layer, season, dirty)
         view.render()
       })()
       return
@@ -313,7 +313,7 @@ export function mountApp(root: HTMLElement): void {
 
     canvas.addEventListener('pointerdown', (e) => {
       painting = true
-      canvas.setPointerCapture(e.pointerId)
+      canvas.setPointerCapture?.(e.pointerId)
       onPoint(e.clientX, e.clientY, true)
     })
     canvas.addEventListener('pointermove', (e) => {
@@ -332,7 +332,7 @@ export function mountApp(root: HTMLElement): void {
     let moved = false
     globe.addEventListener('pointerdown', (e) => {
       if (!planet) return
-      globe.setPointerCapture(e.pointerId)
+      globe.setPointerCapture?.(e.pointerId)
       moved = false
       planet.onPointerDown(e.clientX, e.clientY)
     })

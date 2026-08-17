@@ -69,7 +69,7 @@ export async function makeSense(
 
 /**
  * Turn a pipeline result into the World the rest of the app reads.
- * Copies the sketch mask (MakeSenseResult does not carry one).
+ * Uses the grounded mask from Make sense when present; otherwise the sketch.
  */
 export function worldFromMakeSense(
   result: MakeSenseResult,
@@ -78,7 +78,7 @@ export function worldFromMakeSense(
 ): World {
   return {
     meta: { ...meta },
-    mask: new Float32Array(mask),
+    mask: new Float32Array(result.mask ?? mask),
     plateId: result.plateId,
     plateVx: result.plateVx,
     plateVy: result.plateVy,
