@@ -237,6 +237,7 @@ button.primary:hover {
   padding: 0.25rem 0.85rem 0.85rem;
   min-height: 0;
   height: 100%;
+  container-type: size;
 }
 
 .panel {
@@ -312,7 +313,11 @@ button.primary:hover {
     radial-gradient(ellipse at 70% 80%, rgba(20, 40, 50, 0.5), transparent 55%),
     #163a44;
   min-height: 0;
-  height: 100%;
+  width: min(100%, calc(100cqh * 2));
+  aspect-ratio: 2 / 1;
+  height: auto;
+  justify-self: center;
+  align-self: center;
   display: grid;
 }
 
