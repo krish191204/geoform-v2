@@ -252,12 +252,41 @@ function sampleLand(mask: Float32Array, w: number, threshold: number, n: number)
   }
   return out
 }
+/** Shape tells that this is a drawing, not a coastline. */
+const DOODLE_SHAPE_IDS: ReadonlySet<string> = new Set([
+  'scribble-coast',
+  'pixel-stairs',
+  'box-continent',
+  'paint-holes',
+  'speckle-share',
+  'too-many-speckles',
+  'rectangle-continent',
+  'line-continent',
+])
+
+/**
+ * Pre-Make-sense land/water is never a planet. A smiley with three
+ * "major" nits used to score 70 — that is flattery. Cap so the number
+ * cannot be misread as a passing grade.
+ */
 function applyScoreFloor(score: number, issues: Issue[]): number {
   let criticalCount = 0
-  for (const i of issues) if (i.severity === 'critical') criticalCount++
+  let doodleHits = 0
+  let notAPlanet = false
+  let landShareFail = false
+  for (const i of issues) {
+    if (i.severity === 'critical') criticalCount++
+    if (DOODLE_SHAPE_IDS.has(i.id)) doodleHits++
+    if (i.id === 'not-a-planet-yet') notAPlanet = true
+    if (i.id === 'too-little-land' || i.id === 'too-much-land') landShareFail = true
+  }
   let out = score
   if (criticalCount >= 2) out = Math.min(out, 50)
   if (issues.length >= 5) out = Math.min(out, 50)
+  if (notAPlanet) out = Math.min(out, 40)
+  if (doodleHits >= 1) out = Math.min(out, 28)
+  if (doodleHits >= 2) out = Math.min(out, 18)
+  if (landShareFail) out = Math.min(out, 20)
   return out
 }
 
@@ -283,7 +312,7 @@ export function critiqueMask(
 
   // 3.1 — land share
   const landPct = landFraction(mask, w, h, threshold) * 100
-  if (landPct < 5) {
+  if (landPct < 15) {
     // Build a small evidence sample: the first 20 land cells we find.
     const landCells: { x: number; y: number }[] = []
     for (let i = 0; i < mask.length && landCells.length < 20; i++) {
@@ -295,8 +324,8 @@ export function critiqueMask(
       id: 'too-little-land',
       severity: 'critical',
       title: 'Map is mostly ocean',
-      critique: `Only ${landPct.toFixed(1)}% of cells are land. Real ` +
-        `continents cover 30-40% of Earth's surface.`,
+      critique: `Only ${landPct.toFixed(1)}% of cells are land. Earth is ~29% land. ` +
+        `A cartoon on an empty ocean is not a continent.`,
       fix: 'Paint more land. Even a single continent adds orogeny + climate + rivers.',
       evidence: landCells,
     })
@@ -480,15 +509,16 @@ export function critiqueMask(
     })
   }
 
-  // 3.9 — land/water is not a planet. 100% here would be flattery.
+  // 3.9 — land/water is not a planet. Critical so a doodle cannot look
+  // like a B-minus (three majors used to score 70).
   if (landPct >= 5 && landPct <= 95) {
     issues.push({
       id: 'not-a-planet-yet',
-      severity: 'major',
+      severity: 'critical',
       title: 'This is a doodle, not a planet',
       critique:
-        `${landPct.toFixed(0)}% land and ${bigCount} large masses. That can look Earth-like ` +
-        `as a silhouette and still be geographically empty — no height, climate, or rivers exist yet.`,
+        `${landPct.toFixed(0)}% land and ${bigCount} large masses. That is paint on water. ` +
+        `No height, climate, or rivers exist yet — this number is not a geography grade.`,
       fix: 'Read the issues above, then run Make sense. The score after that is the real one.',
       evidence: sampleLand(mask, w, threshold, 12),
     })

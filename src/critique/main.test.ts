@@ -228,7 +228,7 @@ describe('critiqueMask', () => {
     const r = critiqueMask(mask, makeMeta({ width: w, height: h }), 0.5)
     expect(r.issues.some((i) => i.id === 'box-continent')).toBe(true)
     expect(r.issues.some((i) => i.id === 'not-a-planet-yet')).toBe(true)
-    expect(r.score).toBeLessThan(100)
+    expect(r.score).toBeLessThanOrEqual(40)
   })
 
   it('flags inland paint holes', () => {
@@ -260,8 +260,37 @@ describe('critiqueMask', () => {
       }
     }
     const r = critiqueMask(mask, makeMeta({ width: w, height: h }), 0.5)
-    expect(r.score).toBeLessThan(100)
+    expect(r.score).toBeLessThan(40)
     expect(r.issues.length).toBeGreaterThan(0)
+    expect(r.issues.some((i) => i.id === 'not-a-planet-yet' && i.severity === 'critical')).toBe(
+      true,
+    )
+  })
+
+  it('fails a smiley face — that is a cartoon, not a B-minus planet', () => {
+    const w = 64
+    const h = 32
+    const mask = makeMask(w, h)
+    const stampDisc = (cx: number, cy: number, r: number) => {
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r) mask[y * w + x] = 0.9
+        }
+      }
+    }
+    stampDisc(22, 12, 3)
+    stampDisc(42, 12, 3)
+    for (let x = 16; x <= 48; x++) {
+      const t = (x - 16) / 32
+      const y = Math.round(22 + 6 * Math.sin(t * Math.PI))
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy
+        if (yy >= 0 && yy < h) mask[yy * w + x] = 0.9
+      }
+    }
+    const r = critiqueMask(mask, makeMeta({ width: w, height: h }), 0.5)
+    expect(r.score).toBeLessThanOrEqual(20)
+    expect(r.issues.some((i) => i.id === 'not-a-planet-yet')).toBe(true)
   })
 
   it('orders its issues critical-first', () => {
