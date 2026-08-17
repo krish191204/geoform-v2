@@ -53,8 +53,8 @@ export interface WorldMeta {
 /** Defaults for a fresh sketch; spread and override. */
 export const DEFAULT_META: Readonly<WorldMeta> = {
   seed: 1,
-  width: 512,
-  height: 256,
+  width: 256,
+  height: 128,
   planetRadiusKm: 6371,
   obliquityDeg: 23.5,
   seaLevel: 0.5,

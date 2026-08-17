@@ -15,6 +15,8 @@ export type CoachTone = 'info' | 'warn' | 'success' | 'error'
  * Each member is a closed record; the engine emits no other shapes.
  */
 export type CoachEvent =
+  /** Empty-ocean boot or after Clear sea. */
+  | { kind: 'sketch.ready'; width: number; height: number; landCells: number }
   /** One brush dab on the sketch canvas. */
   | { kind: 'sketch.brushDab'; x: number; y: number; brushSize: number; maskDelta: number }
   /** A committed sketch mask. */
@@ -52,6 +54,11 @@ export type CoachEvent =
  */
 function render(event: CoachEvent): { tone: CoachTone; message: string } {
   switch (event.kind) {
+    case 'sketch.ready':
+      return {
+        tone: 'info',
+        message: `Empty ocean ${event.width} × ${event.height}. ${event.landCells} land cells. Paint land; geography is derived at Make sense.`,
+      }
     case 'sketch.brushDab':
       return {
         tone: 'info',

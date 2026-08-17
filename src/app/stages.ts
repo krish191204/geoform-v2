@@ -13,7 +13,7 @@
  * before doing anything.
  */
 
-import type { EditorState, Stage } from '../world/types'
+import type { EditorState, Layer, Stage } from '../world/types'
 
 /** Transition target. Same value space as `Stage`. */
 export type StageTransition = Stage
@@ -35,6 +35,14 @@ export interface ShellStateView extends EditorState {
   readonly makeSenseComplete: boolean
   /** Latest Critique score; 0 if Critique has not run. */
   readonly score: number
+  /** Atlas layer after Make sense. */
+  readonly layer: Layer
+  /** Seasonal sample the atlas is showing. */
+  readonly season: 'summer' | 'winter'
+  /** Completed Make-sense steps (0..7). */
+  readonly pipelineStep: number
+  /** Last inspector readout HTML (empty until hover). */
+  readonly inspectHtml: string
 }
 
 export interface StageGate {
@@ -50,12 +58,15 @@ const noop = (): void => {}
 /**
  * The 4-stage state machine.
  *
- *   sketch  ──commit──▶  critique  ──score>0──▶  make-sense  ──complete──▶  worldbuild
+ *   sketch  ──commit──▶  critique  ──mask committed──▶  make-sense  ──complete──▶  worldbuild
  *     ▲                                                    │
  *     └──────────────── back-to-sketch ─────────────────────┘
  *
  * Each transition is gated by the source stage's `canLeave` and the
  * destination stage's `canEnter`. The shell consults both.
+ *
+ * Make-sense does not require score > 0. A doodle that scores 0% is
+ * exactly what Make-sense is for.
  */
 export const STAGES: Readonly<Record<Stage, StageGate>> = {
   sketch: {
@@ -79,8 +90,8 @@ export const STAGES: Readonly<Record<Stage, StageGate>> = {
   },
   'make-sense': {
     stage: 'make-sense',
-    // Make-sense needs a committed mask AND a non-zero Critique score.
-    canEnter: (state) => state.maskCommitted && state.score > 0,
+    // Committed mask is enough. Score can be 0.
+    canEnter: (state) => state.maskCommitted && state.isProcessing === false,
     // Make-sense holds the user until the derivation completes.
     canLeave: (state) => state.makeSenseComplete,
     enter: noop,
@@ -113,6 +124,14 @@ export const STAGE_LABEL: Readonly<Record<Stage, string>> = {
   worldbuild: 'Worldbuild',
 }
 
+/** Two-digit rail numbers, matching Geoform 1. */
+export const STAGE_NUM: Readonly<Record<Stage, string>> = {
+  sketch: '01',
+  critique: '02',
+  'make-sense': '03',
+  worldbuild: '04',
+}
+
 /** The seven Make-sense pipeline steps shown in the progress bar. */
 export const MAKE_SENSE_STEPS: readonly string[] = [
   'Freeze intent',
@@ -121,8 +140,19 @@ export const MAKE_SENSE_STEPS: readonly string[] = [
   'Seasonal climate',
   'Hydrology',
   'Biomes',
-  'Re-critique',
+  'Suitability',
 ]
+
+/** Pipeline stepName → 1-based index for the progress list. */
+export const MAKE_SENSE_STEP_INDEX: Readonly<Record<string, number>> = {
+  freezeIntent: 1,
+  plates: 2,
+  orogeny: 3,
+  seasonalClimate: 4,
+  hydrology: 5,
+  biomes: 6,
+  suitability: 7,
+}
 
 // ---------------------------------------------------------------------------
 // App event names
@@ -139,8 +169,14 @@ export const APP_EVENTS = {
   SAVE: 'app:save',
   /** Reset button click (Make-sense only). No detail. */
   RESET: 'app:reset',
+  /** Clear sea — wipe mask + world, back to empty ocean. */
+  CLEAR_SEA: 'app:clear-sea',
   /** Inspector toggle button click. No detail. */
   TOGGLE_INSPECTOR: 'app:toggle-inspector',
+  /** Atlas layer chip. Detail: `{ layer: Layer }`. */
+  LAYER_CHANGE: 'app:layer-change',
+  /** Summer / winter chip. Detail: `{ season: 'summer' | 'winter' }`. */
+  SEASON_CHANGE: 'app:season-change',
   /** Critique button click — commits the Sketch mask. No detail. */
   COMMIT_SKETCH: 'app:commit-sketch',
   /** Make sense button click. No detail. */
@@ -184,6 +220,16 @@ export interface BrushChangeDetail {
 /** Type-safe detail for `app:strength-change`. */
 export interface StrengthChangeDetail {
   readonly strength: number
+}
+
+/** Type-safe detail for `app:layer-change`. */
+export interface LayerChangeDetail {
+  readonly layer: Layer
+}
+
+/** Type-safe detail for `app:season-change`. */
+export interface SeasonChangeDetail {
+  readonly season: 'summer' | 'winter'
 }
 
 /** Coach message shape — the `coach:message` event detail. */
