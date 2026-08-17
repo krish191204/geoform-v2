@@ -152,6 +152,42 @@ describe('assignPlatesUnderMask', () => {
     expect(seen.size).toBe(5)
   })
 
+  it('keeps a small isolated island on a single plate', () => {
+    const mask = emptyMask(WIDTH, HEIGHT)
+    for (let y = 4; y <= 8; y++) {
+      for (let x = 10; x <= 14; x++) mask[y * WIDTH + x] = 1
+    }
+    const result = assignPlatesUnderMask(mask, WIDTH, HEIGHT, 3, 6371, 23.5)
+    const ids = new Set<number>()
+    for (let i = 0; i < mask.length; i++) {
+      if (mask[i] >= 0.5) ids.add(result.plateId[i])
+    }
+    expect(ids.size).toBe(1)
+    expect([...ids][0]).toBeGreaterThan(0)
+  })
+
+  it('does not let a global Voronoi stripe two separated islands the same way', () => {
+    const mask = emptyMask(WIDTH, HEIGHT)
+    for (let y = 4; y <= 10; y++) {
+      for (let x = 8; x <= 18; x++) mask[y * WIDTH + x] = 1
+    }
+    for (let y = 22; y <= 28; y++) {
+      for (let x = 40; x <= 50; x++) mask[y * WIDTH + x] = 1
+    }
+    const result = assignPlatesUnderMask(mask, WIDTH, HEIGHT, 11, 6371, 23.5)
+    const north = new Set<number>()
+    const south = new Set<number>()
+    for (let y = 4; y <= 10; y++) {
+      for (let x = 8; x <= 18; x++) north.add(result.plateId[y * WIDTH + x])
+    }
+    for (let y = 22; y <= 28; y++) {
+      for (let x = 40; x <= 50; x++) south.add(result.plateId[y * WIDTH + x])
+    }
+    expect(north.size).toBe(1)
+    expect(south.size).toBe(1)
+    expect([...north][0]).not.toBe([...south][0])
+  })
+
   it('produces identical plateId/plateVx/plateVy for the same world and seed', () => {
     const { mask, width, height } = makeVariedMask()
     const a = assignPlatesUnderMask(mask, width, height, 99, 6371, 23.5)

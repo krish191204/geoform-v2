@@ -89,7 +89,9 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
     ? draw(opts.world, opts.season, opts.layer, { showRivers: opts.layer === 'relief' })
     : maskImageData(opts.mask, meta)
 
-  const box = blitContained(ctx, image, cw, ch, Boolean(opts.world))
+  const smooth =
+    Boolean(opts.world) && opts.layer !== 'plates' && opts.layer !== 'biome'
+  const box = blitContained(ctx, image, cw, ch, smooth)
 
   if (opts.issues && opts.issues.length > 0 && box) {
     ctx.save()

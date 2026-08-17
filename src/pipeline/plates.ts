@@ -2,10 +2,10 @@
  * Pipeline step: plate assignment.
  *
  * Given a soft land mask and planet parameters, partitions the map into tectonic
- * plates. Land cells get plate IDs in `1..N` via farthest-point Voronoi on the
- * planet sphere; ocean cells share a residual ocean plate (`id = 0`). Each
- * plate gets a random drift velocity seeded from `seed + 1`. Boundaries are
- * classified by relative motion and lithology.
+ * plates. Each landmass is Voronoi-split on its own (small islands stay one
+ * plate). Ocean cells share a residual ocean plate (`id = 0`). Each plate gets
+ * a random drift velocity seeded from `seed + 1`. Boundaries are classified
+ * by relative motion and lithology.
  *
  * Deterministic: same mask + same seed → identical `plateId` / `plateVx` /
  * `plateVy`. Driven by Mulberry32 from `helpers.ts`; never touches `Math.random`.
@@ -60,159 +60,82 @@ export function assignPlatesUnderMask(
   threshold: number = 0.5,
 ): PlateAssignment {
   const N = width * height
-
-  // -----------------------------------------------------------------
-  // 1. Plate count from land area.
-  // -----------------------------------------------------------------
-  let landArea = 0
-  for (let i = 0; i < N; i++) {
-    if (mask[i] >= threshold) landArea++
-  }
-
-  let plateCount = plateCountForArea(landArea)
-  if (landArea < plateCount) {
-    // Not enough land cells to host the requested plate count; clamp.
-    plateCount = Math.max(2, Math.floor(landArea / 100))
-  }
-
-  // -----------------------------------------------------------------
-  // 2. Plate centers: 4× plateCount random candidates filtered to
-  //    in-mask, then farthest-point sampling to spread them out.
-  // -----------------------------------------------------------------
-  const rngCenter = createRng(seed)
-  const seenPos = new Set<number>()
-  const candidates: { x: number; y: number }[] = []
-
-  for (let k = 0; k < 4 * plateCount; k++) {
-    const cx = Math.floor(rngCenter() * width)
-    const cy = Math.floor(rngCenter() * height)
-    const ci = idx(width, cx, cy)
-    if (seenPos.has(ci)) continue
-    seenPos.add(ci)
-    if (mask[ci] >= threshold) {
-      candidates.push({ x: cx, y: cy })
-    }
-  }
-
-  // Fallback: if random sampling yielded fewer than `plateCount` in-mask
-  // candidates (very small landmasses), sweep the mask for more.
-  if (candidates.length < plateCount) {
-    for (let y = 0; y < height && candidates.length < plateCount; y++) {
-      for (let x = 0; x < width && candidates.length < plateCount; x++) {
-        const ci = idx(width, x, y)
-        if (mask[ci] >= threshold && !seenPos.has(ci)) {
-          seenPos.add(ci)
-          candidates.push({ x, y })
-        }
-      }
-    }
-  }
-
-  // Farthest-point sampling on the in-mask candidates.
-  const centers: { x: number; y: number }[] = []
-  if (candidates.length > 0) {
-    const first = Math.min(
-      candidates.length - 1,
-      Math.floor(rngCenter() * candidates.length),
-    )
-    centers.push(candidates[first])
-
-    const minDist = new Float64Array(candidates.length)
-    for (let j = 0; j < candidates.length; j++) {
-      if (j === first) {
-        minDist[j] = Number.POSITIVE_INFINITY
-        continue
-      }
-      minDist[j] = cellDistanceKm(
-        candidates[first].x,
-        candidates[first].y,
-        candidates[j].x,
-        candidates[j].y,
-        width,
-        height,
-        planetRadiusKm,
-      )
-    }
-
-    while (centers.length < plateCount && centers.length < candidates.length) {
-      let bestJ = -1
-      let bestDist = -1
-      for (let j = 0; j < candidates.length; j++) {
-        if (!isFinite(minDist[j])) continue
-        if (minDist[j] > bestDist) {
-          bestDist = minDist[j]
-          bestJ = j
-        }
-      }
-      if (bestJ === -1) break
-
-      const chosen = candidates[bestJ]
-      centers.push(chosen)
-      minDist[bestJ] = Number.POSITIVE_INFINITY
-
-      for (let j = 0; j < candidates.length; j++) {
-        if (!isFinite(minDist[j])) continue
-        const d = cellDistanceKm(
-          chosen.x,
-          chosen.y,
-          candidates[j].x,
-          candidates[j].y,
-          width,
-          height,
-          planetRadiusKm,
-        )
-        if (d < minDist[j]) minDist[j] = d
-      }
-    }
-  }
-
-  // Defensive bail-out: no centers means no land cells in mask.
-  if (centers.length === 0) {
-    return {
-      plateId: new Int16Array(N),
-      plateVx: new Float32Array(N),
-      plateVy: new Float32Array(N),
-      boundaries: [],
-      plates: [],
-    }
-  }
-  centers.length = Math.min(centers.length, plateCount)
-  const finalPlateCount = centers.length
-
-  // -----------------------------------------------------------------
-  // 3. Voronoi-assign every land cell to the nearest plate center.
-  // -----------------------------------------------------------------
   const plateId = new Int16Array(N) // 0 = ocean
-  const centroidX = new Float64Array(finalPlateCount + 1)
-  const centroidY = new Float64Array(finalPlateCount + 1)
-  const plateArea = new Int32Array(finalPlateCount + 1)
+  const rngCenter = createRng(seed)
+  const components = collectLandComponents(mask, width, height, threshold)
 
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = idx(width, x, y)
-      if (mask[i] < threshold) continue // ocean stays 0
-      let nearest = 1
+  // Plate ids are 1-indexed and unique across the whole map. Each
+  // landmass is partitioned on its own so a global Voronoi does not
+  // stripe every island with the same geodesic cuts.
+  let nextPlateId = 1
+  const centersByPlate: { x: number; y: number }[] = [ { x: 0, y: 0 } ]
+
+  for (const cells of components) {
+    const want = platesForComponent(cells.length)
+    const centers = pickCenters(
+      cells,
+      want,
+      rngCenter,
+      width,
+      height,
+      planetRadiusKm,
+    )
+    if (centers.length === 0) continue
+    const localIds: number[] = []
+    for (let c = 0; c < centers.length; c++) {
+      localIds.push(nextPlateId)
+      centersByPlate[nextPlateId] = centers[c]
+      nextPlateId++
+    }
+    for (let k = 0; k < cells.length; k++) {
+      const i = cells[k]
+      const x = i % width
+      const y = (i - x) / width
+      let nearest = localIds[0]
       let nearestDist = Number.POSITIVE_INFINITY
-      for (let p = 0; p < finalPlateCount; p++) {
+      for (let c = 0; c < centers.length; c++) {
         const d = cellDistanceKm(
           x,
           y,
-          centers[p].x,
-          centers[p].y,
+          centers[c].x,
+          centers[c].y,
           width,
           height,
           planetRadiusKm,
         )
         if (d < nearestDist) {
           nearestDist = d
-          nearest = p + 1 // 1-indexed plate ids
+          nearest = localIds[c]
         }
       }
       plateId[i] = nearest
-      centroidX[nearest] += x
-      centroidY[nearest] += y
-      plateArea[nearest]++
     }
+  }
+
+  const finalPlateCount = nextPlateId - 1
+  if (finalPlateCount === 0) {
+    return {
+      plateId,
+      plateVx: new Float32Array(N),
+      plateVy: new Float32Array(N),
+      boundaries: [],
+      plates: [],
+    }
+  }
+
+  cleanupPlateSpeckle(plateId, mask, width, height, threshold, 2)
+
+  const centroidX = new Float64Array(finalPlateCount + 1)
+  const centroidY = new Float64Array(finalPlateCount + 1)
+  const plateArea = new Int32Array(finalPlateCount + 1)
+  for (let i = 0; i < N; i++) {
+    const p = plateId[i]
+    if (p <= 0) continue
+    const x = i % width
+    const y = (i - x) / width
+    centroidX[p] += x
+    centroidY[p] += y
+    plateArea[p]++
   }
 
   // -----------------------------------------------------------------
@@ -225,10 +148,11 @@ export function assignPlatesUnderMask(
     const dir = rngVel() * 2 * Math.PI
     const vx = speed * Math.cos(dir)
     const vy = speed * Math.sin(dir)
+    const fallback = centersByPlate[p] ?? { x: 0, y: 0 }
     plates.push({
       id: p,
-      cx: plateArea[p] > 0 ? centroidX[p] / plateArea[p] : centers[p - 1].x,
-      cy: plateArea[p] > 0 ? centroidY[p] / plateArea[p] : centers[p - 1].y,
+      cx: plateArea[p] > 0 ? centroidX[p] / plateArea[p] : fallback.x,
+      cy: plateArea[p] > 0 ? centroidY[p] / plateArea[p] : fallback.y,
       vx,
       vy,
       area: plateArea[p],
@@ -337,5 +261,190 @@ export function assignPlatesUnderMask(
     plateVy,
     boundaries,
     plates,
+  }
+}
+
+/** Islands this small stay one plate instead of being pizza-sliced. */
+const SMALL_LANDMASS_CELLS = 400
+
+function platesForComponent(area: number): number {
+  if (area < SMALL_LANDMASS_CELLS) return 1
+  const byArea = plateCountForArea(area)
+  const bySize = Math.max(2, Math.floor(area / 200))
+  return Math.min(byArea, bySize)
+}
+
+function collectLandComponents(
+  mask: Float32Array,
+  width: number,
+  height: number,
+  threshold: number,
+): number[][] {
+  const n = width * height
+  const visited = new Uint8Array(n)
+  const queue = new Int32Array(n)
+  const out: number[][] = []
+
+  for (let seed = 0; seed < n; seed++) {
+    if (visited[seed] !== 0) continue
+    if (mask[seed] < threshold) {
+      visited[seed] = 1
+      continue
+    }
+    let head = 0
+    let tail = 0
+    queue[tail++] = seed
+    visited[seed] = 1
+    const members: number[] = []
+    while (head < tail) {
+      const i = queue[head++]
+      members.push(i)
+      const x = i % width
+      const y = (i - x) / width
+      const nxLeft = x === 0 ? width - 1 : x - 1
+      const nxRight = x === width - 1 ? 0 : x + 1
+      const row = y * width
+      const next = [row + nxLeft, row + nxRight]
+      if (y > 0) next.push(row - width + x)
+      if (y < height - 1) next.push(row + width + x)
+      for (let k = 0; k < next.length; k++) {
+        const j = next[k]
+        if (visited[j] !== 0) continue
+        if (mask[j] < threshold) continue
+        visited[j] = 1
+        queue[tail++] = j
+      }
+    }
+    out.push(members)
+  }
+  return out
+}
+
+function pickCenters(
+  cells: number[],
+  want: number,
+  rng: () => number,
+  width: number,
+  height: number,
+  planetRadiusKm: number,
+): { x: number; y: number }[] {
+  if (cells.length === 0 || want <= 0) return []
+  const count = Math.min(want, cells.length)
+  if (count === 1) {
+    const i = cells[Math.floor(rng() * cells.length)]
+    return [{ x: i % width, y: Math.floor(i / width) }]
+  }
+
+  const candidateWant = Math.min(cells.length, Math.max(count * 8, 24))
+  const candidates: { x: number; y: number }[] = []
+  const seen = new Set<number>()
+  let guard = 0
+  while (candidates.length < candidateWant && guard < candidateWant * 12) {
+    guard++
+    const i = cells[Math.floor(rng() * cells.length)]
+    if (seen.has(i)) continue
+    seen.add(i)
+    candidates.push({ x: i % width, y: Math.floor(i / width) })
+  }
+  for (let k = 0; k < cells.length && candidates.length < candidateWant; k++) {
+    const i = cells[k]
+    if (seen.has(i)) continue
+    seen.add(i)
+    candidates.push({ x: i % width, y: Math.floor(i / width) })
+  }
+  if (candidates.length === 0) return []
+
+  const first = Math.min(candidates.length - 1, Math.floor(rng() * candidates.length))
+  const centers = [candidates[first]]
+  const minDist = new Float64Array(candidates.length)
+  for (let j = 0; j < candidates.length; j++) {
+    minDist[j] =
+      j === first
+        ? Number.POSITIVE_INFINITY
+        : cellDistanceKm(
+            candidates[first].x,
+            candidates[first].y,
+            candidates[j].x,
+            candidates[j].y,
+            width,
+            height,
+            planetRadiusKm,
+          )
+  }
+
+  while (centers.length < count && centers.length < candidates.length) {
+    let bestJ = -1
+    let bestDist = -1
+    for (let j = 0; j < candidates.length; j++) {
+      if (!Number.isFinite(minDist[j])) continue
+      if (minDist[j] > bestDist) {
+        bestDist = minDist[j]
+        bestJ = j
+      }
+    }
+    if (bestJ === -1) break
+    const chosen = candidates[bestJ]
+    centers.push(chosen)
+    minDist[bestJ] = Number.POSITIVE_INFINITY
+    for (let j = 0; j < candidates.length; j++) {
+      if (!Number.isFinite(minDist[j])) continue
+      const d = cellDistanceKm(
+        chosen.x,
+        chosen.y,
+        candidates[j].x,
+        candidates[j].y,
+        width,
+        height,
+        planetRadiusKm,
+      )
+      if (d < minDist[j]) minDist[j] = d
+    }
+  }
+  return centers
+}
+
+/**
+ * Majority-filter 1-cell plate speckles so a continent is a few
+ * contiguous plates, not confetti.
+ */
+function cleanupPlateSpeckle(
+  plateId: Int16Array,
+  mask: Float32Array,
+  width: number,
+  height: number,
+  threshold: number,
+  passes: number,
+): void {
+  const n = width * height
+  const next = new Int16Array(n)
+  for (let pass = 0; pass < passes; pass++) {
+    next.set(plateId)
+    for (let i = 0; i < n; i++) {
+      if (mask[i] < threshold || plateId[i] <= 0) continue
+      const x = i % width
+      const y = (i - x) / width
+      const counts = new Map<number, number>()
+      let total = 0
+      for (const [dx, dy] of D4_OFFSETS) {
+        const nx = wrapX(x + dx, width)
+        const ny = y + dy
+        if (ny < 0 || ny >= height) continue
+        const j = idx(width, nx, ny)
+        if (mask[j] < threshold || plateId[j] <= 0) continue
+        counts.set(plateId[j], (counts.get(plateId[j]) ?? 0) + 1)
+        total++
+      }
+      if (total < 2) continue
+      let best = plateId[i]
+      let bestN = -1
+      for (const [id, c] of counts) {
+        if (c > bestN) {
+          bestN = c
+          best = id
+        }
+      }
+      if (bestN >= 3 && best !== plateId[i]) next[i] = best
+    }
+    plateId.set(next)
   }
 }

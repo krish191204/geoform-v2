@@ -277,6 +277,21 @@ function elevAt(world: World, x: number, y: number): number {
   return world.elev[cy * w + cx]
 }
 
+function isPlateEdge(world: World, x: number, y: number): boolean {
+  const { width: w, height: h } = world.meta
+  const pid = world.plateId[y * w + x]
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue
+      const nx = x === 0 && dx === -1 ? w - 1 : x === w - 1 && dx === 1 ? 0 : x + dx
+      const ny = y + dy
+      if (ny < 0 || ny >= h) continue
+      if (world.plateId[ny * w + nx] !== pid) return true
+    }
+  }
+  return false
+}
+
 function isCoast(world: World, x: number, y: number): boolean {
   const { width: w, height: h } = world.meta
   if (x < 0 || y < 0 || x >= w || y >= h) return false
@@ -340,7 +355,8 @@ function cellColor(
     }
     case 'plates': {
       rgb = plateColor(world.plateId[i])
-      if (ocean) rgb = mix(rgb, [20, 50, 70], 0.55)
+      if (ocean) rgb = mix(rgb, [12, 36, 48], 0.62)
+      else if (isPlateEdge(world, x, y)) rgb = mix(rgb, [28, 24, 22], 0.4)
       break
     }
     case 'moisture': {
