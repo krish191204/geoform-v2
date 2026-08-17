@@ -22,7 +22,7 @@ const TEX_MAX = 4096
 function imageDataToTexture(
   image: ImageData,
   renderer: THREE.WebGLRenderer,
-  opts: { srgb?: boolean } = {},
+  opts: { srgb?: boolean; mipmaps?: boolean } = {},
 ): THREE.CanvasTexture {
   const canvas = document.createElement('canvas')
   canvas.width = image.width
@@ -30,13 +30,15 @@ function imageDataToTexture(
   const ctx = canvas.getContext('2d')!
   ctx.putImageData(image, 0, 0)
   const tex = new THREE.CanvasTexture(canvas)
+  // Color maps are sRGB; bump/normal/displacement/roughness stay linear.
   tex.colorSpace = opts.srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace
   tex.wrapS = THREE.RepeatWrapping
   tex.wrapT = THREE.ClampToEdgeWrapping
   tex.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy())
-  tex.minFilter = THREE.LinearMipmapLinearFilter
+  const mipmaps = opts.mipmaps ?? true
+  tex.generateMipmaps = mipmaps
+  tex.minFilter = mipmaps ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter
   tex.magFilter = THREE.LinearFilter
-  tex.generateMipmaps = true
   tex.needsUpdate = true
   return tex
 }
@@ -98,10 +100,13 @@ export class PlanetView {
     )
     this.scene.add(this.atmosphere)
 
-    this.scene.add(new THREE.AmbientLight(0x9ab0c8, 0.48))
-    this.sun = new THREE.DirectionalLight(0xfff6e8, 1.45)
+    // Paper-day: sky/ground hemi + warm key + cool fill. No HDRI, no bloom.
+    this.scene.add(new THREE.HemisphereLight(0xe4eaf0, 0x3a4540, 0.46))
+    this.sun = new THREE.DirectionalLight(0xfff6e8, 1.28)
+    this.sun.target.position.set(0, 0, 0)
     this.scene.add(this.sun)
-    this.fill = new THREE.DirectionalLight(0x88a8d0, 0.35)
+    this.scene.add(this.sun.target)
+    this.fill = new THREE.DirectionalLight(0x88a8d0, 0.32)
     this.fill.position.set(-2.2, 0.4, -1.6)
     this.scene.add(this.fill)
     this.scene.add(this.makeStars())
@@ -152,6 +157,7 @@ export class PlanetView {
       bakeWorldImageDataSmooth(world, season, layer, texW, {
         showRivers: layer === 'relief' || layer === 'biome',
         bakeCities: true,
+        vignette: false,
       }),
       this.renderer,
       { srgb: true },
@@ -166,7 +172,9 @@ export class PlanetView {
       this.roughTex?.dispose()
       this.bumpTex = imageDataToTexture(bakeBumpImageData(world, bakeScale), this.renderer)
       this.normalTex = imageDataToTexture(bakeNormalImageData(world, bakeScale), this.renderer)
-      this.dispTex = imageDataToTexture(bakeDisplacementImageData(world, bakeScale), this.renderer)
+      this.dispTex = imageDataToTexture(bakeDisplacementImageData(world, bakeScale), this.renderer, {
+        mipmaps: false,
+      })
       this.roughTex = imageDataToTexture(bakeRoughnessImageData(world, bakeScale), this.renderer)
     }
 
@@ -180,7 +188,7 @@ export class PlanetView {
     mat.displacementScale = DISPLACE
     mat.roughnessMap = this.roughTex
     mat.roughness = 1
-    mat.metalness = 0.04
+    mat.metalness = 0.02
     mat.needsUpdate = true
   }
 
@@ -261,6 +269,10 @@ export class PlanetView {
     this.normalTex?.dispose()
     this.dispTex?.dispose()
     this.roughTex?.dispose()
+    this.globe.geometry.dispose()
+    ;(this.globe.material as THREE.MeshStandardMaterial).dispose()
+    this.atmosphere.geometry.dispose()
+    ;(this.atmosphere.material as THREE.Material).dispose()
     this.renderer.dispose()
   }
 }

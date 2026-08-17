@@ -17,7 +17,7 @@ if (typeof (globalThis as { ImageData?: unknown }).ImageData === 'undefined') {
 }
 
 import { describe, it, expect } from 'vitest'
-import { draw, inspectCell, screenToCell, bakeBumpImageData, bakeWorldImageDataSmooth } from './draw'
+import { draw, inspectCell, screenToCell, bakeBumpImageData, bakeDisplacementImageData, bakeWorldImageDataSmooth, polePinchFade } from './draw'
 import { biomeColor, type CellBiome, type World, type WorldMeta } from '../world/types'
 
 // ---------------------------------------------------------------------------
@@ -392,6 +392,50 @@ describe('globe bakes', () => {
     expect(low).not.toEqual(high)
     expect(mid).not.toEqual(low)
     expect(mid).not.toEqual(high)
+  })
+
+  it('fades displacement at the poles without flattening World elev', () => {
+    expect(polePinchFade(0)).toBe(0)
+    expect(polePinchFade(1)).toBe(0)
+    expect(polePinchFade(0.5)).toBe(1)
+    expect(polePinchFade(0.03)).toBeLessThan(polePinchFade(0.2))
+
+    const world = makeWorld({
+      width: 8,
+      height: 16,
+      elev: (x) => 200 + x * 500,
+    })
+    const before = world.elev.slice()
+    const disp = bakeDisplacementImageData(world, 2)
+    expect(world.elev).toEqual(before)
+
+    const at = (px: number, py: number) => disp.data[(py * disp.width + px) * 4]
+    const poleVals = Array.from({ length: disp.width }, (_, x) => at(x, 0))
+    const eqVals = Array.from({ length: disp.width }, (_, x) => at(x, disp.height >> 1))
+    const poleSpread = Math.max(...poleVals) - Math.min(...poleVals)
+    const eqSpread = Math.max(...eqVals) - Math.min(...eqVals)
+    expect(poleSpread).toBeLessThan(eqSpread / 3)
+  })
+
+  it('does not burn a 2D vignette into the globe color bake', () => {
+    const world = makeWorld({ width: 8, height: 4, elev: () => 400 })
+    const atlas = bakeWorldImageDataSmooth(world, 'summer', 'elevation', 32, {
+      bakeCities: false,
+      vignette: true,
+    })
+    const globe = bakeWorldImageDataSmooth(world, 'summer', 'elevation', 32, {
+      bakeCities: false,
+      vignette: false,
+    })
+    const luma = (img: ImageData, x: number, y: number) => {
+      const o = (y * img.width + x) * 4
+      return img.data[o] + img.data[o + 1] + img.data[o + 2]
+    }
+    const midY = atlas.height >> 1
+    const edge = luma(atlas, 0, midY)
+    const centre = luma(atlas, atlas.width >> 1, midY)
+    expect(edge).toBeLessThan(centre)
+    expect(luma(globe, 0, midY)).toBe(luma(globe, globe.width >> 1, midY))
   })
 })
 

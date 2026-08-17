@@ -678,7 +678,7 @@ export function bakeWorldImageDataSmooth(
   season: Season,
   layer: Layer,
   outW: number,
-  options: { showRivers?: boolean; bakeCities?: boolean } = {},
+  options: { showRivers?: boolean; bakeCities?: boolean; vignette?: boolean } = {},
 ): ImageData {
   const { width: w, height: h } = world.meta
   const cw = Math.max(1, outW)
@@ -710,9 +710,22 @@ export function bakeWorldImageDataSmooth(
     }
   }
   if (options.bakeCities ?? true) stampCities(image, world, scale)
-  applyVignette(image)
+  if (options.vignette ?? true) applyVignette(image)
   return image
 }
+
+/**
+ * 0 at the poles, 1 by ~12° of latitude.
+ * Softens SphereGeometry UV pinch in globe bakes without flattening World elev.
+ */
+export function polePinchFade(ny: number): number {
+  const lat = ny < 0 ? 0 : ny > 1 ? 1 : ny
+  const fromPole = Math.min(lat, 1 - lat)
+  const t = fromPole >= 0.07 ? 1 : fromPole / 0.07
+  return t * t * (3 - 2 * t)
+}
+
+const POLE_DISP_REST = 72
 
 /** Grey bump: ocean dark, highlands bright. Elev is metres. Bilinear so the globe is not voxels. */
 export function bakeBumpImageData(world: World, scale = 2): ImageData {
@@ -724,13 +737,15 @@ export function bakeBumpImageData(world: World, scale = 2): ImageData {
   const threshold = world.meta.threshold
   for (let py = 0; py < ch; py++) {
     const yf = (py + 0.5) / scale
+    const fade = polePinchFade((py + 0.5) / ch)
     for (let px = 0; px < cw; px++) {
       const xf = (px + 0.5) / scale
       const e = sampleElev(world, xf, yf)
       const ocean = sampleMask(world, xf, yf) < threshold
-      const v = ocean
+      let v = ocean
         ? Math.round(Math.max(0, 18 + (e < 0 ? (1 + e / 4000) * 50 : 40)))
         : Math.round(90 + clamp(e / 8000, 0, 1) * 165)
+      v = Math.round(POLE_DISP_REST + (v - POLE_DISP_REST) * (0.4 + 0.6 * fade))
       const o = (py * cw + px) * 4
       data[o] = v
       data[o + 1] = v
@@ -751,6 +766,7 @@ export function bakeNormalImageData(world: World, scale = 2): ImageData {
   const threshold = world.meta.threshold
   for (let py = 0; py < ch; py++) {
     const yf = (py + 0.5) / scale
+    const fade = polePinchFade((py + 0.5) / ch)
     for (let px = 0; px < cw; px++) {
       const xf = (px + 0.5) / scale
       const e = sampleElev(world, xf, yf)
@@ -759,10 +775,13 @@ export function bakeNormalImageData(world: World, scale = 2): ImageData {
       const ocean = sampleMask(world, xf, yf) < threshold
       const dz = ocean ? 0.45 : 0.85 + clamp(e / 8000, 0, 1) * 0.4
       const len = Math.hypot(dx, dy, dz) || 1
+      const nr = Math.round((-dx / len) * 0.5 * 255 + 128)
+      const ng = Math.round((dy / len) * 0.5 * 255 + 128)
+      const nb = Math.round((dz / len) * 0.5 * 255 + 128)
       const o = (py * cw + px) * 4
-      data[o] = Math.round((-dx / len) * 0.5 * 255 + 128)
-      data[o + 1] = Math.round((dy / len) * 0.5 * 255 + 128)
-      data[o + 2] = Math.round((dz / len) * 0.5 * 255 + 128)
+      data[o] = Math.round(128 + (nr - 128) * fade)
+      data[o + 1] = Math.round(128 + (ng - 128) * fade)
+      data[o + 2] = Math.round(255 + (nb - 255) * fade)
       data[o + 3] = 255
     }
   }
@@ -779,13 +798,15 @@ export function bakeDisplacementImageData(world: World, scale = 2): ImageData {
   const threshold = world.meta.threshold
   for (let py = 0; py < ch; py++) {
     const yf = (py + 0.5) / scale
+    const fade = polePinchFade((py + 0.5) / ch)
     for (let px = 0; px < cw; px++) {
       const xf = (px + 0.5) / scale
       const e = sampleElev(world, xf, yf)
       const ocean = sampleMask(world, xf, yf) < threshold
-      const v = ocean
+      let v = ocean
         ? Math.round(40 + (e < 0 ? clamp(1 + e / 4000, 0, 1) * 30 : 20))
         : Math.round(110 + clamp(e / 8000, 0, 1) * 145)
+      v = Math.round(POLE_DISP_REST + (v - POLE_DISP_REST) * fade)
       const o = (py * cw + px) * 4
       data[o] = v
       data[o + 1] = v
