@@ -11,7 +11,7 @@
  */
 import type { World, WorldMeta, Issue } from '../world/types'
 import { idx } from '../world/types'
-import { countBigComponents } from '../sketch/countBigComponents'
+import { countBigComponents, analyseComponents } from '../sketch/countBigComponents'
 import {
   SEVERITY_WEIGHTS,
   scoreFromIssues,
@@ -83,6 +83,8 @@ interface BiggestComponent {
   area: number
   bbox: { x1: number; y1: number; x2: number; y2: number }
   cells: { x: number; y: number }[]
+  /** 4-connected land–ocean edges on this component (isoperimetric). */
+  perimeter: number
 }
 
 /**
@@ -114,6 +116,7 @@ function analyseBiggestComponent(
       queue[tail++] = seed
       visited[seed] = 1
       let area = 0
+      let perimeter = 0
       let x1 = x
       let y1 = y
       let x2 = x
@@ -136,16 +139,22 @@ function analyseBiggestComponent(
           [cx, cy + 1],
         ] as const
         for (const [nx, ny] of neighbours) {
-          if (ny < 0 || ny >= h) continue
+          if (ny < 0 || ny >= h) {
+            perimeter++
+            continue
+          }
           const j = ny * w + nx
+          if (mask[j] < threshold) {
+            perimeter++
+            continue
+          }
           if (visited[j] !== 0) continue
-          if (mask[j] < threshold) continue
           visited[j] = 1
           queue[tail++] = j
         }
       }
       if (best === null || area > best.area) {
-        best = { area, bbox: { x1, y1, x2, y2 }, cells }
+        best = { area, bbox: { x1, y1, x2, y2 }, cells, perimeter }
       }
     }
   }
@@ -153,11 +162,96 @@ function analyseBiggestComponent(
 }
 
 /**
- * Tighten the score from `scoreFromIssues` so a flattery floor cannot
- * hide a clearly-bad mask. Rules:
- *   - Two or more criticals → score capped at 50.
- *   - Five or more issues (any severity) → score capped at 50.
+ * Ocean cells that cannot reach a pole row through ocean. Those are
+ * lakes / paint holes, not seas.
  */
+function inlandWater(
+  mask: Float32Array,
+  w: number,
+  h: number,
+  threshold: number,
+): { cells: number; samples: { x: number; y: number }[] } {
+  const isOcean = (i: number) => mask[i] < threshold
+  const seen = new Uint8Array(mask.length)
+  const queue = new Int32Array(mask.length)
+  let head = 0
+  let tail = 0
+  const tryEnq = (x: number, y: number) => {
+    if (y < 0 || y >= h) return
+    const i = y * w + x
+    if (seen[i] || !isOcean(i)) return
+    seen[i] = 1
+    queue[tail++] = i
+  }
+  for (let x = 0; x < w; x++) {
+    tryEnq(x, 0)
+    tryEnq(x, h - 1)
+  }
+  while (head < tail) {
+    const i = queue[head++]
+    const cx = i % w
+    const cy = (i - cx) / w
+    tryEnq(cx === 0 ? w - 1 : cx - 1, cy)
+    tryEnq(cx === w - 1 ? 0 : cx + 1, cy)
+    tryEnq(cx, cy - 1)
+    tryEnq(cx, cy + 1)
+  }
+  let cells = 0
+  const samples: { x: number; y: number }[] = []
+  for (let i = 0; i < mask.length; i++) {
+    if (!isOcean(i) || seen[i]) continue
+    cells++
+    if (samples.length < 20) samples.push({ x: i % w, y: Math.floor(i / w) })
+  }
+  return { cells, samples }
+}
+
+/**
+ * Stair-step coasts: land cells on the shore whose land neighbours form
+ * an L (pixel stairs) rather than a shoreline.
+ */
+function jaggyCoast(
+  mask: Float32Array,
+  w: number,
+  h: number,
+  threshold: number,
+): { coast: number; jaggies: number; samples: { x: number; y: number }[] } {
+  let coast = 0
+  let jaggies = 0
+  const samples: { x: number; y: number }[] = []
+  const land = (x: number, y: number) => {
+    if (y < 0 || y >= h) return false
+    const xx = ((x % w) + w) % w
+    return mask[y * w + xx] >= threshold
+  }
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!land(x, y)) continue
+      const n = land(x, y - 1)
+      const s = land(x, y + 1)
+      const e = land(x + 1, y)
+      const ww = land(x - 1, y)
+      const landN = (n ? 1 : 0) + (s ? 1 : 0) + (e ? 1 : 0) + (ww ? 1 : 0)
+      if (landN === 4) continue
+      coast++
+      const corner = landN === 2 && ((n && e) || (e && s) || (s && ww) || (ww && n))
+      const spike = landN <= 1
+      if (corner || spike) {
+        jaggies++
+        if (samples.length < 20) samples.push({ x, y })
+      }
+    }
+  }
+  return { coast, jaggies, samples }
+}
+
+function sampleLand(mask: Float32Array, w: number, threshold: number, n: number): { x: number; y: number }[] {
+  const out: { x: number; y: number }[] = []
+  for (let i = 0; i < mask.length && out.length < n; i++) {
+    if (mask[i] >= threshold) out.push({ x: i % w, y: Math.floor(i / w) })
+  }
+  return out
+}
 function applyScoreFloor(score: number, issues: Issue[]): number {
   let criticalCount = 0
   for (const i of issues) if (i.severity === 'critical') criticalCount++
@@ -296,6 +390,108 @@ export function critiqueMask(
         evidence: biggest.cells.slice(0, 10),
       })
     }
+  }
+
+  // 3.5 — stamp vs continent: a filled box is a brush rectangle, not a plate.
+  if (biggest && biggest.area > 200) {
+    const bw = biggest.bbox.x2 - biggest.bbox.x1 + 1
+    const bh = biggest.bbox.y2 - biggest.bbox.y1 + 1
+    const box = bw * bh
+    const fill = box > 0 ? biggest.area / box : 0
+    if (fill > 0.8) {
+      issues.push({
+        id: 'box-continent',
+        severity: 'major',
+        title: 'Land is a stamped box',
+        critique:
+          `${Math.round(fill * 100)}% of the largest mass’s bounding box is filled. ` +
+          `Plates do not punch a rectangle out of the ocean.`,
+        fix: 'Break the walls with gulfs, peninsulas, and islands.',
+        evidence: biggest.cells.slice(0, 20),
+      })
+    }
+    const compact =
+      biggest.perimeter > 0
+        ? (4 * Math.PI * biggest.area) / (biggest.perimeter * biggest.perimeter)
+        : 1
+    if (compact < 0.22) {
+      issues.push({
+        id: 'scribble-coast',
+        severity: 'major',
+        title: 'Coast is a scribble',
+        critique:
+          `Largest landmass compactness is ${compact.toFixed(2)} (circle = 1). ` +
+          `That is a doodle outline, not a shoreline.`,
+        fix: 'Paint broader masses. Make sense cannot invent a continent from spray.',
+        evidence: biggest.cells.slice(0, 20),
+      })
+    }
+  }
+
+  // 3.6 — paint holes: water that never reaches a pole is a lake from the brush.
+  const holes = inlandWater(mask, w, h, threshold)
+  const landCells = Math.round((landPct / 100) * mask.length)
+  if (holes.cells >= 8 && landCells > 0) {
+    issues.push({
+      id: 'paint-holes',
+      severity: 'major',
+      title: 'Continents are full of holes',
+      critique:
+        `${holes.cells} ocean cells are trapped inland and never reach a pole. ` +
+        `Those are brush gaps, not seas.`,
+      fix: 'Fill the lakes or open them to the ocean with a strait.',
+      evidence: holes.samples,
+    })
+  }
+
+  // 3.7 — pixel stairs
+  const jag = jaggyCoast(mask, w, h, threshold)
+  if (jag.coast >= 40 && jag.jaggies / jag.coast > 0.35) {
+    issues.push({
+      id: 'pixel-stairs',
+      severity: 'major',
+      title: 'Coast is pixel stairs',
+      critique:
+        `${Math.round((jag.jaggies / jag.coast) * 100)}% of shoreline cells are ` +
+        `L-corners or 1-cell spikes. That is the brush grid, not geography.`,
+      fix: 'Use a larger brush and pull the coast into smoother capes.',
+      evidence: jag.samples,
+    })
+  }
+
+  // 3.8 — speckle share of all land (tiny scraps, not the 8-mass rule)
+  const parts = analyseComponents(mask, w, h, threshold, 100)
+  let landArea = 0
+  let speckleArea = 0
+  for (let i = 0; i < parts.areas.length; i++) {
+    landArea += parts.areas[i]
+    if (parts.areas[i] < 100) speckleArea += parts.areas[i]
+  }
+  if (landArea > 200 && speckleArea / landArea > 0.12) {
+    issues.push({
+      id: 'speckle-share',
+      severity: 'major',
+      title: 'Green pimples, not continents',
+      critique:
+        `${Math.round((speckleArea / landArea) * 100)}% of the land is scraps under 100 cells. ` +
+        `That is spray on the ocean.`,
+      fix: 'Merge the specks into a few large masses, or own an island world after Make sense.',
+      evidence: sampleSpeckleEvidence(mask, w, h, threshold),
+    })
+  }
+
+  // 3.9 — land/water is not a planet. 100% here would be flattery.
+  if (landPct >= 5 && landPct <= 95) {
+    issues.push({
+      id: 'not-a-planet-yet',
+      severity: 'major',
+      title: 'This is a doodle, not a planet',
+      critique:
+        `${landPct.toFixed(0)}% land and ${bigCount} large masses. That can look Earth-like ` +
+        `as a silhouette and still be geographically empty — no height, climate, or rivers exist yet.`,
+      fix: 'Read the issues above, then run Make sense. The score after that is the real one.',
+      evidence: sampleLand(mask, w, threshold, 12),
+    })
   }
 
   // Remember for checkMaskLock.

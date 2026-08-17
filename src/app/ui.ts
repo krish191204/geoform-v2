@@ -555,7 +555,7 @@ function renderIssues(
 ): void {
   list.innerHTML = ''
   if (issues.length === 0) {
-    list.append(el('li', { class: 'issue-empty' }, 'No issues — still run Make sense to derive height and climate.'))
+    list.append(el('li', { class: 'issue-empty' }, 'No land/water issues. This is still not a geography grade — run Make sense.'))
     return
   }
   for (const issue of issues) {
@@ -564,6 +564,9 @@ function renderIssues(
         'li',
         { class: `issue issue-${issue.severity}` },
         el('span', { class: 'issue-title' }, issue.title),
+        issue.critique
+          ? el('span', { class: 'issue-critique' }, issue.critique)
+          : '',
         el('span', { class: 'issue-id' }, issue.id),
       ),
     )

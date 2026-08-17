@@ -582,9 +582,11 @@ button.primary:hover {
   border-left: 3px solid #8a6a28;
 }
 
-.issue-title {
+.issue-critique {
   display: block;
-  font-weight: 600;
+  margin-top: 0.2rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
 }
 
 .issue-id {

@@ -216,7 +216,7 @@ describe('critiqueMask', () => {
     expect(r.issues.some((i) => i.id === 'polar-strip' && i.severity === 'major')).toBe(true)
   })
 
-  it('returns a clean (100) score on a benign single-continent mask', () => {
+  it('does not give 100 to a stamped rectangle', () => {
     const w = 64
     const h = 32
     const mask = makeMask(w, h)
@@ -226,8 +226,42 @@ describe('critiqueMask', () => {
       }
     }
     const r = critiqueMask(mask, makeMeta({ width: w, height: h }), 0.5)
-    expect(r.issues).toEqual([])
-    expect(r.score).toBe(100)
+    expect(r.issues.some((i) => i.id === 'box-continent')).toBe(true)
+    expect(r.issues.some((i) => i.id === 'not-a-planet-yet')).toBe(true)
+    expect(r.score).toBeLessThan(100)
+  })
+
+  it('flags inland paint holes', () => {
+    const w = 48
+    const h = 24
+    const mask = makeMask(w, h)
+    for (let y = 6; y <= 17; y++) {
+      for (let x = 10; x <= 30; x++) {
+        mask[y * w + x] = 0.9
+      }
+    }
+    for (let y = 9; y <= 14; y++) {
+      for (let x = 16; x <= 24; x++) {
+        mask[y * w + x] = 0
+      }
+    }
+    const r = critiqueMask(mask, makeMeta({ width: w, height: h }), 0.5)
+    expect(r.issues.some((i) => i.id === 'paint-holes')).toBe(true)
+    expect(r.score).toBeLessThan(90)
+  })
+
+  it('never scores a mid-range doodle as a finished planet', () => {
+    const w = 64
+    const h = 32
+    const mask = makeMask(w, h)
+    for (let y = 6; y < 26; y++) {
+      for (let x = 8; x < 28; x++) {
+        if (((x + y) & 1) === 0) mask[y * w + x] = 0.9
+      }
+    }
+    const r = critiqueMask(mask, makeMeta({ width: w, height: h }), 0.5)
+    expect(r.score).toBeLessThan(100)
+    expect(r.issues.length).toBeGreaterThan(0)
   })
 
   it('orders its issues critical-first', () => {
