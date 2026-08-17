@@ -100,13 +100,13 @@ export class PlanetView {
     )
     this.scene.add(this.atmosphere)
 
-    // Paper-day: sky/ground hemi + warm key + cool fill. No HDRI, no bloom.
-    this.scene.add(new THREE.HemisphereLight(0xe4eaf0, 0x3a4540, 0.46))
-    this.sun = new THREE.DirectionalLight(0xfff6e8, 1.28)
+    // Geoform 1 paper-day: cool ambient + warm key + cool fill. No HDRI, no bloom.
+    this.scene.add(new THREE.AmbientLight(0x9ab0c8, 0.48))
+    this.sun = new THREE.DirectionalLight(0xfff6e8, 1.45)
     this.sun.target.position.set(0, 0, 0)
     this.scene.add(this.sun)
     this.scene.add(this.sun.target)
-    this.fill = new THREE.DirectionalLight(0x88a8d0, 0.32)
+    this.fill = new THREE.DirectionalLight(0x88a8d0, 0.35)
     this.fill.position.set(-2.2, 0.4, -1.6)
     this.scene.add(this.fill)
     this.scene.add(this.makeStars())
@@ -188,7 +188,7 @@ export class PlanetView {
     mat.displacementScale = DISPLACE
     mat.roughnessMap = this.roughTex
     mat.roughness = 1
-    mat.metalness = 0.02
+    mat.metalness = 0.04
     mat.needsUpdate = true
   }
 

@@ -27,7 +27,6 @@ export const LAYER_CHIPS: readonly { id: Layer; label: string; title: string }[]
 ]
 
 const LAND_RGB: readonly [number, number, number] = [0x8a, 0x7a, 0x5a]
-const SEA_RGB: readonly [number, number, number] = [0x1a, 0x4f, 0x5c]
 const SEA_FILL = '#163a44'
 
 /** Geoform 1 HD raster: at least 4 pixels per cell, then CSS-downsample. */
@@ -189,9 +188,16 @@ function upsampleMask(
       const t = sample(xf, yf)
       const k = Math.max(0, Math.min(1, (t - threshold + 0.15) / 0.3))
       const grain = ((Math.sin(xf * 12.9898 + yf * 78.233) * 43758.5453) % 1) * 0.1 - 0.05
-      let r = SEA_RGB[0] + (LAND_RGB[0] - SEA_RGB[0]) * k
-      let g = SEA_RGB[1] + (LAND_RGB[1] - SEA_RGB[1]) * k
-      let b = SEA_RGB[2] + (LAND_RGB[2] - SEA_RGB[2]) * k
+      // Geoform 1 empty ocean: deep navy + still-water caustic, not a flat teal fill.
+      const wave =
+        0.5 + 0.5 * Math.sin(xf * 0.35 + Math.cos(yf * 0.22) * 2) * Math.sin(yf * 0.4)
+      const shimmer = wave * 0.55 * 0.14
+      let r = 8 + (18 - 8) * 0.38 + shimmer * 40
+      let g = 28 + (62 - 28) * 0.38 + shimmer * 70
+      let b = 48 + (92 - 48) * 0.38 + shimmer * 90
+      r = r + (LAND_RGB[0] - r) * k
+      g = g + (LAND_RGB[1] - g) * k
+      b = b + (LAND_RGB[2] - b) * k
       if (k > 0.22 && k < 0.78) {
         const foam = 1 - Math.abs(k - 0.5) * 4
         const edge = k < 0.5 ? [210, 230, 230] : [30, 42, 36]

@@ -198,8 +198,12 @@ describe('draw', () => {
     const winterImg = draw(world, 'winter', 'moisture')
 
     expect(pixel(summerImg, 0, 0)).not.toEqual(pixel(summerImg, 7, 0))
-    // Winter is uniform → all cells identical.
-    expect(pixel(winterImg, 0, 0)).toEqual(pixel(winterImg, 7, 0))
+    // Winter moisture is flat; paper grain remains, so the summer ramp must dwarf it.
+    const dist = (a: [number, number, number], b: [number, number, number]) =>
+      Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2])
+    expect(dist(pixel(summerImg, 0, 0), pixel(summerImg, 7, 0))).toBeGreaterThan(
+      dist(pixel(winterImg, 0, 0), pixel(winterImg, 7, 0)) * 3,
+    )
   })
 
   it('renders relief with hillshade and respects showRivers=false', () => {
@@ -229,10 +233,13 @@ describe('draw', () => {
 
   it('keeps the Height layer a raw metre ramp (no hillshade, no rivers)', () => {
     const world = makeWorld({ width: 4, height: 4, elev: () => 1500 })
+    const before = draw(world, 'summer', 'elevation')
     world.rivers[0] = 1
-    const img = draw(world, 'summer', 'elevation')
-    // All cells are at the same elevation → uniform colour.
-    expect(pixel(img, 0, 0)).toEqual(pixel(img, 3, 3))
+    const after = draw(world, 'summer', 'elevation')
+    expect(pixel(before, 0, 0)).toEqual(pixel(after, 0, 0))
+    world.elev[15] = 4000
+    const stepped = draw(world, 'summer', 'elevation')
+    expect(pixel(stepped, 0, 0)).not.toEqual(pixel(stepped, 3, 3))
   })
 })
 
@@ -431,11 +438,20 @@ describe('globe bakes', () => {
       const o = (y * img.width + x) * 4
       return img.data[o] + img.data[o + 1] + img.data[o + 2]
     }
+    const midX = atlas.width >> 1
     const midY = atlas.height >> 1
-    const edge = luma(atlas, 0, midY)
-    const centre = luma(atlas, atlas.width >> 1, midY)
-    expect(edge).toBeLessThan(centre)
-    expect(luma(globe, 0, midY)).toBe(luma(globe, globe.width >> 1, midY))
+    expect(luma(atlas, 0, 0)).toBeLessThan(luma(atlas, midX, midY))
+    const atlasRatio = luma(atlas, 0, 0) / Math.max(1, luma(atlas, midX, midY))
+    const globeRatio = luma(globe, 0, 0) / Math.max(1, luma(globe, midX, midY))
+    expect(atlasRatio).toBeLessThan(globeRatio)
+  })
+
+  it('paints empty ocean as deep water, not a lagoon shelf', () => {
+    const world = makeWorld({ width: 4, height: 4, elev: () => 0 })
+    world.mask.fill(0)
+    const img = draw(world, 'summer', 'relief')
+    const [r, g, b] = pixel(img, 2, 2)
+    expect(r + g + b).toBeLessThan(220)
   })
 })
 

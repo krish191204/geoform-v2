@@ -196,17 +196,17 @@ function ramp(v: number | undefined): number {
 function elevBandColor(e: number, ocean: boolean): [number, number, number] {
   if (!Number.isFinite(e)) return [120, 120, 120]
   if (ocean) {
-    const t = e < 0 ? ramp(1 + e / 1200) : 0.82
-    if (t < 0.45) return mix([8, 28, 48], [18, 62, 92], t / 0.45)
-    if (t < 0.85) return mix([18, 62, 92], [36, 110, 128], (t - 0.45) / 0.4)
-    return mix([36, 110, 128], [70, 150, 148], (t - 0.85) / 0.15)
+    // Pipeline abyssal default is 0 m; trenches go negative. Geoform 1 paints
+    // empty ocean as deep water, not a lagoon shelf.
+    const t = e >= 0 ? 0.22 : ramp((e + 1600) / 1600) * 0.22
+    return mix([8, 28, 48], [18, 62, 92], t / 0.45)
   }
   if (e < 80) return mix([168, 176, 122], [92, 138, 72], ramp(e / 80))
   if (e < 400) return mix([92, 138, 72], [58, 112, 58], (e - 80) / 320)
   if (e < 1200) return mix([58, 112, 58], [110, 118, 72], (e - 400) / 800)
   if (e < 2500) return mix([110, 118, 72], [128, 112, 88], (e - 1200) / 1300)
-  if (e < 5000) return mix([128, 112, 88], [168, 158, 142], (e - 2500) / 2500)
-  return mix([168, 158, 142], [236, 238, 240], ramp((e - 5000) / 3000))
+  if (e < 5000) return mix([128, 112, 88], [168, 162, 152], (e - 2500) / 2500)
+  return mix([168, 162, 152], [246, 248, 250], ramp((e - 5000) / 3000))
 }
 
 function isOceanCell(world: World, i: number): boolean {
@@ -242,9 +242,9 @@ function moistureColor(m: number): [number, number, number] {
  */
 function suitColor(s: number): [number, number, number] {
   const t = ramp(s)
-  if (t < 0.35) return mix([120, 48, 40], [170, 90, 40], t / 0.35)
-  if (t < 0.55) return mix([170, 90, 40], [170, 150, 50], (t - 0.35) / 0.2)
-  return mix([170, 150, 50], [50, 140, 70], (t - 0.55) / 0.45)
+  if (t < 0.28) return mix([120, 48, 40], [150, 70, 38], t / 0.28)
+  if (t < 0.52) return mix([150, 70, 38], [170, 150, 50], (t - 0.28) / 0.24)
+  return mix([170, 150, 50], [50, 140, 70], (t - 0.52) / 0.48)
 }
 
 /** Twelve-entry discrete plate palette — one entry per plate id. */
@@ -324,19 +324,36 @@ const RIVER_VISIBLE = 8
 /** Flux above this tints as a main stem. */
 const RIVER_MAIN = 24
 
-function isPlateEdge(world: World, x: number, y: number): boolean {
+function plateBoundaryCue(
+  world: World,
+  x: number,
+  y: number,
+): { edge: boolean; approach: number } {
   const { width: w, height: h } = world.meta
-  const pid = world.plateId[y * w + x]
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      if (!dx && !dy) continue
-      const nx = x === 0 && dx === -1 ? w - 1 : x === w - 1 && dx === 1 ? 0 : x + dx
-      const ny = y + dy
-      if (ny < 0 || ny >= h) continue
-      if (world.plateId[ny * w + nx] !== pid) return true
-    }
+  const i = y * w + x
+  const p = world.plateId[i]
+  const vx = world.plateVx[i] ?? 0
+  const vy = world.plateVy[i] ?? 0
+  let edge = false
+  let approach = 0
+  for (const [dx, dy] of [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ] as const) {
+    const nx = wrapX(x + dx, w)
+    const ny = y + dy
+    if (ny < 0 || ny >= h) continue
+    const ni = ny * w + nx
+    if (world.plateId[ni] === p) continue
+    edge = true
+    const qx = world.plateVx[ni] ?? 0
+    const qy = world.plateVy[ni] ?? 0
+    const len = Math.hypot(dx, dy) || 1
+    approach = Math.max(approach, -((vx - qx) * dx + (vy - qy) * dy) / len)
   }
-  return false
+  return { edge, approach }
 }
 
 function isCoast(world: World, x: number, y: number): boolean {
@@ -418,15 +435,26 @@ function layerFill(
       return elevBandColor(e, ocean)
     case 'plates': {
       let rgb = plateColor(world.plateId[i])
-      if (ocean) rgb = mix(rgb, [12, 36, 48], 0.62)
-      else if (isPlateEdge(world, x, y)) rgb = mix(rgb, [28, 24, 22], 0.4)
+      if (ocean) {
+        rgb = mix(rgb, [20, 50, 70], 0.55)
+      } else {
+        const above = Math.max(0, e / 8000)
+        if (above > 0.08) rgb = mix(rgb, [232, 220, 200], Math.min(0.72, above * 0.95))
+      }
+      const { edge, approach } = plateBoundaryCue(world, x, y)
+      if (edge) {
+        rgb = mix(rgb, [18, 22, 28], 0.42)
+        if (approach > 0.02) {
+          rgb = mix(rgb, [210, 150, 90], Math.min(0.55, 0.22 + approach * 0.9))
+        } else if (approach < -0.02) {
+          rgb = mix(rgb, [70, 120, 160], Math.min(0.45, 0.18 + -approach * 0.8))
+        }
+      }
       return rgb
     }
     case 'moisture': {
       const m = season === 'summer' ? world.summerMoist[i] : world.winterMoist[i]
-      let rgb = moistureColor(m)
-      if (ocean) rgb = mix(rgb, [18, 62, 92], 0.55)
-      return rgb
+      return ocean ? ([22, 58, 82] as [number, number, number]) : moistureColor(m)
     }
     case 'temperature':
       // Temperature includes ocean (SST). Do not hide climate under a sea fill.
@@ -506,10 +534,9 @@ function applyPaperLook(
     }
   }
 
-  if (layer === 'relief' || layer === 'biome' || layer === 'plates') {
-    const grain = paperGrain(x, y)
-    rgb = [clamp(rgb[0] * (1 + grain)), clamp(rgb[1] * (1 + grain)), clamp(rgb[2] * (1 + grain))]
-  }
+  // Micro-texture so flats don't look like solid fill (Geoform 1, every layer).
+  const grain = paperGrain(x, y)
+  rgb = [clamp(rgb[0] * (1 + grain)), clamp(rgb[1] * (1 + grain)), clamp(rgb[2] * (1 + grain))]
 
   return rgb
 }
