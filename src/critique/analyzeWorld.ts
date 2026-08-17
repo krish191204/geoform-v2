@@ -539,24 +539,27 @@ export function checkUniformBiome(world: World): Issue[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Auto-founding should mix roles. Five or more seats of power and
- * nothing else is a placement bug, not a civilisation.
+ * Auto-founding should mix roles. More than one seat among five or more
+ * towns is a placement bug, not a civilisation of thrones.
  */
 export function checkAllCapitals(world: World): Issue[] {
   const cities = world.cities
   if (cities.length < 5) return []
-  const allSeats = cities.every((c) => (c.role ?? 'seat_of_power') === 'seat_of_power')
-  if (!allSeats) return []
+  const seats = cities.filter((c) => (c.role ?? 'seat_of_power') === 'seat_of_power').length
+  if (seats <= 1) return []
   return [
     {
       id: 'all-capitals',
       severity: 'major',
-      title: 'Every town is a seat of power',
+      title: 'Too many seats of power',
       critique:
-        `${cities.length} settlements and every one is a capital. ` +
-        `A continent has farms, ports, and mines — not 17 thrones.`,
+        `${seats} of ${cities.length} towns are seats of power. ` +
+        `A continent has one capital, then farms, ports, and mines — not a dozen thrones.`,
       fix: 'Quota mix: one seat, then farmland, fishing, mining, trade, pastoral.',
-      evidence: cities.slice(0, 8).map((c) => ({ x: c.x, y: c.y })),
+      evidence: cities
+        .filter((c) => (c.role ?? 'seat_of_power') === 'seat_of_power')
+        .slice(0, 8)
+        .map((c) => ({ x: c.x, y: c.y })),
     },
   ]
 }

@@ -13,6 +13,7 @@ import {
   MAKE_SENSE_STEP_INDEX,
   STAGES,
   type BrushChangeDetail,
+  type LandformStampDetail,
   type LayerChangeDetail,
   type MetaChangeDetail,
   type SeasonChangeDetail,
@@ -28,6 +29,7 @@ import {
   mountMapShell,
   mountStageTools,
   mountStageWork,
+  showingDerivedWorld,
   sketchInspectHtml,
   updateChrome,
   updateInspector,
@@ -39,6 +41,7 @@ import {
 import { cellFromPointer, paintAtlas } from './atlas'
 import { inspectCell } from '../render/draw'
 import { createMaskBrushes, fireCommitHook } from '../sketch/maskBrushes'
+import { landformStampCopy, stampLandform } from '../sketch/landforms'
 import { placeCity, removeNearestCity } from '../sketch/worldbuild'
 import { inferSettlementRole, seedSettlements } from '../sketch/settlements'
 import {
@@ -183,7 +186,7 @@ export function mountApp(root: HTMLElement): void {
   }
 
   function paintNow(): void {
-    const showWorld = Boolean(state.world) && state.stage !== 'sketch'
+    const showWorld = showingDerivedWorld(state)
     if (flags.viewMode === 'planet' && showWorld && state.world) {
       const gen = ++planetPaintGen
       const layer = flags.layer
@@ -232,7 +235,7 @@ export function mountApp(root: HTMLElement): void {
 
   function inspectAt(x: number, y: number): void {
     const i = y * state.meta.width + x
-    if (state.world && state.stage !== 'sketch') {
+    if (showingDerivedWorld(state) && state.world) {
       const cell = inspectCell(state.world, x, y)
       const land = state.world.mask[i] >= state.world.meta.threshold
       flags.inspectHtml = worldInspectHtml(cell.display, x, y, land)
@@ -241,6 +244,18 @@ export function mountApp(root: HTMLElement): void {
       flags.inspectHtml = sketchInspectHtml(x, y, land)
     }
     updateInspector(inspector, buildView(bundle))
+  }
+
+  function enterSketchSurface(from: typeof state.stage | null): void {
+    flags.viewMode = 'atlas'
+    flags.inspectHtml = emptyInspectHint(false)
+    flags.layer = 'relief'
+    if (from && from !== 'sketch') {
+      announce(
+        'info',
+        'This is the doodle, not the planet. Paint or stamp, then Critique — Make sense derives geography again.',
+      )
+    }
   }
 
   function attachCanvas(): void {
@@ -408,7 +423,7 @@ export function mountApp(root: HTMLElement): void {
     if (target === 'sketch' && state.tool !== 'draw-land' && state.tool !== 'erase-land' && state.tool !== 'inspect') {
       state.tool = 'draw-land'
     }
-    if (target === 'sketch') flags.viewMode = 'atlas'
+    if (target === 'sketch') enterSketchSurface(from)
     render({ remount: true })
     STAGES[target].enter(view)
     announceCoach({ kind: 'app.stage', from, to: target, trigger: 'user' })
@@ -436,6 +451,18 @@ export function mountApp(root: HTMLElement): void {
     } else {
       announceCoach({ kind: 'persist.failed', key: 'mask', reason: 'shape', bytes: 0 })
     }
+  })
+
+  window.addEventListener(APP_EVENTS.STAMP_LANDFORM, (ev) => {
+    if (state.stage !== 'sketch' || state.isProcessing) return
+    const kind = (ev as CustomEvent<LandformStampDetail>).detail?.kind
+    if (kind !== 'continents' && kind !== 'mixed' && kind !== 'islands') return
+    if (state.world) invalidateDerivedWorld()
+    const mask = ensureMask()
+    stampLandform(mask, state.meta, kind, state.meta.seed)
+    bindMask(mask)
+    announce('success', landformStampCopy(kind))
+    render()
   })
 
   window.addEventListener(APP_EVENTS.CLEAR_SEA, () => {
@@ -576,10 +603,11 @@ export function mountApp(root: HTMLElement): void {
 
   window.addEventListener(APP_EVENTS.BACK_TO_SKETCH, () => {
     const view = buildView(bundle)
+    const from = state.stage
     STAGES[state.stage].leave(view)
     state.stage = 'sketch'
     state.tool = 'draw-land'
-    flags.viewMode = 'atlas'
+    enterSketchSurface(from)
     render({ remount: true })
     announceCoach({ kind: 'app.stage', from: 'worldbuild', to: 'sketch', trigger: 'user' })
   })
@@ -610,7 +638,7 @@ export function mountApp(root: HTMLElement): void {
 
   window.addEventListener(APP_EVENTS.LAYER_CHANGE, (ev) => {
     const detail = (ev as CustomEvent).detail as LayerChangeDetail | undefined
-    if (!detail || !state.world) return
+    if (!detail || !showingDerivedWorld(state)) return
     flags.layer = detail.layer
     updateMapShell(map, buildView(bundle))
     requestPaint()
@@ -619,7 +647,7 @@ export function mountApp(root: HTMLElement): void {
   window.addEventListener(APP_EVENTS.VIEW_CHANGE, (ev) => {
     const detail = (ev as CustomEvent).detail as ViewChangeDetail | undefined
     if (!detail) return
-    if (detail.view === 'planet' && !state.world) {
+    if (detail.view === 'planet' && !showingDerivedWorld(state)) {
       announce('warn', 'Planet view needs a grounded world — run Make sense first.')
       return
     }
@@ -631,7 +659,7 @@ export function mountApp(root: HTMLElement): void {
 
   window.addEventListener(APP_EVENTS.SEASON_CHANGE, (ev) => {
     const detail = (ev as CustomEvent).detail as SeasonChangeDetail | undefined
-    if (!detail || !state.world) return
+    if (!detail || !showingDerivedWorld(state)) return
     flags.season = detail.season
     updateMapShell(map, buildView(bundle))
     requestPaint()

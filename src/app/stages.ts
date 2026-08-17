@@ -199,6 +199,8 @@ export const APP_EVENTS = {
   BRUSH_CHANGE: 'app:brush-change',
   /** Brush strength slider change. Detail: `{ strength: number }`. */
   STRENGTH_CHANGE: 'app:strength-change',
+  /** Sketch landform chip. Detail: `{ kind: LandformKind }`. */
+  STAMP_LANDFORM: 'app:stamp-landform',
 } as const
 
 /** Type-safe detail for `app:stage-transition`. */
@@ -239,6 +241,11 @@ export interface SeasonChangeDetail {
 /** Type-safe detail for `app:view-change`. */
 export interface ViewChangeDetail {
   readonly view: 'atlas' | 'planet'
+}
+
+/** Type-safe detail for `app:stamp-landform`. */
+export interface LandformStampDetail {
+  readonly kind: 'continents' | 'mixed' | 'islands'
 }
 
 /** Coach message shape — the `coach:message` event detail. */

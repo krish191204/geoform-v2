@@ -19,6 +19,7 @@ import {
   STAGE_ORDER,
   STAGES,
   type BrushChangeDetail,
+  type LandformStampDetail,
   type LayerChangeDetail,
   type MetaChangeDetail,
   type SeasonChangeDetail,
@@ -29,6 +30,7 @@ import {
 } from './stages'
 import { LAYER_CHIPS } from './atlas'
 import { SETTLEMENT_ROLE_LABEL } from '../sketch/settlements'
+import { LANDFORM_OPTIONS } from '../sketch/landforms'
 import { hasAnyLand } from './canvas_paint'
 
 // ---------------------------------------------------------------------------
@@ -168,7 +170,11 @@ export function mountMapShell(): MapShellRefs {
   })
   const hud = el('div', { class: 'map-hud' }, viewAtlas, viewPlanet)
   const loading = el('div', { class: 'loading', id: 'loading', hidden: true }, 'Grounding the doodle…')
-  const hint = el('div', { class: 'map-hint', id: 'mapHint' }, 'Paint land on the empty ocean')
+  const hint = el(
+    'div',
+    { class: 'map-hint', id: 'mapHint' },
+    'Pick continents or islands, or paint land',
+  )
 
   const root = el(
     'section',
@@ -194,21 +200,27 @@ export function mountMapShell(): MapShellRefs {
   }
 }
 
+/** Atlas layers / inspector climate exist only after Make sense, never on Sketch. */
+export function showingDerivedWorld(state: Pick<ShellStateView, 'world' | 'stage'>): boolean {
+  return Boolean(state.world) && state.stage !== 'sketch'
+}
+
 export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void {
+  const derived = showingDerivedWorld(state)
   refs.overlay.replaceChildren()
   for (const chip of LAYER_CHIPS) {
     const btn = el(
       'button',
       {
         type: 'button',
-        class: 'chip' + (state.layer === chip.id ? ' active' : ''),
+        class: 'chip' + (derived && state.layer === chip.id ? ' active' : ''),
         'data-look': chip.id,
-        disabled: !state.world,
+        disabled: !derived,
       },
       chip.label,
     )
     btn.addEventListener('click', () => {
-      if (!state.world) return
+      if (!derived) return
       const detail: LayerChangeDetail = { layer: chip.id }
       fire(APP_EVENTS.LAYER_CHANGE, detail)
     })
@@ -221,13 +233,13 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
       'button',
       {
         type: 'button',
-        class: 'chip' + (state.season === season ? ' active' : ''),
-        disabled: !state.world,
+        class: 'chip' + (derived && state.season === season ? ' active' : ''),
+        disabled: !derived,
       },
       season === 'summer' ? 'Summer' : 'Winter',
     )
     btn.addEventListener('click', () => {
-      if (!state.world) return
+      if (!derived) return
       const detail: SeasonChangeDetail = { season }
       fire(APP_EVENTS.SEASON_CHANGE, detail)
     })
@@ -236,11 +248,11 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
 
   refs.viewAtlas.classList.toggle('active', state.viewMode === 'atlas')
   refs.viewPlanet.classList.toggle('active', state.viewMode === 'planet')
-  refs.viewPlanet.disabled = !state.world
-  refs.canvas.hidden = state.viewMode === 'planet'
-  refs.globe.hidden = state.viewMode !== 'planet'
+  refs.viewPlanet.disabled = !derived
+  refs.canvas.hidden = derived && state.viewMode === 'planet'
+  refs.globe.hidden = !(derived && state.viewMode === 'planet')
   refs.loading.hidden = !state.isProcessing
-  const empty = !hasAnyLand(state.mask, state.meta.threshold) && !state.world
+  const empty = !hasAnyLand(state.mask, state.meta.threshold)
   refs.hint.hidden = !empty || state.stage !== 'sketch'
 }
 
@@ -258,7 +270,13 @@ export interface InspectorRefs {
 
 export function mountInspector(): InspectorRefs {
   const coach = el('div', { id: 'coach', class: 'coach-card', role: 'status', 'aria-live': 'polite' })
-  coach.append(el('p', { class: 'coach-empty' }, 'Empty ocean. Paint land. Critique when the blob looks like a continent.'))
+  coach.append(
+    el(
+      'p',
+      { class: 'coach-empty' },
+      'Empty ocean. Stamp a landform or paint. Critique when the blob looks like a continent.',
+    ),
+  )
   const workHost = el('div', { id: 'stageWork', class: 'stage-work' })
   const inspect = el('div', { id: 'inspect' })
   inspect.append(
@@ -290,13 +308,14 @@ export function mountInspector(): InspectorRefs {
 }
 
 export function updateInspector(refs: InspectorRefs, state: ShellStateView): void {
+  const derived = showingDerivedWorld(state)
   if (state.inspectHtml) {
     refs.inspect.innerHTML = state.inspectHtml
   }
   const land = landCellCount(state.mask, state.meta.threshold)
   const total = state.meta.width * state.meta.height
   const pct = total > 0 ? Math.round((land / total) * 100) : 0
-  if (state.world) {
+  if (derived) {
     refs.status.textContent = `Grounded world · ${pct}% land · score ${Math.round(state.score)}`
   } else if (land > 0) {
     refs.status.textContent = `Sketch · ${land} land cells (${pct}%) · not geography yet`
@@ -393,6 +412,25 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
     radiusVal.textContent = String(radiusSlider.value)
   })
 
+  const landformGrid = el('div', { class: 'style-grid', 'aria-label': 'Landform doodles' })
+  for (const opt of LANDFORM_OPTIONS) {
+    const btn = el(
+      'button',
+      {
+        type: 'button',
+        class: 'style-chip',
+        'data-landform': opt.id,
+      },
+      opt.label,
+      el('small', {}, opt.desc),
+    )
+    btn.addEventListener('click', () => {
+      const detail: LandformStampDetail = { kind: opt.id }
+      fire(APP_EVENTS.STAMP_LANDFORM, detail)
+    })
+    landformGrid.append(btn)
+  }
+
   const critiqueBtn = el('button', { type: 'button', class: 'primary' }, 'Critique')
   critiqueBtn.disabled = state.isProcessing || !hasAnyLand(state.mask, state.meta.threshold)
   critiqueBtn.addEventListener('click', () => fire(APP_EVENTS.COMMIT_SKETCH))
@@ -402,6 +440,8 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
     { class: 'tools-inner' },
     el('h2', {}, 'Draw'),
     toolGrid,
+    el('h3', {}, 'Landforms'),
+    landformGrid,
     el('div', { class: 'slider-row' }, el('label', {}, 'Brush · ', brushVal), brushSlider),
     el(
       'div',
@@ -412,7 +452,7 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
     el(
       'p',
       { class: 'hint' },
-      'Empty ocean. Paint land. Do not paint mountains — Make sense derives those.',
+      'Stamp a doodle, then paint or erase. Do not paint mountains — Make sense derives those.',
     ),
     critiqueBtn,
   )
@@ -503,7 +543,11 @@ export function updateStageTools(refs: ToolsRefs, state: ShellStateView): void {
 export function mountStageWork(state: ShellStateView): HTMLElement {
   switch (state.stage) {
     case 'sketch':
-      return el('div', {}, el('p', { class: 'hint' }, 'Paint first. Critique when the blob looks like a continent.'))
+      return el(
+        'div',
+        {},
+        el('p', { class: 'hint' }, 'Stamp a landform or paint. Critique when the blob looks like a continent.'),
+      )
     case 'critique':
       return mountCritiqueWork(state)
     case 'make-sense':

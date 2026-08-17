@@ -520,6 +520,21 @@ describe('critiqueWorld', () => {
     const r = critiqueWorld(w)
     expect(r.issues.some((i) => i.id === 'all-capitals')).toBe(true)
   })
+
+  it('flags a mostly-capital city list as major', () => {
+    const w = makeWorld()
+    w.cities = Array.from({ length: 11 }, (_, i) => ({
+      x: i,
+      y: 1,
+      name: `Cap${i}`,
+      seasonal: 0.5,
+      role: 'seat_of_power' as const,
+    }))
+    w.cities.push({ x: 12, y: 1, name: 'Farm', seasonal: 0.5, role: 'farmland' })
+    w.cities.push({ x: 13, y: 1, name: 'Keep', seasonal: 0.5, role: 'farmland' })
+    const r = critiqueWorld(w)
+    expect(r.issues.some((i) => i.id === 'all-capitals')).toBe(true)
+  })
 })
 
 // ---------------------------------------------------------------------------

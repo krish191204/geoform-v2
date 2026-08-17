@@ -2,13 +2,17 @@
 
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_META } from '../world/types'
+import type { World } from '../world/types'
 import type { ShellStateView } from './stages'
 import {
   emptyInspectHint,
   mountChrome,
+  mountInspector,
   mountMapShell,
   mountStageTools,
+  showingDerivedWorld,
   updateChrome,
+  updateInspector,
   updateMapShell,
 } from './ui'
 
@@ -76,6 +80,51 @@ describe('sketch tools', () => {
     const radius = sliders[1] as HTMLInputElement
     expect(radius.step).toBe('1')
     expect(radius.value).toBe('6371')
+  })
+
+  it('offers continent and island doodle chips', () => {
+    const tools = mountStageTools(view())
+    const chips = Array.from(tools.root.querySelectorAll('[data-landform]'))
+    expect(chips.map((el) => el.getAttribute('data-landform'))).toEqual([
+      'continents',
+      'mixed',
+      'islands',
+    ])
+    expect(chips.map((el) => el.childNodes[0]?.textContent)).toEqual([
+      'Full continents',
+      'Continents & islands',
+      'Island world',
+    ])
+  })
+})
+
+describe('sketch vs leftover grounded world', () => {
+  it('Sketch never presents a leftover world as the atlas', () => {
+    const world = { cities: [] } as unknown as World
+    expect(showingDerivedWorld({ world, stage: 'sketch' })).toBe(false)
+    expect(showingDerivedWorld({ world, stage: 'worldbuild' })).toBe(true)
+
+    const mask = new Float32Array(DEFAULT_META.width * DEFAULT_META.height).fill(1)
+    const map = mountMapShell()
+    updateMapShell(map, view({ world, stage: 'sketch', layer: 'biome', mask }))
+    const biome = map.overlay.querySelector('[data-look="biome"]') as HTMLButtonElement
+    expect(biome.disabled).toBe(true)
+    expect(biome.classList.contains('active')).toBe(false)
+    expect(map.viewPlanet.disabled).toBe(true)
+
+    const inspector = mountInspector()
+    updateInspector(
+      inspector,
+      view({
+        world,
+        stage: 'sketch',
+        mask,
+        score: 73,
+        inspectHtml: emptyInspectHint(false),
+      }),
+    )
+    expect(inspector.status.textContent).toContain('not geography yet')
+    expect(inspector.status.textContent).not.toContain('Grounded world')
   })
 })
 

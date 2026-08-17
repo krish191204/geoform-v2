@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { inferSettlementRole, mixQuotas, seedSettlements, suggestSettlementsCovering } from './settlements'
+import { inferSettlementRole, mixQuotas, seedSettlements, suggestSettlementsCovering, demoteExtraSeats } from './settlements'
 import { makeContinentWorld } from '../pipeline/__tests__/fixtures'
 import { makeSenseInline, worldFromMakeSense } from '../pipeline/makeSense'
 
@@ -121,5 +121,35 @@ describe('seedSettlements', () => {
     expect(ca.map((c) => `${c.x},${c.y},${c.name},${c.role}`)).toEqual(
       cb.map((c) => `${c.x},${c.y},${c.name},${c.role}`),
     )
+  })
+
+  it('demoteExtraSeats collapses a pile of thrones to one', async () => {
+    const tw = makeContinentWorld()
+    const meta = {
+      seed: 42,
+      width: tw.width,
+      height: tw.height,
+      planetRadiusKm: tw.planetRadiusKm,
+      obliquityDeg: tw.obliquityDeg,
+      seaLevel: 0.5,
+      threshold: 0.5,
+    }
+    const world = worldFromMakeSense(
+      await makeSenseInline({ meta, mask: new Float32Array(tw.mask) }, () => {}),
+      meta,
+      tw.mask,
+    )
+    world.cities = Array.from({ length: 11 }, (_, i) => ({
+      x: 20 + i,
+      y: 16,
+      name: `Throne${i}`,
+      seasonal: 0.8,
+      role: 'seat_of_power' as const,
+    }))
+    world.cities.push({ x: 28, y: 18, name: 'Farm', seasonal: 0.7, role: 'farmland' })
+    world.cities.push({ x: 36, y: 14, name: 'Port', seasonal: 0.6, role: 'fishing' })
+    demoteExtraSeats(world.cities, world)
+    expect(world.cities.filter((c) => c.role === 'seat_of_power')).toHaveLength(1)
+    expect(world.cities.some((c) => c.role && c.role !== 'seat_of_power')).toBe(true)
   })
 })

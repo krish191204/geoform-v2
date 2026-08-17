@@ -303,8 +303,8 @@ describe('issue pipeline composition', () => {
 describe('WorldMeta defaults', () => {
   it('DEFAULT_META has sensible sketch defaults', () => {
     expect(DEFAULT_META.seed).toBe(1)
-    expect(DEFAULT_META.width).toBeGreaterThan(0)
-    expect(DEFAULT_META.height).toBeGreaterThan(0)
+    expect(DEFAULT_META.width).toBe(768)
+    expect(DEFAULT_META.height).toBe(384)
     expect(DEFAULT_META.planetRadiusKm).toBeGreaterThan(0)
     expect(DEFAULT_META.obliquityDeg).toBeGreaterThan(0)
     expect(DEFAULT_META.seaLevel).toBeGreaterThan(0)

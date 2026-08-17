@@ -73,6 +73,25 @@ describe('Sketch → Worldbuild walkthrough', () => {
     root.remove()
   })
 
+  it('stamping Full continents hides the empty-ocean hint', () => {
+    const root = document.createElement('div')
+    document.body.append(root)
+    mountApp(root)
+
+    const hint = root.querySelector('#mapHint') as HTMLElement
+    expect(hint.hidden).toBe(false)
+
+    const chip = root.querySelector('[data-landform="continents"]') as HTMLButtonElement
+    expect(chip).toBeTruthy()
+    chip.click()
+
+    expect(hint.hidden).toBe(true)
+    const critiqueBtn = Array.from(root.querySelectorAll('button')).find((b) => b.textContent === 'Critique')
+    expect(critiqueBtn?.disabled).toBe(false)
+
+    root.remove()
+  })
+
   it('Make sense grounds climate, mixed towns, and oceanic plates', async () => {
     const tw = makeContinentWorld()
     const meta = {

@@ -363,7 +363,7 @@ describe('computeHydrology: continent fixture', () => {
     }
     // A small cone-shaped continent (radius ~11 cells) is a radial drain:
     // each coastal cell receives a thin wedge of upstream flow. At the
-    // default `RIVER_THRESHOLD = 8` tuned for a 512x256 production world,
+    // default `RIVER_THRESHOLD = 8` tuned for a 768x384 production world,
     // no single land cell on this tiny fixture exceeds the cutoff, so
     // `rivers` is all zero. The relationship still holds: every river
     // cell, if any, must satisfy `flux > RIVER_THRESHOLD`.

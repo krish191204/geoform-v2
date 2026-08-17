@@ -12,7 +12,7 @@
  *     ridge recipe (`|fbm|` octaves, invert, square) and of the hydraulic
  *     loop (rain → slope-capacity → erode or deposit → move downhill →
  *     evaporate, plus angle-of-repose slump). Their numpy sim runs
- *     ~1.4 × dim iterations on a square grid; a 512×256 atlas cannot
+ *     ~1.4 × dim iterations on a square grid; a 768×384 atlas cannot
  *     afford that on every Make-sense click. We keep the same physics
  *     with ~10 D8 sweeps.
  *

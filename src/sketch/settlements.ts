@@ -347,7 +347,25 @@ export function suggestSettlementsCovering(world: World, coverage = DEFAULT_COVE
       fillWorld.cities = scratch
     }
   }
+  demoteExtraSeats(placed, world)
   return placed
+}
+
+/**
+ * One throne. Anything else labelled seat of power is a scoring accident.
+ */
+export function demoteExtraSeats(cities: City[], world: World): void {
+  let seat: City | undefined
+  const view = { ...world, cities }
+  for (const city of cities) {
+    if (city.role !== 'seat_of_power') continue
+    if (!seat) {
+      seat = city
+      continue
+    }
+    city.role = inferSettlementRole(view, city.x, city.y, { allowSeat: false })
+  }
+  if (!seat && cities[0]) cities[0].role = 'seat_of_power'
 }
 
 /** Found towns if the world has none. Returns how many were added. */

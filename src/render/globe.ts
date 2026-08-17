@@ -13,14 +13,16 @@ import {
 } from './draw'
 import type { Layer, World } from '../world/types'
 
-const BAKE = 4
+const BAKE = 6
 const WIDTH_SEG = 192
 const HEIGHT_SEG = 128
-const DISPLACE = 0.055
+const DISPLACE = 0.065
+const TEX_MAX = 4096
 
 function imageDataToTexture(
   image: ImageData,
   renderer: THREE.WebGLRenderer,
+  opts: { srgb?: boolean } = {},
 ): THREE.CanvasTexture {
   const canvas = document.createElement('canvas')
   canvas.width = image.width
@@ -28,7 +30,9 @@ function imageDataToTexture(
   const ctx = canvas.getContext('2d')!
   ctx.putImageData(image, 0, 0)
   const tex = new THREE.CanvasTexture(canvas)
-  tex.colorSpace = THREE.SRGBColorSpace
+  tex.colorSpace = opts.srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace
+  tex.wrapS = THREE.RepeatWrapping
+  tex.wrapT = THREE.ClampToEdgeWrapping
   tex.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy())
   tex.minFilter = THREE.LinearMipmapLinearFilter
   tex.magFilter = THREE.LinearFilter
@@ -137,7 +141,7 @@ export class PlanetView {
 
   sync(world: World, layer: Layer, season: Season, dirtyKey: string): void {
     const { width, height } = world.meta
-    const texW = Math.min(3072, width * BAKE)
+    const texW = Math.min(TEX_MAX, width * BAKE)
     const colorKey = `${dirtyKey}|${layer}|${season}|${width}x${height}|${texW}|c${world.cities.length}`
     if (colorKey === this.cacheKey && this.colorTex) return
     this.cacheKey = colorKey
@@ -150,6 +154,7 @@ export class PlanetView {
         bakeCities: true,
       }),
       this.renderer,
+      { srgb: true },
     )
 
     const terrainKey = `${width}x${height}|${texW}|${world.meta.seed}|${world.cities.length}|e${world.elev[0]}:${world.elev[world.elev.length >> 1]}`

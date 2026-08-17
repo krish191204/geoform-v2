@@ -29,6 +29,15 @@ const LAND_RGB: readonly [number, number, number] = [0x8a, 0x7a, 0x5a]
 const SEA_RGB: readonly [number, number, number] = [0x1a, 0x4f, 0x5c]
 const SEA_FILL = '#163a44'
 
+/** Geoform 1 HD raster: at least 4 pixels per cell, then CSS-downsample. */
+export const ATLAS_CELL_SCALE = 4
+export const ATLAS_BAKE_CAP = 4096
+
+/** Bake width for the atlas: oversample the grid, never exceed the WebGL-ish cap. */
+export function atlasBakeWidth(letterboxW: number, gridW: number): number {
+  return Math.min(ATLAS_BAKE_CAP, Math.max(letterboxW, gridW * ATLAS_CELL_SCALE))
+}
+
 export interface AtlasPaintOpts {
   world: World | null
   mask: Float32Array | null
@@ -87,13 +96,15 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
   const { meta } = opts
   const aspect = meta.width / Math.max(1, meta.height)
   const box = letterbox(cw, ch, aspect)
+  const bakeW = atlasBakeWidth(box.w, meta.width)
+  const bakeH = Math.max(1, Math.round((bakeW * meta.height) / Math.max(1, meta.width)))
 
   const image = opts.world
-    ? bakeWorldImageDataSmooth(opts.world, opts.season, opts.layer, box.w, {
+    ? bakeWorldImageDataSmooth(opts.world, opts.season, opts.layer, bakeW, {
         showRivers: opts.layer === 'relief' || opts.layer === 'biome',
         bakeCities: false,
       })
-    : upsampleMask(opts.mask, meta, box.w, box.h)
+    : upsampleMask(opts.mask, meta, bakeW, bakeH)
 
   const tmp = document.createElement('canvas')
   tmp.width = image.width

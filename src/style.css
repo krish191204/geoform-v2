@@ -285,6 +285,27 @@ button.primary:hover {
   margin-top: 0.15rem;
 }
 
+.style-grid {
+  display: grid;
+  gap: 0.3rem;
+  margin-bottom: 0.45rem;
+}
+
+.style-chip {
+  text-align: left;
+  border-radius: 10px;
+  padding: 0.4rem 0.55rem;
+  width: 100%;
+}
+
+.style-chip small {
+  display: block;
+  opacity: 0.7;
+  font-weight: 400;
+  font-size: 0.72rem;
+  margin-top: 0.08rem;
+}
+
 .slider-row {
   display: grid;
   gap: 0.35rem;
