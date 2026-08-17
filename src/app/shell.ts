@@ -41,7 +41,11 @@ import {
 import { renderMaskToCanvas } from './canvas_paint'
 import { createMaskBrushes } from '../sketch/maskBrushes'
 import { placeCity, removeNearestCity } from '../sketch/worldbuild'
-import { makeSenseInline } from '../pipeline/makeSense_inline'
+import {
+  makeSenseInline,
+  provenanceFromResult,
+  worldFromMakeSense,
+} from '../pipeline/makeSense'
 import { critiqueMask, critiqueWorld } from '../critique/main'
 import {
   saveMask,
@@ -108,7 +112,7 @@ export function announce(
   text: string,
 ): void {
   window.dispatchEvent(
-    new CustomEvent('coach:message', { detail: { tone, text } }),
+    new CustomEvent('coach:message', { detail: { tone, text, message: text } }),
   )
 }
 
@@ -132,7 +136,7 @@ export function mountApp(root: HTMLElement): void {
 
   // Mask brush module — owns the dab logic. Created once, reused for
   // every canvas pointer event.
-  const brushes = createMaskBrushes()
+  const { brushes, bindMask } = createMaskBrushes()
 
   // Mount the three regions: topbar, stage body, coach bar.
   const topbarRefs = mountTopbar()
@@ -205,13 +209,14 @@ export function mountApp(root: HTMLElement): void {
       // Sketch tool: mutate the mask.
       if (!flags.mask) {
         flags.mask = new Float32Array(state.meta.width * state.meta.height)
+        bindMask(flags.mask)
       }
       const tool = state.tool === 'erase-land' ? 'erase-land' : 'draw-land'
       brushes.dab({
         mask: flags.mask,
         meta: state.meta,
-        x,
-        y,
+        cx: x,
+        cy: y,
         brushSize: state.brushSize,
         strength: state.strength,
         tool,
@@ -355,21 +360,27 @@ export function mountApp(root: HTMLElement): void {
     render()
     announce('info', 'Make-sense running…')
     try {
-      const result = await makeSenseInline({
-        meta: state.meta,
-        mask: flags.mask ?? new Float32Array(state.meta.width * state.meta.height),
-      })
-      state.world = result.world
-      state.provenance = result.provenance
+      const mask =
+        flags.mask ?? new Float32Array(state.meta.width * state.meta.height)
+      const result = await makeSenseInline(
+        { meta: state.meta, mask },
+        () => {},
+      )
+      const world = worldFromMakeSense(result, state.meta, mask)
+      const provenance = provenanceFromResult(result)
+      state.world = world
       // Post-Make-sense critique on the derived world.
-      const c = critiqueWorld(result.world)
+      const c = critiqueWorld(world)
+      provenance.scoreAfter = c.score
+      state.provenance = provenance
       state.issues = c.issues
       flags.score = c.score
       flags.makeSenseComplete = true
       state.isProcessing = false
+      const riverCells = world.rivers.reduce((n, v) => n + v, 0)
       announce(
         'success',
-        `Make-sense complete. Score: ${c.score}. Rivers: ${c.issues.length === 0 ? '✓' : 'needs review'}.`,
+        `Make-sense complete. Score ${c.score}. Mask moved ${provenance.maskDeltaPct.toFixed(2)}%. Rivers ${riverCells}.`,
       )
     } catch (err) {
       state.isProcessing = false

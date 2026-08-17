@@ -10,12 +10,15 @@
  * The public surface is:
  *
  *   - `makeSense(input)`            — fire-and-await entry point.
+ *   - `worldFromMakeSense(...)`     — stitch result + mask into a World.
  *   - `MakeSenseWorker`             — long-lived worker wrapper.
  *   - `TOTAL_STEPS`                 — the seven-step step count.
  *   - `MASK_LOCK_AREA_FRACTION`     — 5% drift budget.
  *   - `MASK_LOCK_MIN_COMPONENT`     — 100-cell per-component epsilon.
  */
 
+import type { CellBiome, Provenance, World, WorldMeta } from '../world/types'
+import { SEASONS_V1 } from '../world/types'
 import type { MakeSenseInput, MakeSenseResult, StepResult } from './types'
 import { MakeSenseWorker } from './makeSense.worker'
 import { makeSenseInline } from './makeSense_inline'
@@ -62,6 +65,58 @@ export async function makeSense(
     }
   }
   return makeSenseInline(input, stepSink)
+}
+
+/**
+ * Turn a pipeline result into the World the rest of the app reads.
+ * Copies the sketch mask (MakeSenseResult does not carry one).
+ */
+export function worldFromMakeSense(
+  result: MakeSenseResult,
+  meta: WorldMeta,
+  mask: Float32Array,
+): World {
+  return {
+    meta: { ...meta },
+    mask: new Float32Array(mask),
+    plateId: result.plateId,
+    plateVx: result.plateVx,
+    plateVy: result.plateVy,
+    elev: result.elev,
+    seasons: SEASONS_V1,
+    summer: result.summer,
+    winter: result.winter,
+    summerMoist: result.summerMoist,
+    winterMoist: result.winterMoist,
+    tempMean: result.tempMean,
+    tempRange: result.tempRange,
+    moistMean: result.moistMean,
+    flux: result.flux,
+    rivers: result.rivers,
+    biome: result.biome as CellBiome[],
+    suitability: result.suitability,
+    cities: [],
+  }
+}
+
+/** Map pipeline provenance onto the editor Provenance shape. */
+export function provenanceFromResult(result: MakeSenseResult): Provenance {
+  return {
+    steps: result.provenance.steps.map((s) => {
+      const measurements: Record<string, number> = {}
+      for (const [k, v] of Object.entries(s.measurements)) {
+        if (typeof v === 'number') measurements[k] = v
+      }
+      return { name: s.stepName, at: s.elapsedMs, measurements }
+    }),
+    inputMaskArea: result.provenance.inputMaskArea,
+    outputMaskArea: result.provenance.outputMaskArea,
+    maskDeltaPct: Number.isFinite(result.provenance.maskDeltaPct)
+      ? result.provenance.maskDeltaPct
+      : 0,
+    scoreBefore: result.provenance.scoreBefore,
+    scoreAfter: result.provenance.scoreAfter,
+  }
 }
 
 // ---------------------------------------------------------------------------

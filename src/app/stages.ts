@@ -27,6 +27,8 @@ export type StageTransition = Stage
  * they need from a single bundle.
  */
 export interface ShellStateView extends EditorState {
+  /** Live sketch mask; null until the first dab. */
+  readonly mask: Float32Array | null
   /** True iff the user committed the Sketch mask. */
   readonly maskCommitted: boolean
   /** True iff Make-sense produced a `World`. */

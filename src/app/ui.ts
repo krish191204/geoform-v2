@@ -210,10 +210,10 @@ export function mountCoachBar(): HTMLElement {
     // read `text` — that field doesn't exist, so the badge stayed
     // empty. Read the correct field.
     const detail = (ev as CustomEvent).detail as
-      | { tone?: 'info' | 'success' | 'warn' | 'error'; message?: string }
+      | { tone?: 'info' | 'success' | 'warn' | 'error'; message?: string; text?: string }
       | undefined
     const tone = detail?.tone ?? 'info'
-    const text = detail?.message ?? ''
+    const text = detail?.message ?? detail?.text ?? ''
     badge.className = `coach-badge coach-${tone}`
     badge.textContent = text
   })
