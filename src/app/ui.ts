@@ -25,8 +25,10 @@ import {
   type ShellStateView,
   type StageTransitionDetail,
   type ToolChangeDetail,
+  type ViewChangeDetail,
 } from './stages'
 import { LAYER_CHIPS } from './atlas'
+import { SETTLEMENT_ROLE_LABEL } from '../sketch/settlements'
 import { hasAnyLand } from './canvas_paint'
 
 // ---------------------------------------------------------------------------
@@ -131,21 +133,43 @@ export function updateChrome(refs: ChromeRefs, state: ShellStateView): void {
 export interface MapShellRefs {
   readonly root: HTMLElement
   readonly canvas: HTMLCanvasElement
+  readonly globe: HTMLCanvasElement
   readonly overlay: HTMLElement
   readonly seasonBar: HTMLElement
   readonly hudTool: HTMLElement
   readonly hudSeason: HTMLElement
+  readonly viewAtlas: HTMLButtonElement
+  readonly viewPlanet: HTMLButtonElement
   readonly loading: HTMLElement
   readonly hint: HTMLElement
 }
 
 export function mountMapShell(): MapShellRefs {
   const canvas = el('canvas', { id: 'map', class: 'map' })
+  const globe = el('canvas', { id: 'globe', hidden: true })
   const overlay = el('div', { class: 'map-overlay', id: 'layers' })
   const seasonBar = el('div', { class: 'map-seasons' })
   const hudTool = el('span', { id: 'hudTool' }, 'Land')
   const hudSeason = el('span', { id: 'hudSeason' }, 'Summer')
-  const hud = el('div', { class: 'map-hud' }, hudSeason, hudTool)
+  const viewAtlas = el(
+    'button',
+    { type: 'button', class: 'view-toggle active', id: 'viewAtlas', title: 'Flat atlas' },
+    'Atlas',
+  )
+  const viewPlanet = el(
+    'button',
+    { type: 'button', class: 'view-toggle', id: 'viewPlanet', title: 'Rotate the planet', disabled: true },
+    'Planet',
+  )
+  viewAtlas.addEventListener('click', () => {
+    const detail: ViewChangeDetail = { view: 'atlas' }
+    fire(APP_EVENTS.VIEW_CHANGE, detail)
+  })
+  viewPlanet.addEventListener('click', () => {
+    const detail: ViewChangeDetail = { view: 'planet' }
+    fire(APP_EVENTS.VIEW_CHANGE, detail)
+  })
+  const hud = el('div', { class: 'map-hud' }, hudSeason, viewAtlas, viewPlanet, hudTool)
   const loading = el('div', { class: 'loading', id: 'loading', hidden: true }, 'Grounding the doodle…')
   const hint = el('div', { class: 'map-hint', id: 'mapHint' }, 'Paint land on the empty ocean')
 
@@ -153,13 +177,26 @@ export function mountMapShell(): MapShellRefs {
     'section',
     { class: 'map-shell' },
     canvas,
+    globe,
     overlay,
     seasonBar,
     hud,
     loading,
     hint,
   )
-  return { root, canvas, overlay, seasonBar, hudTool, hudSeason, loading, hint }
+  return {
+    root,
+    canvas,
+    globe,
+    overlay,
+    seasonBar,
+    hudTool,
+    hudSeason,
+    viewAtlas,
+    viewPlanet,
+    loading,
+    hint,
+  }
 }
 
 export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void {
@@ -210,6 +247,11 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
       ? 'Summer'
       : 'Winter'
     : 'Sketch'
+  refs.viewAtlas.classList.toggle('active', state.viewMode === 'atlas')
+  refs.viewPlanet.classList.toggle('active', state.viewMode === 'planet')
+  refs.viewPlanet.disabled = !state.world
+  refs.canvas.hidden = state.viewMode === 'planet'
+  refs.globe.hidden = state.viewMode !== 'planet'
   refs.loading.hidden = !state.isProcessing
   const empty = !hasAnyLand(state.mask, state.meta.threshold) && !state.world
   refs.hint.hidden = !empty || state.stage !== 'sketch'
@@ -463,7 +505,7 @@ function mountWorldbuildTools(state: ShellStateView): HTMLElement {
     el(
       'p',
       { class: 'hint' },
-      'Cities sit on the derived world. Ocean, alpine, and poor suitability refuse a city.',
+      'Cities sit on the derived world. Towns were founded where the land can feed them — place or raze to edit.',
     ),
     backBtn,
   )
@@ -533,17 +575,18 @@ function mountWorldbuildWork(state: ShellStateView): HTMLElement {
   const list = el('ul', { class: 'city-list' })
   if (state.world) {
     for (const city of state.world.cities) {
+      const role = city.role ? SETTLEMENT_ROLE_LABEL[city.role] : ''
       list.append(
         el(
           'li',
           {},
           el('span', {}, city.name),
-          el('span', {}, `${city.x}, ${city.y}`),
+          el('span', {}, role ? `${role} · ${city.x}, ${city.y}` : `${city.x}, ${city.y}`),
         ),
       )
     }
   }
-  if (n === 0) list.append(el('li', {}, 'No cities yet.'))
+  if (n === 0) list.append(el('li', {}, 'No cities yet — land may be too harsh to settle.'))
   return el('div', {}, el('p', { class: 'cities-count' }, `Cities: ${n}`), list)
 }
 

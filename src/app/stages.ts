@@ -43,6 +43,8 @@ export interface ShellStateView extends EditorState {
   readonly pipelineStep: number
   /** Last inspector readout HTML (empty until hover). */
   readonly inspectHtml: string
+  /** Atlas sheet vs 3D globe. */
+  readonly viewMode: 'atlas' | 'planet'
 }
 
 export interface StageGate {
@@ -175,6 +177,8 @@ export const APP_EVENTS = {
   TOGGLE_INSPECTOR: 'app:toggle-inspector',
   /** Atlas layer chip. Detail: `{ layer: Layer }`. */
   LAYER_CHANGE: 'app:layer-change',
+  /** Atlas vs planet globe. Detail: `{ view: 'atlas' | 'planet' }`. */
+  VIEW_CHANGE: 'app:view-change',
   /** Summer / winter chip. Detail: `{ season: 'summer' | 'winter' }`. */
   SEASON_CHANGE: 'app:season-change',
   /** Critique button click — commits the Sketch mask. No detail. */
@@ -230,6 +234,11 @@ export interface LayerChangeDetail {
 /** Type-safe detail for `app:season-change`. */
 export interface SeasonChangeDetail {
   readonly season: 'summer' | 'winter'
+}
+
+/** Type-safe detail for `app:view-change`. */
+export interface ViewChangeDetail {
+  readonly view: 'atlas' | 'planet'
 }
 
 /** Coach message shape — the `coach:message` event detail. */

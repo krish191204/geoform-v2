@@ -76,12 +76,23 @@ export const SEASONS_V1: Seasons = 2
 // ---------------------------------------------------------------------------
 
 /** A settlement placed during Worldbuild. */
+export type SettlementRole =
+  | 'seat_of_power'
+  | 'farmland'
+  | 'fishing'
+  | 'mining'
+  | 'hunting'
+  | 'trade'
+  | 'pastoral'
+
 export interface City {
   x: number
   y: number
   name: string
   /** 0..1 suitability score accounting for seasonality. */
   seasonal: number
+  /** What this town does — set when auto-placed or inferred on found. */
+  role?: SettlementRole
 }
 
 // ---------------------------------------------------------------------------

@@ -20,17 +20,18 @@
  *   4. Divergent rift Gaussian on the land side, ocean side otherwise.
  *   5. Transform / passive: nothing.
  *   6. Passive-coast shelf bump on land cells near the sea.
- *   7. Inland craton noise (deterministic, max 100 m).
+ *   7. Coherent relief (ridge fBm on belts, rolling fBm on craton) and a
+ *      short hydraulic-erosion pass — see `terrainDetail.ts`.
  *   8. Final 3×3 box blur.
  *   9. Assertion: land elev ≥ 0, peak elev ≤ 8000 m.
  *
- * Determinism: pure function over `plates` + `mask`; identical inputs
- * always produce identical outputs. Craton noise is seeded per cell so
- * neighbouring cells never share a noise band.
+ * Determinism: pure function over `plates` + `mask` + `seed`; identical
+ * inputs always produce identical outputs.
  */
 
 import type { PlateAssignment } from './plates'
-import { idx, wrapX, meanLand, lerp, createRng } from './helpers'
+import { idx, wrapX, meanLand, lerp } from './helpers'
+import { sculptTerrain } from './terrainDetail'
 
 // ---------------------------------------------------------------------------
 // Output
@@ -60,8 +61,6 @@ const PEAK_OC_ARC_M = 1500
 const PEAK_DIVERGENT_M = -500
 /** Passive-coast continental shelf bump peak, in metres. */
 const PEAK_SHELF_M = 50
-/** Max inland craton noise added to a land cell, in metres. */
-const MAX_CRATON_NOISE_M = 100
 
 /** CC Gaussian radius in cells (peak ~8 cells falloff). */
 const CC_RADIUS = 8
@@ -78,8 +77,6 @@ const DIVERGENT_SIGMA = 2.0
 /** Coast-shelf influence radius in cells. */
 const SHELF_RADIUS = 2
 
-/** Global salt for the inland craton noise stream. */
-const NOISE_SEED = 1
 /** Hard upper bound on peak elevation, in metres. */
 const MAX_PEAK_M = 8000
 /** Skip Gaussian samples whose magnitude is below this — saves work. */
@@ -240,6 +237,7 @@ function sidePredicate(
  *   - `width`      — map width in cells.
  *   - `height`     — map height in cells.
  *   - `threshold`  — mask threshold that distinguishes land from sea.
+ *   - `seed`       — world seed; drives coherent relief and erosion.
  */
 export function computeOrogeny(
   plates: PlateAssignment,
@@ -247,6 +245,7 @@ export function computeOrogeny(
   width: number,
   height: number,
   threshold: number,
+  seed: number = 1,
 ): OrogenyResult {
   const n = width * height
   const elev = new Float32Array(n)
@@ -422,15 +421,11 @@ export function computeOrogeny(
     }
   }
 
-  // 7. Inland craton noise. Deterministic per-cell RNG; max 100 m.
-  // Seed mixes the global salt with the cell index and the pre-noise
-  // elevation (scaled) so neighbouring cells don't land in the same
-  // noise band.
-  for (let i = 0; i < n; i++) {
-    if (mask[i] <= threshold) continue
-    const cellRng = createRng(NOISE_SEED + i + Math.floor(elev[i] * 100))
-    elev[i] += cellRng() * MAX_CRATON_NOISE_M
-  }
+  // 7. Coherent relief + short hydraulic erosion (FastNoise-style fBm /
+  //    ridged belts, dandrino hydraulic loop). Replaces per-cell white
+  //    noise so craton is rolling hills and collision belts have ridges
+  //    that hydrology can actually drain.
+  sculptTerrain(elev, boundaryUplift, mask, width, height, threshold, seed)
 
   // 8. Final smoothing.
   blurElev(elev, mask, threshold, width, height)

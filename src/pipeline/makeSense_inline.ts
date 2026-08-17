@@ -223,7 +223,7 @@ export async function makeSenseInline(
   // Convert plate boundaries + drift into elevation. Returns the elevation
   // field plus any auxiliary data the climate step needs.
   const t2 = now()
-  const orogeny = computeOrogeny(platesResult, mask, width, height, threshold)
+  const orogeny = computeOrogeny(platesResult, mask, width, height, threshold, seed)
   const peakElev = peakLand(orogeny.elev, mask, threshold)
   const meanElev = meanLandSafe(orogeny.elev, mask, threshold)
   stage(

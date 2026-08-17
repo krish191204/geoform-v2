@@ -17,7 +17,7 @@ if (typeof (globalThis as { ImageData?: unknown }).ImageData === 'undefined') {
 }
 
 import { describe, it, expect } from 'vitest'
-import { draw, inspectCell, screenToCell } from './draw'
+import { draw, inspectCell, screenToCell, bakeBumpImageData, bakeWorldImageDataSmooth } from './draw'
 import { biomeColor, type CellBiome, type World, type WorldMeta } from '../world/types'
 
 // ---------------------------------------------------------------------------
@@ -177,9 +177,15 @@ describe('draw', () => {
     expect(img.height).toBe(height)
 
     for (let x = 0; x < width; x++) {
-      const expected = hexToRgb(biomeColor(biome[x]))
-      expect(pixel(img, x, 0)).toEqual(expected)
+      const raw = hexToRgb(biomeColor(biome[x]))
+      const got = pixel(img, x, 0)
+      // Biome is mixed with relief + hillshade so it is not poster-paint,
+      // but it must still read as that biome's hue.
+      expect(Math.abs(got[0] - raw[0])).toBeLessThan(120)
+      expect(Math.abs(got[1] - raw[1])).toBeLessThan(120)
+      expect(Math.abs(got[2] - raw[2])).toBeLessThan(120)
     }
+    expect(pixel(img, 1, 0)).not.toEqual(pixel(img, 2, 0))
   })
 
   it('renders a moisture gradient when layer=moisture and the chosen season has a ramp', () => {
@@ -341,6 +347,20 @@ describe('screenToCell', () => {
       }) as DOMRect
     expect(screenToCell(canvas, -10, 5, world)).toBeNull()
     expect(screenToCell(canvas, 500, 500, world)).toBeNull()
+  })
+})
+
+describe('globe bakes', () => {
+  it('produce opaque textures matching the requested size', () => {
+    const world = makeWorld({ width: 8, height: 4 })
+    const bump = bakeBumpImageData(world, 2)
+    expect(bump.width).toBe(16)
+    expect(bump.height).toBe(8)
+    expect(bump.data[3]).toBe(255)
+    const color = bakeWorldImageDataSmooth(world, 'summer', 'relief', 16, { bakeCities: false })
+    expect(color.width).toBe(16)
+    expect(color.height).toBe(8)
+    expect(color.data[3]).toBe(255)
   })
 })
 

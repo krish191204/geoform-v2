@@ -32,6 +32,10 @@ export interface DrawOptions {
   scale?: number
   /** Overlay rivers on the Relief layer. Defaults to true. */
   showRivers?: boolean
+  /** Bilinear sample when scale > 1 (continuous layers). */
+  smooth?: boolean
+  /** Stamp city dots into the bitmap (globe textures). Atlas overlays instead. */
+  bakeCities?: boolean
 }
 
 /** Every field the inspector binds to a single cell, plus display strings. */
@@ -270,12 +274,23 @@ function plateColor(pid: number): [number, number, number] {
 // 5. Coastal & sampling helpers
 // ---------------------------------------------------------------------------
 
+function wrapX(x: number, w: number): number {
+  return ((x % w) + w) % w
+}
+
 function elevAt(world: World, x: number, y: number): number {
   const { width: w, height: h } = world.meta
-  const cx = Math.max(0, Math.min(w - 1, x))
+  const cx = wrapX(x, w)
   const cy = Math.max(0, Math.min(h - 1, y))
   return world.elev[cy * w + cx]
 }
+
+/** Characteristic relief so rolling hills and ranges both shade. Elev is metres. */
+const SHADE_M = 600
+/** Flux above this tints as a tributary (matches hydrology river cutoff). */
+const RIVER_VISIBLE = 8
+/** Flux above this tints as a main stem. */
+const RIVER_MAIN = 24
 
 function isPlateEdge(world: World, x: number, y: number): boolean {
   const { width: w, height: h } = world.meta
@@ -335,21 +350,9 @@ function cellColor(
   switch (layer) {
     case 'relief': {
       rgb = elevBandColor(e, ocean)
-      // Hillshade: soft directional light from the NW corner.
-      const er = elevAt(world, x + 1, y)
-      const ed = elevAt(world, x, y + 1)
-      const dx = (e - er) * 0.0042
-      const dy = (e - ed) * 0.003
-      const shade = clamp(0.72 + dx + dy, 0.55, 1.25)
-      rgb = [clamp(rgb[0] * shade), clamp(rgb[1] * shade), clamp(rgb[2] * shade)]
-      // River overlay: lit cells that are flagged as river.
-      if (showRivers && !ocean && world.rivers[i] === 1) {
-        rgb = mix(rgb, [55, 140, 190], 0.6)
-      }
       break
     }
     case 'elevation': {
-      // Banded ramp only — no hillshade, no rivers.
       rgb = elevBandColor(e, ocean)
       break
     }
@@ -371,21 +374,64 @@ function cellColor(
       break
     }
     case 'biome': {
-      rgb = hexToRgb(biomeColor(world.biome[i] ?? 'ocean'))
+      const bio = hexToRgb(biomeColor(world.biome[i] ?? 'ocean'))
+      // Mix a little relief so biome isn't flat poster paint (v1 satellite trick).
+      rgb = ocean ? bio : mix(elevBandColor(e, false), bio, 0.62)
       break
     }
     case 'suitability': {
-      // Was world.moistMean (annual mean precipitation — wrong field).
-      // Render world.suitability (the per-cell city placement score,
-      // 0..1) which is what the Suitability layer is conceptually for.
-      rgb = suitColor(world.suitability[i])
+      rgb = ocean ? mix(suitColor(world.suitability[i]), [18, 48, 68], 0.55) : suitColor(world.suitability[i])
       break
     }
   }
 
-  // Coastal ink/foam — applies to topographical layers, never to plates.
-  if (layer !== 'plates' && layer !== 'biome' && isCoast(world, x, y)) {
+  // Hillshade on terrain-ish layers. Elevation stays a raw height ramp.
+  if (layer === 'relief' || layer === 'biome' || layer === 'plates') {
+    const er = elevAt(world, x + 1, y)
+    const ed = elevAt(world, x, y + 1)
+    const dx = (e - er) / SHADE_M
+    const dy = (e - ed) / SHADE_M
+    const shade = 0.72 + dx * 4.2 + dy * 3.0
+    const ambient = layer === 'biome' ? 0.55 : layer === 'plates' ? 0.48 : 0.35
+    const lit = ambient + ((1 - ambient) * clamp(shade, 0.45, 1.35)) / 1.15
+    rgb = [clamp(rgb[0] * lit), clamp(rgb[1] * lit), clamp(rgb[2] * lit)]
+  }
+
+  // Still water grain — no animation (draw stays pure).
+  if (ocean && (layer === 'relief' || layer === 'biome' || layer === 'elevation')) {
+    const depth = e < 0 ? ramp(1 + e / 1200) : 0.35
+    const wave =
+      0.5 + 0.5 * Math.sin(x * 0.35 + Math.cos(y * 0.22) * 2) * Math.sin(y * 0.4)
+    const shimmer = wave * depth * 0.12
+    rgb = [
+      clamp(rgb[0] + shimmer * 40),
+      clamp(rgb[1] + shimmer * 70),
+      clamp(rgb[2] + shimmer * 90),
+    ]
+  }
+
+  // Coastal ink/foam — skip plates so sutures stay readable.
+  if (layer !== 'plates' && isCoast(world, x, y)) {
     rgb = ocean ? mix(rgb, [210, 230, 230], 0.28) : mix(rgb, [30, 42, 36], 0.22)
+  }
+
+  // Rivers from flux (tributaries faint, mains brighter) — v1 network look.
+  if (showRivers && !ocean && layer !== 'plates' && layer !== 'temperature') {
+    const f = world.flux[i]
+    const flagged = world.rivers[i] === 1
+    if (f >= RIVER_VISIBLE || flagged) {
+      const isMain = f >= RIVER_MAIN
+      const strength = isMain
+        ? Math.min(1, (f - RIVER_MAIN) / 40)
+        : Math.min(1, Math.max(0, f - RIVER_VISIBLE) / 20)
+      const t = (isMain ? 0.55 : flagged ? 0.42 : 0.32) + strength * 0.38
+      rgb = mix(rgb, isMain ? [45, 125, 185] : [70, 155, 195], Math.min(1, t))
+    }
+  }
+
+  if (layer === 'relief' || layer === 'biome' || layer === 'plates') {
+    const grain = ((Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1) * 0.08 - 0.04
+    rgb = [clamp(rgb[0] * (1 + grain)), clamp(rgb[1] * (1 + grain)), clamp(rgb[2] * (1 + grain))]
   }
 
   return rgb
@@ -412,6 +458,8 @@ export function draw(
   const { width: w, height: h } = world.meta
   const scale = Math.max(1, Math.floor(options.scale ?? 1))
   const showRivers = options.showRivers ?? layer === 'relief'
+  const smooth = options.smooth ?? false
+  const bakeCities = options.bakeCities ?? false
 
   const outW = w * scale
   const outH = h * scale
@@ -429,8 +477,20 @@ export function draw(
         data[o + 3] = 255
       }
     }
+  } else if (smooth && layer !== 'plates' && layer !== 'biome') {
+    for (let py = 0; py < outH; py++) {
+      const yf = py / scale
+      for (let px = 0; px < outW; px++) {
+        const xf = px / scale
+        const rgb = sampleBilinear(world, season, layer, xf, yf, showRivers)
+        const o = (py * outW + px) * 4
+        data[o] = rgb[0]
+        data[o + 1] = rgb[1]
+        data[o + 2] = rgb[2]
+        data[o + 3] = 255
+      }
+    }
   } else {
-    // Nearest-neighbour up-sample so blocky atlases stay sharp.
     for (let py = 0; py < outH; py++) {
       const sy = Math.min(h - 1, (py / scale) | 0)
       for (let px = 0; px < outW; px++) {
@@ -445,6 +505,204 @@ export function draw(
     }
   }
 
+  if (bakeCities) stampCities(image, world, scale)
+  return image
+}
+
+function sampleBilinear(
+  world: World,
+  season: Season,
+  layer: Layer,
+  xf: number,
+  yf: number,
+  showRivers: boolean,
+): [number, number, number] {
+  const { width: w, height: h } = world.meta
+  const x0 = wrapX(xf | 0, w)
+  const y0 = Math.min(h - 1, yf | 0)
+  const x1 = wrapX(x0 + 1, w)
+  const y1 = Math.min(h - 1, y0 + 1)
+  const fx = xf - Math.floor(xf)
+  const fy = yf - y0
+  const c00 = cellColor(world, season, layer, x0, y0, showRivers)
+  const c10 = cellColor(world, season, layer, x1, y0, showRivers)
+  const c01 = cellColor(world, season, layer, x0, y1, showRivers)
+  const c11 = cellColor(world, season, layer, x1, y1, showRivers)
+  return mix(mix(c00, c10, fx), mix(c01, c11, fx), fy)
+}
+
+function stampCities(image: ImageData, world: World, scale: number): void {
+  const { width: w } = world.meta
+  const cw = image.width
+  const ch = image.height
+  const data = image.data
+  const r = Math.max(2, Math.round(scale * 0.55))
+  for (const c of world.cities) {
+    const cx = Math.round((c.x + 0.5) * (cw / w))
+    const cy = Math.round((c.y + 0.5) * (ch / world.meta.height))
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (dx * dx + dy * dy > r * r) continue
+        const px = cx + dx
+        const py = cy + dy
+        if (px < 0 || py < 0 || px >= cw || py >= ch) continue
+        const o = (py * cw + px) * 4
+        data[o] = 245
+        data[o + 1] = 236
+        data[o + 2] = 214
+        data[o + 3] = 255
+      }
+    }
+  }
+}
+
+/**
+ * High-res bilinear bake for the globe (and a smoother atlas blit).
+ * `outW` is texture width; height follows the world's 2:1 aspect.
+ */
+export function bakeWorldImageDataSmooth(
+  world: World,
+  season: Season,
+  layer: Layer,
+  outW: number,
+  options: { showRivers?: boolean; bakeCities?: boolean } = {},
+): ImageData {
+  const { width: w, height: h } = world.meta
+  const cw = Math.max(1, outW)
+  const ch = Math.max(1, Math.round((outW * h) / Math.max(1, w)))
+  const showRivers = options.showRivers ?? layer === 'relief'
+  const image = new ImageData(cw, ch)
+  const data = image.data
+  const scale = cw / w
+  const smooth = layer !== 'plates' && layer !== 'biome'
+  for (let py = 0; py < ch; py++) {
+    const yf = py / scale
+    for (let px = 0; px < cw; px++) {
+      const xf = px / scale
+      const rgb = smooth
+        ? sampleBilinear(world, season, layer, xf, yf, showRivers)
+        : cellColor(
+            world,
+            season,
+            layer,
+            Math.min(w - 1, xf | 0),
+            Math.min(h - 1, yf | 0),
+            showRivers,
+          )
+      const o = (py * cw + px) * 4
+      data[o] = rgb[0]
+      data[o + 1] = rgb[1]
+      data[o + 2] = rgb[2]
+      data[o + 3] = 255
+    }
+  }
+  if (options.bakeCities ?? true) stampCities(image, world, scale)
+  return image
+}
+
+/** Grey bump: ocean dark, highlands bright. Elev is metres. */
+export function bakeBumpImageData(world: World, scale = 2): ImageData {
+  const { width: w, height: h } = world.meta
+  const cw = Math.max(1, w * scale)
+  const ch = Math.max(1, h * scale)
+  const image = new ImageData(cw, ch)
+  const data = image.data
+  for (let py = 0; py < ch; py++) {
+    const y = Math.min(h - 1, (py / scale) | 0)
+    for (let px = 0; px < cw; px++) {
+      const x = Math.min(w - 1, (px / scale) | 0)
+      const i = y * w + x
+      const e = world.elev[i]
+      const ocean = isOceanCell(world, i)
+      const v = ocean
+        ? Math.round(Math.max(0, 18 + (e < 0 ? (1 + e / 4000) * 50 : 40)))
+        : Math.round(90 + clamp(e / 8000, 0, 1) * 165)
+      const o = (py * cw + px) * 4
+      data[o] = v
+      data[o + 1] = v
+      data[o + 2] = v
+      data[o + 3] = 255
+    }
+  }
+  return image
+}
+
+/** RGB normal map from elevation slope. */
+export function bakeNormalImageData(world: World, scale = 2): ImageData {
+  const { width: w, height: h } = world.meta
+  const cw = Math.max(1, w * scale)
+  const ch = Math.max(1, h * scale)
+  const image = new ImageData(cw, ch)
+  const data = image.data
+  for (let py = 0; py < ch; py++) {
+    const y = Math.min(h - 1, (py / scale) | 0)
+    for (let px = 0; px < cw; px++) {
+      const x = Math.min(w - 1, (px / scale) | 0)
+      const i = y * w + x
+      const e = world.elev[i]
+      const dx = (elevAt(world, x + 1, y) - elevAt(world, x - 1, y)) / 400
+      const dy = (elevAt(world, x, y + 1) - elevAt(world, x, y - 1)) / 400
+      const dz = isOceanCell(world, i) ? 0.45 : 0.85 + clamp(e / 8000, 0, 1) * 0.4
+      const len = Math.hypot(dx, dy, dz) || 1
+      const o = (py * cw + px) * 4
+      data[o] = Math.round((-dx / len) * 0.5 * 255 + 128)
+      data[o + 1] = Math.round((dy / len) * 0.5 * 255 + 128)
+      data[o + 2] = Math.round((dz / len) * 0.5 * 255 + 128)
+      data[o + 3] = 255
+    }
+  }
+  return image
+}
+
+/** Displacement height for the globe mesh. */
+export function bakeDisplacementImageData(world: World, scale = 2): ImageData {
+  const { width: w, height: h } = world.meta
+  const cw = Math.max(1, w * scale)
+  const ch = Math.max(1, h * scale)
+  const image = new ImageData(cw, ch)
+  const data = image.data
+  for (let py = 0; py < ch; py++) {
+    const y = Math.min(h - 1, (py / scale) | 0)
+    for (let px = 0; px < cw; px++) {
+      const x = Math.min(w - 1, (px / scale) | 0)
+      const i = y * w + x
+      const e = world.elev[i]
+      const v = isOceanCell(world, i)
+        ? Math.round(40 + (e < 0 ? clamp(1 + e / 4000, 0, 1) * 30 : 20))
+        : Math.round(110 + clamp(e / 8000, 0, 1) * 145)
+      const o = (py * cw + px) * 4
+      data[o] = v
+      data[o + 1] = v
+      data[o + 2] = v
+      data[o + 3] = 255
+    }
+  }
+  return image
+}
+
+/** Roughness: shiny ocean, matte land. */
+export function bakeRoughnessImageData(world: World, scale = 2): ImageData {
+  const { width: w, height: h } = world.meta
+  const cw = Math.max(1, w * scale)
+  const ch = Math.max(1, h * scale)
+  const image = new ImageData(cw, ch)
+  const data = image.data
+  for (let py = 0; py < ch; py++) {
+    const y = Math.min(h - 1, (py / scale) | 0)
+    for (let px = 0; px < cw; px++) {
+      const x = Math.min(w - 1, (px / scale) | 0)
+      const i = y * w + x
+      const e = world.elev[i]
+      const v = isOceanCell(world, i)
+        ? Math.round(28 + (e < 0 ? clamp(1 + e / 4000, 0, 1) * 18 : 12))
+        : Math.round(165 + clamp(e / 8000, 0, 1) * 55)
+      const o = (py * cw + px) * 4
+      data[o] = v
+      data[o + 1] = v
+      data[o + 2] = v
+      data[o + 3] = 255
+    }
+  }
   return image
 }
 

@@ -19,6 +19,7 @@ import {
   type ShellStateView,
   type StageTransitionDetail,
   type ToolChangeDetail,
+  type ViewChangeDetail,
 } from './stages'
 import {
   emptyInspectHint,
@@ -39,6 +40,7 @@ import { cellFromPointer, paintAtlas } from './atlas'
 import { inspectCell } from '../render/draw'
 import { createMaskBrushes, fireCommitHook } from '../sketch/maskBrushes'
 import { placeCity, removeNearestCity } from '../sketch/worldbuild'
+import { inferSettlementRole, seedSettlements } from '../sketch/settlements'
 import {
   makeSenseInline,
   provenanceFromResult,
@@ -62,6 +64,7 @@ interface ShellFlags {
   season: 'summer' | 'winter'
   pipelineStep: number
   inspectHtml: string
+  viewMode: 'atlas' | 'planet'
 }
 
 interface ShellBundle {
@@ -90,6 +93,7 @@ function makeInitialBundle(): ShellBundle {
     season: 'summer',
     pipelineStep: 0,
     inspectHtml: emptyInspectHint(),
+    viewMode: 'atlas',
   }
   return { state, flags }
 }
@@ -127,6 +131,30 @@ export function mountApp(root: HTMLElement): void {
 
   let toolsRefs: ToolsRefs | null = null
   let paintRaf = 0
+  let planet: import('../render/globe').PlanetView | null = null
+  let planetLoad: Promise<import('../render/globe').PlanetView | null> | null = null
+  let planetLayout = { w: 0, h: 0 }
+
+  async function ensurePlanet(): Promise<import('../render/globe').PlanetView | null> {
+    if (planet) return planet
+    if (planetLoad) return planetLoad
+    planetLoad = import('../render/globe').then(({ PlanetView }) => {
+      planet = new PlanetView(map.globe)
+      planetLoad = null
+      return planet
+    })
+    return planetLoad
+  }
+
+  function layoutPlanet(): void {
+    if (!planet) return
+    const parent = map.globe.parentElement
+    const w = Math.max(1, parent?.clientWidth ?? map.globe.clientWidth ?? 0)
+    const h = Math.max(1, parent?.clientHeight ?? map.globe.clientHeight ?? 0)
+    if (w === planetLayout.w && h === planetLayout.h) return
+    planetLayout = { w, h }
+    planet.layout()
+  }
 
   function render(opts: { remount?: boolean } = {}): void {
     const view = buildView(bundle)
@@ -155,6 +183,22 @@ export function mountApp(root: HTMLElement): void {
 
   function paintNow(): void {
     const showWorld = Boolean(state.world) && state.stage !== 'sketch'
+    if (flags.viewMode === 'planet' && showWorld && state.world) {
+      void (async () => {
+        const view = await ensurePlanet()
+        if (!view || !state.world) return
+        layoutPlanet()
+        const src = state.world
+        view.sync(
+          src,
+          flags.layer,
+          flags.season,
+          `${src.meta.seed}|${src.meta.width}|${src.elev[0]}|${src.cities.length}|${flags.layer}|${flags.season}`,
+        )
+        view.render()
+      })()
+      return
+    }
     paintAtlas(map.canvas, {
       world: showWorld ? state.world : null,
       mask: flags.mask,
@@ -162,7 +206,7 @@ export function mountApp(root: HTMLElement): void {
       layer: flags.layer,
       season: flags.season,
       issues: state.stage === 'critique' ? state.issues : [],
-      showCities: state.stage === 'worldbuild',
+      showCities: Boolean(showWorld && state.world && state.world.cities.length > 0),
     })
   }
 
@@ -182,6 +226,7 @@ export function mountApp(root: HTMLElement): void {
     flags.pipelineStep = 0
     flags.maskCommitted = false
     flags.score = 0
+    flags.viewMode = 'atlas'
     state.issues = []
   }
 
@@ -247,6 +292,7 @@ export function mountApp(root: HTMLElement): void {
               'No city placed — need land, suitability ≥ 0.4, no neighbour within 5 cells.',
             )
           } else if (result.city) {
+            result.city.role = inferSettlementRole(state.world, x, y)
             announceCoach({
               kind: 'inspector.cell',
               x,
@@ -307,6 +353,67 @@ export function mountApp(root: HTMLElement): void {
     })
   }
 
+  function attachGlobe(): void {
+    const globe = map.globe
+    let moved = false
+    globe.addEventListener('pointerdown', (e) => {
+      if (!planet) return
+      globe.setPointerCapture(e.pointerId)
+      moved = false
+      planet.onPointerDown(e.clientX, e.clientY)
+    })
+    globe.addEventListener('pointermove', (e) => {
+      if (!planet) return
+      if (planet.onPointerMove(e.clientX, e.clientY)) {
+        moved = true
+        planet.render()
+      } else if (state.world) {
+        const cell = planet.pick(e.clientX, e.clientY, state.world)
+        if (cell) inspectAt(cell.x, cell.y, false)
+      }
+    })
+    globe.addEventListener('pointerup', (e) => {
+      if (!planet || !state.world) {
+        planet?.onPointerUp()
+        return
+      }
+      if (!moved) {
+        const cell = planet.pick(e.clientX, e.clientY, state.world)
+        if (cell) {
+          inspectAt(cell.x, cell.y, state.tool === 'inspect')
+          if (state.tool === 'place-city' || state.tool === 'remove-city') {
+            const { x, y } = cell
+            if (state.tool === 'place-city') {
+              const next = `City ${state.world.cities.length + 1}`
+              const result = placeCity(state.world, x, y, next)
+              if (result.rejected) {
+                announce(
+                  'warn',
+                  'No city placed — need land, suitability ≥ 0.4, no neighbour within 5 cells.',
+                )
+              } else if (result.city) {
+                result.city.role = inferSettlementRole(state.world, x, y)
+              }
+            } else {
+              const result = removeNearestCity(state.world, x, y)
+              if (!result.matched) announce('warn', 'No city within range.')
+            }
+            render()
+          }
+        }
+      }
+      planet.onPointerUp()
+    })
+    globe.addEventListener('pointercancel', () => planet?.onPointerUp())
+    globe.addEventListener('wheel', (e) => {
+      if (!planet || flags.viewMode !== 'planet') return
+      e.preventDefault()
+      planet.dolly(e.deltaY > 0 ? 1.08 : 0.92)
+      planet.render()
+    }, { passive: false })
+    globe.addEventListener('contextmenu', (e) => e.preventDefault())
+  }
+
   window.addEventListener(APP_EVENTS.STAGE_TRANSITION, (ev) => {
     const detail = (ev as CustomEvent).detail as StageTransitionDetail | undefined
     if (!detail) return
@@ -326,6 +433,7 @@ export function mountApp(root: HTMLElement): void {
     if (target === 'sketch' && state.tool !== 'draw-land' && state.tool !== 'erase-land' && state.tool !== 'inspect') {
       state.tool = 'draw-land'
     }
+    if (target === 'sketch') flags.viewMode = 'atlas'
     render({ remount: true })
     STAGES[target].enter(view)
     announceCoach({ kind: 'app.stage', from, to: target, trigger: 'user' })
@@ -425,6 +533,7 @@ export function mountApp(root: HTMLElement): void {
         inspector.workHost.replaceChildren(mountStageWork(buildView(bundle)))
       })
       const world = worldFromMakeSense(result, state.meta, mask)
+      const added = seedSettlements(world)
       const provenance = provenanceFromResult(result)
       state.world = world
       const c = critiqueWorld(world)
@@ -455,6 +564,12 @@ export function mountApp(root: HTMLElement): void {
         riversCount: riverCells,
         rangeAvgC: rangeN ? rangeSum / rangeN : 0,
       })
+      if (added.length) {
+        announce(
+          'success',
+          `${added.length} towns founded where the land can feed them. Open Worldbuild to rename, place, or raze.`,
+        )
+      }
     } catch (err) {
       state.isProcessing = false
       announce('error', `Make-sense failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -488,6 +603,7 @@ export function mountApp(root: HTMLElement): void {
     STAGES[state.stage].leave(view)
     state.stage = 'sketch'
     state.tool = 'draw-land'
+    flags.viewMode = 'atlas'
     render({ remount: true })
     announceCoach({ kind: 'app.stage', from: 'worldbuild', to: 'sketch', trigger: 'user' })
   })
@@ -524,6 +640,19 @@ export function mountApp(root: HTMLElement): void {
     requestPaint()
   })
 
+  window.addEventListener(APP_EVENTS.VIEW_CHANGE, (ev) => {
+    const detail = (ev as CustomEvent).detail as ViewChangeDetail | undefined
+    if (!detail) return
+    if (detail.view === 'planet' && !state.world) {
+      announce('warn', 'Planet view needs a grounded world — run Make sense first.')
+      return
+    }
+    flags.viewMode = detail.view
+    if (detail.view === 'planet') planetLayout = { w: 0, h: 0 }
+    updateMapShell(map, buildView(bundle))
+    requestPaint()
+  })
+
   window.addEventListener(APP_EVENTS.SEASON_CHANGE, (ev) => {
     const detail = (ev as CustomEvent).detail as SeasonChangeDetail | undefined
     if (!detail || !state.world) return
@@ -547,6 +676,7 @@ export function mountApp(root: HTMLElement): void {
   })
 
   attachCanvas()
+  attachGlobe()
   render({ remount: true })
   announceCoach({
     kind: 'sketch.ready',

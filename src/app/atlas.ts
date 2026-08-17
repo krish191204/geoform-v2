@@ -86,7 +86,12 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
 
   const { meta } = opts
   const image = opts.world
-    ? draw(opts.world, opts.season, opts.layer, { showRivers: opts.layer === 'relief' })
+    ? draw(opts.world, opts.season, opts.layer, {
+        showRivers: opts.layer === 'relief' || opts.layer === 'biome',
+        scale: opts.layer === 'plates' || opts.layer === 'biome' ? 1 : 2,
+        smooth: opts.layer !== 'plates' && opts.layer !== 'biome',
+        bakeCities: false,
+      })
     : maskImageData(opts.mask, meta)
 
   const smooth =
