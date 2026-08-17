@@ -7,6 +7,7 @@
 
 import type { Issue, Layer, World, WorldMeta } from '../world/types'
 import {
+  applyVignette,
   bakeWorldImageDataSmooth,
   clientToContainedBitmap,
   type Season,
@@ -15,14 +16,14 @@ import { drawIssueOverlays } from '../critique/preview'
 
 export type { Season }
 
-export const LAYER_CHIPS: readonly { id: Layer; label: string }[] = [
-  { id: 'relief', label: 'Relief' },
-  { id: 'biome', label: 'Biome' },
-  { id: 'moisture', label: 'Moisture' },
-  { id: 'temperature', label: 'Temperature' },
-  { id: 'suitability', label: 'Settle' },
-  { id: 'plates', label: 'Plates' },
-  { id: 'elevation', label: 'Height' },
+export const LAYER_CHIPS: readonly { id: Layer; label: string; title: string }[] = [
+  { id: 'relief', label: 'Relief', title: 'Landform, hillshade, and rivers' },
+  { id: 'biome', label: 'Biome', title: 'Holdridge class' },
+  { id: 'moisture', label: 'Moisture', title: 'Precipitation, 0–1' },
+  { id: 'temperature', label: 'Temperature', title: 'Mean temperature, °C' },
+  { id: 'suitability', label: 'Settle', title: 'Where people can live' },
+  { id: 'plates', label: 'Plates', title: 'Tectonic plates' },
+  { id: 'elevation', label: 'Height', title: 'Elevation in metres' },
 ]
 
 const LAND_RGB: readonly [number, number, number] = [0x8a, 0x7a, 0x5a]
@@ -187,13 +188,29 @@ function upsampleMask(
       const xf = ((px + 0.5) * w) / cw
       const t = sample(xf, yf)
       const k = Math.max(0, Math.min(1, (t - threshold + 0.15) / 0.3))
+      const grain = ((Math.sin(xf * 12.9898 + yf * 78.233) * 43758.5453) % 1) * 0.1 - 0.05
+      let r = SEA_RGB[0] + (LAND_RGB[0] - SEA_RGB[0]) * k
+      let g = SEA_RGB[1] + (LAND_RGB[1] - SEA_RGB[1]) * k
+      let b = SEA_RGB[2] + (LAND_RGB[2] - SEA_RGB[2]) * k
+      if (k > 0.22 && k < 0.78) {
+        const foam = 1 - Math.abs(k - 0.5) * 4
+        const edge = k < 0.5 ? [210, 230, 230] : [30, 42, 36]
+        const et = Math.max(0, foam) * (k < 0.5 ? 0.28 : 0.22)
+        r = r + (edge[0] - r) * et
+        g = g + (edge[1] - g) * et
+        b = b + (edge[2] - b) * et
+      }
+      r = Math.max(0, Math.min(255, r * (1 + grain)))
+      g = Math.max(0, Math.min(255, g * (1 + grain)))
+      b = Math.max(0, Math.min(255, b * (1 + grain)))
       const o = (py * cw + px) * 4
-      data[o] = Math.round(SEA_RGB[0] + (LAND_RGB[0] - SEA_RGB[0]) * k)
-      data[o + 1] = Math.round(SEA_RGB[1] + (LAND_RGB[1] - SEA_RGB[1]) * k)
-      data[o + 2] = Math.round(SEA_RGB[2] + (LAND_RGB[2] - SEA_RGB[2]) * k)
+      data[o] = Math.round(r)
+      data[o + 1] = Math.round(g)
+      data[o + 2] = Math.round(b)
       data[o + 3] = 255
     }
   }
+  applyVignette(image)
   return image
 }
 

@@ -228,10 +228,11 @@ function tempColor(c: number): [number, number, number] {
  * Moisture ramp: dry → wet. Expects a 0..1 input.
  */
 function moistureColor(m: number): [number, number, number] {
+  // Sand only for true aridity — Geoform 1 recipe; mid values read as grassland.
   const t = ramp(m)
-  if (t < 0.35) return mix([196, 150, 88], [170, 140, 70], t / 0.35)
-  if (t < 0.65) return mix([170, 140, 70], [70, 130, 90], (t - 0.35) / 0.3)
-  return mix([70, 130, 90], [30, 100, 140], (t - 0.65) / 0.35)
+  if (t < 0.18) return mix([196, 150, 88], [170, 140, 70], t / 0.18)
+  if (t < 0.45) return mix([170, 140, 70], [70, 130, 90], (t - 0.18) / 0.27)
+  return mix([70, 130, 90], [30, 100, 140], (t - 0.45) / 0.55)
 }
 
 /**
@@ -276,13 +277,6 @@ function plateColor(pid: number): [number, number, number] {
 
 function wrapX(x: number, w: number): number {
   return ((x % w) + w) % w
-}
-
-function elevAt(world: World, x: number, y: number): number {
-  const { width: w, height: h } = world.meta
-  const cx = wrapX(x, w)
-  const cy = Math.max(0, Math.min(h - 1, y))
-  return world.elev[cy * w + cx]
 }
 
 function maskAt(world: World, x: number, y: number): number {
@@ -352,9 +346,9 @@ function isCoast(world: World, x: number, y: number): boolean {
   for (let dy = -1; dy <= 1; dy++) {
     for (let dx = -1; dx <= 1; dx++) {
       if (!dx && !dy) continue
-      const nx = x + dx
+      const nx = wrapX(x + dx, w)
       const ny = y + dy
-      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+      if (ny < 0 || ny >= h) continue
       const nLand = !isOceanCell(world, ny * w + nx)
       if (nLand !== land) return true
     }
@@ -362,9 +356,163 @@ function isCoast(world: World, x: number, y: number): boolean {
   return false
 }
 
+/** How much of the bilinear neighbourhood is a land/sea edge (0..1). */
+function coastAmount(world: World, xf: number, yf: number): number {
+  const { width: w, height: h } = world.meta
+  const x0 = wrapX(Math.floor(xf), w)
+  const y0 = Math.max(0, Math.min(h - 1, Math.floor(yf)))
+  const x1 = wrapX(x0 + 1, w)
+  const y1 = Math.max(0, Math.min(h - 1, y0 + 1))
+  let n = 0
+  if (isCoast(world, x0, y0)) n++
+  if (isCoast(world, x1, y0)) n++
+  if (isCoast(world, x0, y1)) n++
+  if (isCoast(world, x1, y1)) n++
+  return n / 4
+}
+
+function sampleScalar(field: ArrayLike<number>, world: World, x: number, y: number): number {
+  const { width: w, height: h } = world.meta
+  const x0 = wrapX(Math.floor(x), w)
+  const y0 = Math.max(0, Math.min(h - 1, Math.floor(y)))
+  const x1 = wrapX(x0 + 1, w)
+  const y1 = Math.max(0, Math.min(h - 1, y0 + 1))
+  const fx = x - Math.floor(x)
+  const fy = y - Math.floor(y)
+  const v00 = field[y0 * w + x0]
+  const v10 = field[y0 * w + x1]
+  const v01 = field[y1 * w + x0]
+  const v11 = field[y1 * w + x1]
+  return lerp(lerp(v00, v10, fx), lerp(v01, v11, fx), fy)
+}
+
+/** Seeded paper grain — static, so draw stays pure. Geoform 1 amplitude. */
+function paperGrain(x: number, y: number): number {
+  return ((Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1) * 0.1 - 0.05
+}
+
 // ---------------------------------------------------------------------------
 // 6. Per-cell colour (pure)
 // ---------------------------------------------------------------------------
+
+/**
+ * Layer fill only — no hillshade, grain, or coast. Integer cell.
+ * Bilinear sampling mixes these, then `applyPaperLook` lights the sample.
+ */
+function layerFill(
+  world: World,
+  season: Season,
+  layer: Layer,
+  x: number,
+  y: number,
+): [number, number, number] {
+  const { width: w, height: h } = world.meta
+  if (x < 0 || y < 0 || x >= w || y >= h) return [0, 0, 0]
+  const i = y * w + x
+  const e = world.elev[i]
+  const ocean = isOceanCell(world, i)
+
+  switch (layer) {
+    case 'relief':
+    case 'elevation':
+      return elevBandColor(e, ocean)
+    case 'plates': {
+      let rgb = plateColor(world.plateId[i])
+      if (ocean) rgb = mix(rgb, [12, 36, 48], 0.62)
+      else if (isPlateEdge(world, x, y)) rgb = mix(rgb, [28, 24, 22], 0.4)
+      return rgb
+    }
+    case 'moisture': {
+      const m = season === 'summer' ? world.summerMoist[i] : world.winterMoist[i]
+      let rgb = moistureColor(m)
+      if (ocean) rgb = mix(rgb, [18, 62, 92], 0.55)
+      return rgb
+    }
+    case 'temperature':
+      // Temperature includes ocean (SST). Do not hide climate under a sea fill.
+      return tempColor(season === 'summer' ? world.summer[i] : world.winter[i])
+    case 'biome':
+      // One message: Holdridge class. Hillshade comes later; do not tint deserts green.
+      return hexToRgb(biomeColor(world.biome[i] ?? 'ocean'))
+    case 'suitability':
+      return ocean
+        ? mix(suitColor(world.suitability[i]), [18, 48, 68], 0.55)
+        : suitColor(world.suitability[i])
+  }
+}
+
+/**
+ * Geoform 1 paper recipe at a sample (integer or fractional).
+ * Hillshade reads bilinear elevation so ridges are continuous, not voxel stairs.
+ */
+function applyPaperLook(
+  rgb: [number, number, number],
+  world: World,
+  layer: Layer,
+  x: number,
+  y: number,
+  showRivers: boolean,
+): [number, number, number] {
+  const threshold = world.meta.threshold
+  const e = sampleElev(world, x, y)
+  const ocean = sampleMask(world, x, y) < threshold
+
+  // Hillshade on terrain-ish layers. Height stays a raw metre ramp.
+  if (layer === 'relief' || layer === 'biome' || layer === 'plates') {
+    const er = sampleElev(world, x + 1, y)
+    const ed = sampleElev(world, x, y + 1)
+    const dx = (e - er) / SHADE_M
+    const dy = (e - ed) / SHADE_M
+    const shade = 0.72 + dx * 4.2 + dy * 3.0
+    const ambient = layer === 'biome' ? 0.55 : layer === 'plates' ? 0.48 : 0.35
+    const lit = ambient + ((1 - ambient) * clamp(shade, 0.45, 1.35)) / 1.15
+    rgb = [clamp(rgb[0] * lit), clamp(rgb[1] * lit), clamp(rgb[2] * lit)]
+  }
+
+  // Still water grain — no animation (draw stays pure). Geoform 1 shimmer 0.14.
+  if (ocean && (layer === 'relief' || layer === 'biome' || layer === 'elevation')) {
+    const depth = e < 0 ? ramp(1 + e / 1200) : 0.35
+    const wave =
+      0.5 + 0.5 * Math.sin(x * 0.35 + Math.cos(y * 0.22) * 2) * Math.sin(y * 0.4)
+    const shimmer = wave * depth * 0.14
+    rgb = [
+      clamp(rgb[0] + shimmer * 40),
+      clamp(rgb[1] + shimmer * 70),
+      clamp(rgb[2] + shimmer * 90),
+    ]
+  }
+
+  // Coastal ink/foam — skip plates so sutures stay readable.
+  if (layer !== 'plates') {
+    const foam = coastAmount(world, x, y)
+    if (foam > 0) {
+      rgb = ocean
+        ? mix(rgb, [210, 230, 230], 0.28 * foam)
+        : mix(rgb, [30, 42, 36], 0.22 * foam)
+    }
+  }
+
+  // Rivers from flux (tributaries faint, mains brighter) — v1 network look.
+  if (showRivers && !ocean && layer !== 'plates' && layer !== 'temperature') {
+    const f = sampleScalar(world.flux, world, x, y)
+    const flagged = sampleScalar(world.rivers, world, x, y) >= 0.5
+    if (f >= RIVER_VISIBLE || flagged) {
+      const isMain = f >= RIVER_MAIN
+      const strength = isMain
+        ? Math.min(1, (f - RIVER_MAIN) / 40)
+        : Math.min(1, Math.max(0, f - RIVER_VISIBLE) / 20)
+      const t = (isMain ? 0.55 : flagged ? 0.42 : 0.32) + strength * 0.38
+      rgb = mix(rgb, isMain ? [45, 125, 185] : [70, 155, 195], Math.min(1, t))
+    }
+  }
+
+  if (layer === 'relief' || layer === 'biome' || layer === 'plates') {
+    const grain = paperGrain(x, y)
+    rgb = [clamp(rgb[0] * (1 + grain)), clamp(rgb[1] * (1 + grain)), clamp(rgb[2] * (1 + grain))]
+  }
+
+  return rgb
+}
 
 /**
  * Sample one cell's display colour for the active layer + season.
@@ -378,101 +526,7 @@ function cellColor(
   y: number,
   showRivers: boolean,
 ): [number, number, number] {
-  const { width: w, height: h } = world.meta
-  if (x < 0 || y < 0 || x >= w || y >= h) return [0, 0, 0]
-  const i = y * w + x
-  const e = world.elev[i]
-  const ocean = isOceanCell(world, i)
-  let rgb: [number, number, number]
-
-  switch (layer) {
-    case 'relief': {
-      rgb = elevBandColor(e, ocean)
-      break
-    }
-    case 'elevation': {
-      rgb = elevBandColor(e, ocean)
-      break
-    }
-    case 'plates': {
-      rgb = plateColor(world.plateId[i])
-      if (ocean) rgb = mix(rgb, [12, 36, 48], 0.62)
-      else if (isPlateEdge(world, x, y)) rgb = mix(rgb, [28, 24, 22], 0.4)
-      break
-    }
-    case 'moisture': {
-      const m = season === 'summer' ? world.summerMoist[i] : world.winterMoist[i]
-      rgb = moistureColor(m)
-      if (ocean) rgb = mix(rgb, [18, 62, 92], 0.55)
-      break
-    }
-    case 'temperature': {
-      const t = season === 'summer' ? world.summer[i] : world.winter[i]
-      rgb = tempColor(t)
-      break
-    }
-    case 'biome': {
-      const bio = hexToRgb(biomeColor(world.biome[i] ?? 'ocean'))
-      // Mix a little relief so biome isn't flat poster paint (v1 satellite trick).
-      rgb = ocean ? bio : mix(elevBandColor(e, false), bio, 0.62)
-      break
-    }
-    case 'suitability': {
-      rgb = ocean ? mix(suitColor(world.suitability[i]), [18, 48, 68], 0.55) : suitColor(world.suitability[i])
-      break
-    }
-  }
-
-  // Hillshade on terrain-ish layers. Elevation stays a raw height ramp.
-  if (layer === 'relief' || layer === 'biome' || layer === 'plates') {
-    const er = elevAt(world, x + 1, y)
-    const ed = elevAt(world, x, y + 1)
-    const dx = (e - er) / SHADE_M
-    const dy = (e - ed) / SHADE_M
-    const shade = 0.72 + dx * 4.2 + dy * 3.0
-    const ambient = layer === 'biome' ? 0.55 : layer === 'plates' ? 0.48 : 0.35
-    const lit = ambient + ((1 - ambient) * clamp(shade, 0.45, 1.35)) / 1.15
-    rgb = [clamp(rgb[0] * lit), clamp(rgb[1] * lit), clamp(rgb[2] * lit)]
-  }
-
-  // Still water grain — no animation (draw stays pure).
-  if (ocean && (layer === 'relief' || layer === 'biome' || layer === 'elevation')) {
-    const depth = e < 0 ? ramp(1 + e / 1200) : 0.35
-    const wave =
-      0.5 + 0.5 * Math.sin(x * 0.35 + Math.cos(y * 0.22) * 2) * Math.sin(y * 0.4)
-    const shimmer = wave * depth * 0.12
-    rgb = [
-      clamp(rgb[0] + shimmer * 40),
-      clamp(rgb[1] + shimmer * 70),
-      clamp(rgb[2] + shimmer * 90),
-    ]
-  }
-
-  // Coastal ink/foam — skip plates so sutures stay readable.
-  if (layer !== 'plates' && isCoast(world, x, y)) {
-    rgb = ocean ? mix(rgb, [210, 230, 230], 0.28) : mix(rgb, [30, 42, 36], 0.22)
-  }
-
-  // Rivers from flux (tributaries faint, mains brighter) — v1 network look.
-  if (showRivers && !ocean && layer !== 'plates' && layer !== 'temperature') {
-    const f = world.flux[i]
-    const flagged = world.rivers[i] === 1
-    if (f >= RIVER_VISIBLE || flagged) {
-      const isMain = f >= RIVER_MAIN
-      const strength = isMain
-        ? Math.min(1, (f - RIVER_MAIN) / 40)
-        : Math.min(1, Math.max(0, f - RIVER_VISIBLE) / 20)
-      const t = (isMain ? 0.55 : flagged ? 0.42 : 0.32) + strength * 0.38
-      rgb = mix(rgb, isMain ? [45, 125, 185] : [70, 155, 195], Math.min(1, t))
-    }
-  }
-
-  if (layer === 'relief' || layer === 'biome' || layer === 'plates') {
-    const grain = ((Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1) * 0.08 - 0.04
-    rgb = [clamp(rgb[0] * (1 + grain)), clamp(rgb[1] * (1 + grain)), clamp(rgb[2] * (1 + grain))]
-  }
-
-  return rgb
+  return applyPaperLook(layerFill(world, season, layer, x, y), world, layer, x, y, showRivers)
 }
 
 // ---------------------------------------------------------------------------
@@ -517,9 +571,9 @@ export function draw(
     }
   } else if (smooth && layer !== 'plates') {
     for (let py = 0; py < outH; py++) {
-      const yf = py / scale
+      const yf = (py + 0.5) / scale
       for (let px = 0; px < outW; px++) {
-        const xf = px / scale
+        const xf = (px + 0.5) / scale
         const rgb = sampleBilinear(world, season, layer, xf, yf, showRivers)
         const o = (py * outW + px) * 4
         data[o] = rgb[0]
@@ -563,15 +617,16 @@ function sampleBilinear(
   const y1 = Math.min(h - 1, y0 + 1)
   const fx = xf - Math.floor(xf)
   const fy = yf - y0
-  const c00 = cellColor(world, season, layer, x0, y0, showRivers)
-  const c10 = cellColor(world, season, layer, x1, y0, showRivers)
-  const c01 = cellColor(world, season, layer, x0, y1, showRivers)
-  const c11 = cellColor(world, season, layer, x1, y1, showRivers)
-  return mix(mix(c00, c10, fx), mix(c01, c11, fx), fy)
+  const c00 = layerFill(world, season, layer, x0, y0)
+  const c10 = layerFill(world, season, layer, x1, y0)
+  const c01 = layerFill(world, season, layer, x0, y1)
+  const c11 = layerFill(world, season, layer, x1, y1)
+  const mixed = mix(mix(c00, c10, fx), mix(c01, c11, fx), fy)
+  return applyPaperLook(mixed, world, layer, xf, yf, showRivers)
 }
 
 /** Soft polar/limb darkening so the atlas doesn't read as a flat stamp. */
-function applyVignette(image: ImageData): void {
+export function applyVignette(image: ImageData): void {
   const cw = image.width
   const ch = image.height
   const data = image.data
@@ -634,9 +689,9 @@ export function bakeWorldImageDataSmooth(
   const scale = cw / w
   const smooth = layer !== 'plates'
   for (let py = 0; py < ch; py++) {
-    const yf = py / scale
+    const yf = (py + 0.5) / scale
     for (let px = 0; px < cw; px++) {
-      const xf = px / scale
+      const xf = (px + 0.5) / scale
       const rgb = smooth
         ? sampleBilinear(world, season, layer, xf, yf, showRivers)
         : cellColor(

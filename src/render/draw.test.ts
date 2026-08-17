@@ -179,8 +179,7 @@ describe('draw', () => {
     for (let x = 0; x < width; x++) {
       const raw = hexToRgb(biomeColor(biome[x]))
       const got = pixel(img, x, 0)
-      // Biome is mixed with relief + hillshade so it is not poster-paint,
-      // but it must still read as that biome's hue.
+      // Biome is the Holdridge class plus hillshade, not a greener relief mix.
       expect(Math.abs(got[0] - raw[0])).toBeLessThan(120)
       expect(Math.abs(got[1] - raw[1])).toBeLessThan(120)
       expect(Math.abs(got[2] - raw[2])).toBeLessThan(120)
@@ -228,7 +227,7 @@ describe('draw', () => {
     expect(pixel(img, 0, 0)).toEqual(pixel(img, 2, 0))
   })
 
-  it('respects the elevation-only contract: no hillshade, no rivers', () => {
+  it('keeps the Height layer a raw metre ramp (no hillshade, no rivers)', () => {
     const world = makeWorld({ width: 4, height: 4, elev: () => 1500 })
     world.rivers[0] = 1
     const img = draw(world, 'summer', 'elevation')
@@ -377,6 +376,22 @@ describe('globe bakes', () => {
     expect(low).toBeLessThan(high)
     expect(mid).toBeGreaterThan(low)
     expect(mid).toBeLessThan(high)
+  })
+
+  it('bilinear-samples relief so a height step is a ramp, not a cell wall', () => {
+    const world = makeWorld({
+      width: 4,
+      height: 2,
+      elev: (x) => (x < 2 ? 200 : 4000),
+    })
+    const img = bakeWorldImageDataSmooth(world, 'summer', 'elevation', 16, { bakeCities: false })
+    const at = (px: number, py: number) => pixel(img, px, py)
+    const low = at(2, 4)
+    const high = at(10, 4)
+    const mid = at(7, 4)
+    expect(low).not.toEqual(high)
+    expect(mid).not.toEqual(low)
+    expect(mid).not.toEqual(high)
   })
 })
 

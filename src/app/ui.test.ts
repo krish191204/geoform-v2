@@ -108,6 +108,7 @@ describe('sketch vs leftover grounded world', () => {
     const map = mountMapShell()
     updateMapShell(map, view({ world, stage: 'sketch', layer: 'biome', mask }))
     const biome = map.overlay.querySelector('[data-look="biome"]') as HTMLButtonElement
+    expect(biome.title).toMatch(/Holdridge/i)
     expect(biome.disabled).toBe(true)
     expect(biome.classList.contains('active')).toBe(false)
     expect(map.viewPlanet.disabled).toBe(true)

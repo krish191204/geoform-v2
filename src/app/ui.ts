@@ -215,6 +215,7 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
         type: 'button',
         class: 'chip' + (derived && state.layer === chip.id ? ' active' : ''),
         'data-look': chip.id,
+        title: chip.title,
         disabled: !derived,
       },
       chip.label,
