@@ -89,7 +89,7 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
     ? draw(opts.world, opts.season, opts.layer, { showRivers: opts.layer === 'relief' })
     : maskImageData(opts.mask, meta)
 
-  const box = blitContained(ctx, image, cw, ch)
+  const box = blitContained(ctx, image, cw, ch, Boolean(opts.world))
 
   if (opts.issues && opts.issues.length > 0 && box) {
     ctx.save()
@@ -115,6 +115,7 @@ function blitContained(
   image: ImageData,
   cw: number,
   ch: number,
+  smooth: boolean,
 ): BlitBox | null {
   const bw = image.width
   const bh = image.height
@@ -131,7 +132,8 @@ function blitContained(
   const tctx = tmp.getContext('2d')
   if (!tctx) return null
   tctx.putImageData(image, 0, 0)
-  ctx.imageSmoothingEnabled = false // allow-coach-token: Smooth
+  ctx.imageSmoothingEnabled = smooth
+  if (smooth) ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(tmp, ox, oy, dw, dh)
   return { x: ox, y: oy, w: dw, h: dh }
 }

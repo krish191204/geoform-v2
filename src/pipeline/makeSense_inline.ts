@@ -296,10 +296,8 @@ export async function makeSenseInline(
     // Pass elevation so the alpine override (`elev >= 3500`) actually fires.
     // Without this, the alpine branch in `classifyBiome` is dead code.
     orogeny.elev,
-    // Pass the latitude-aware `tempMean` from the climate step so the
-    // biome classifier can distinguish equator from pole. Without this,
-    // `computeBiomes` falls back to the symmetric `(summer + winter) / 2`
-    // which collapses to `BASE_TEMP_C` at every latitude.
+    // Annual mean from the climate step (same as (summer+winter)/2 after
+    // lapse, ocean inertia, and clamps).
     seasonal.tempMean,
   )
   const biomeCounts = new Map<string, number>()
@@ -359,11 +357,8 @@ export async function makeSenseInline(
   )
 
   // -- Annual aggregates ---------------------------------------------------
-  // tempMean comes straight from the seasonal climate step (latitude-
-  // aware; see `seasonalClimate.computeSeasonalClimate`). tempRange and
-  // moistMean remain simple symmetric derivations — tempRange is by
-  // construction non-negative (summer ≥ winter), and moistMean is the
-  // arithmetic mean of the two seasonal moisture indices.
+  // tempMean comes from the climate step. tempRange and moistMean
+  // are the seasonal deltas / means used by Critique and the inspector.
   const tempRange = new Float32Array(mask.length)
   const moistMean = new Float32Array(mask.length)
   for (let i = 0; i < mask.length; i++) {

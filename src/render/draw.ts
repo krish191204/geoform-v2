@@ -109,10 +109,14 @@ export function inspectCell(world: World, x: number, y: number): CellInspectorVi
   const pid = plateId[i]
   const ts = summer[i]
   const tw = winter[i]
-  const tr = tempRange[i]
+  const tr = Number.isFinite(ts) && Number.isFinite(tw) ? ts - tw : tempRange[i]
   const ms = summerMoist[i]
   const mw = winterMoist[i]
   const b = typeof biome[i] === 'string' && biome[i].length > 0 ? biome[i] : undefined
+  const rangeLabel =
+    Number.isFinite(ts) && Number.isFinite(tw)
+      ? `${Math.round(ts) - Math.round(tw)}°C`
+      : fmtCelsius(tr)
 
   return {
     elev: isDefined(e) ? e : undefined,
@@ -128,7 +132,7 @@ export function inspectCell(world: World, x: number, y: number): CellInspectorVi
       plateId: fmtPlateId(pid),
       tempSummer: fmtCelsius(ts),
       tempWinter: fmtCelsius(tw),
-      tempRange: fmtCelsius(tr),
+      tempRange: rangeLabel,
       moistSummer: fmtMoist(ms),
       moistWinter: fmtMoist(mw),
       biome: b ?? '—',
@@ -197,8 +201,8 @@ function elevBandColor(e: number, ocean: boolean): [number, number, number] {
   if (e < 400) return mix([92, 138, 72], [58, 112, 58], (e - 80) / 320)
   if (e < 1200) return mix([58, 112, 58], [110, 118, 72], (e - 400) / 800)
   if (e < 2500) return mix([110, 118, 72], [128, 112, 88], (e - 1200) / 1300)
-  if (e < 4000) return mix([128, 112, 88], [168, 162, 152], (e - 2500) / 1500)
-  return mix([168, 162, 152], [246, 248, 250], ramp((e - 4000) / 2500))
+  if (e < 5000) return mix([128, 112, 88], [168, 158, 142], (e - 2500) / 2500)
+  return mix([168, 158, 142], [236, 238, 240], ramp((e - 5000) / 3000))
 }
 
 function isOceanCell(world: World, i: number): boolean {
@@ -342,6 +346,7 @@ function cellColor(
     case 'moisture': {
       const m = season === 'summer' ? world.summerMoist[i] : world.winterMoist[i]
       rgb = moistureColor(m)
+      if (ocean) rgb = mix(rgb, [18, 62, 92], 0.55)
       break
     }
     case 'temperature': {

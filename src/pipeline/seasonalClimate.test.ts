@@ -11,17 +11,18 @@
  *      latitude.
  *   3. Continentality — inland cells have a larger annual range than
  *      coastal cells at the same latitude.
- *   4. Rain shadow — windward (eastern, upstream) side of an N-S
- *      ridge is measurably wetter than the lee (western, downstream)
+ *   4. Rain shadow — windward (western, upstream) side of an N-S
+ *      ridge is measurably wetter than the lee (eastern, downstream)
  *      side.
  *   5. Conservation — no cell's moisture index exceeds 1.0.
  *
- * Plus two robustness checks:
+ * Plus robustness checks:
  *
- *   6. A flat world (no mountains) produces uniform precipitation.
+ *   6. A flat world still rains (latitude baseline, not orography-only).
  *   7. A continent does not exhibit ice↔warm-desert dualism — a cell
  *      with `temp < 5°C` is never adjacent to a cell with
  *      `temp > 30°C` AND `moist < 0.2`.
+ *   8. Poles are cold, equatorial ocean is not 40 °C.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -240,8 +241,8 @@ describe('computeSeasonalClimate', () => {
 
   it('puts measurable rain on the windward (east) side of a ridge and dry on the lee (west)', () => {
     // A triangular ridge with its peak at x = peakX. Wind blows
-    // west (windX = -1), so x > peakX is the windward side and
-    // x < peakX is the lee side.
+    // east (west wind), so x < peakX is the windward side and
+    // x > peakX is the lee side.
     const w = 16
     const h = 8
     const peakX = 8
@@ -249,21 +250,24 @@ describe('computeSeasonalClimate', () => {
     const world = ridgelineWorld(w, h, peakX, peakElevM)
     const result = run(world)
 
-    // Each row is independent, so pick a mid-latitude row.
     const y = h >> 1
-    const windwardI = y * w + (peakX + 1)
-    const leeI = y * w + (peakX - 1)
-
-    const windwardPrecip = result.summerMoist[windwardI]
-    const leePrecip = result.summerMoist[leeI]
-
-    // The windward cell gets moisture as the air climbs the ridge.
-    expect(windwardPrecip).toBeGreaterThan(0)
-    // The lee cell receives no precipitation: airM has been depleted
-    // by the climb and there is no further ascent on the descent.
-    expect(leePrecip).toBe(0)
-    // And the asymmetry is "measurable" — a clearly visible gap.
-    expect(windwardPrecip - leePrecip).toBeGreaterThan(0.1)
+    let east = 0
+    let west = 0
+    let eastN = 0
+    let westN = 0
+    for (let x = 0; x < w; x++) {
+      const precip = result.summerMoist[y * w + x]
+      if (x > peakX) {
+        east += precip
+        eastN++
+      } else if (x < peakX) {
+        west += precip
+        westN++
+      }
+    }
+    expect(eastN).toBeGreaterThan(0)
+    expect(westN).toBeGreaterThan(0)
+    expect(west / westN).toBeGreaterThan(east / eastN + 0.05)
   })
 
   it('conserves moisture: no cell exceeds 1.0 in summer or winter', () => {
@@ -283,26 +287,42 @@ describe('computeSeasonalClimate', () => {
     }
   })
 
-  it('gives a flat world uniform (zero) precipitation everywhere', () => {
+  it('gives a flat world latitude-driven rain, not a bone-dry planet', () => {
     const w = 12
     const h = 6
     const world = flatWorld(w, h, (_x, y) => y === 2 || y === 3)
     const result = run(world)
-    // No elevation differences → no ascent → no precipitation at all.
+    expect(sumOf(result.summerMoist)).toBeGreaterThan(0)
+    expect(sumOf(result.winterMoist)).toBeGreaterThan(0)
     for (let i = 0; i < result.summerMoist.length; i++) {
-      expect(result.summerMoist[i]).toBe(0)
+      expect(result.summerMoist[i]).toBeGreaterThan(0)
+      expect(result.summerMoist[i]).toBeLessThanOrEqual(1)
     }
-    for (let i = 0; i < result.winterMoist.length; i++) {
-      expect(result.winterMoist[i]).toBe(0)
-    }
-    expect(sumOf(result.summerMoist)).toBe(0)
-    expect(sumOf(result.winterMoist)).toBe(0)
+  })
+
+  it('keeps equatorial ocean below 32 °C and polar land below freezing in winter', () => {
+    const w = 32
+    const h = 16
+    const world = flatWorld(w, h, (_x, y) => y === 0 || y === h - 1)
+    const result = run(world)
+    const equatorY = h >> 1
+    const oceanI = equatorY * w + (w >> 1)
+    expect(world.mask[oceanI]).toBeLessThan(THRESHOLD)
+    expect(result.summer[oceanI]).toBeLessThan(32)
+    expect(result.summer[oceanI]).toBeGreaterThan(20)
+    expect(result.summer[oceanI] - result.winter[oceanI]).toBeLessThan(8)
+
+    const poleI = 0 * w + (w >> 1)
+    expect(world.mask[poleI]).toBeGreaterThan(THRESHOLD)
+    expect(result.winter[poleI]).toBeLessThan(0)
+    expect(result.tempMean[poleI]).toBeLessThan(result.tempMean[oceanI])
   })
 
   it('avoids ice↔warm-desert dualism on a single continent', () => {
-    // Standard continent, no orogeny: the climate fields should
-    // vary smoothly enough that no cold cell sits next to a hot,
-    // dry cell.
+    // Same claim Critique uses: annual mean cannot jump from ice
+    // (< 5 °C) to hot dry desert (> 30 °C, moist < 0.2) in one cell.
+    // Comparing one cell's winter to a neighbour's summer is not the
+    // claim — that fires on every continental interior with seasons.
     const world = continentWorld()
     const result = run(world)
 
@@ -311,12 +331,12 @@ describe('computeSeasonalClimate', () => {
       for (let x = 0; x < world.width; x++) {
         const i = y * world.width + x
         if (world.mask[i] < THRESHOLD) continue
-        if (result.winter[i] >= 5) continue // not a cold cell
+        if (result.tempMean[i] >= 5) continue
         const nbrs = neighbours4(x, y, world.width, world.height)
         for (const [nx, ny] of nbrs) {
           const j = ny * world.width + nx
           if (world.mask[j] < THRESHOLD) continue
-          if (result.summer[j] > 30 && result.summerMoist[j] < 0.2) {
+          if (result.tempMean[j] > 30 && result.summerMoist[j] < 0.2) {
             violations++
           }
         }
@@ -351,14 +371,14 @@ describe('computeSeasonalClimate', () => {
     expect(meanAnnualRange).toBeGreaterThan(0)
   })
 
-  it('halves winter moisture relative to summer on the windward side', () => {
+  it('makes winter drier than summer on the windward side', () => {
     const peakX = 8
     const peakElevM = 3000
     const world = ridgelineWorld(16, 8, peakX, peakElevM)
     const result = run(world)
-    // Windward cell one step east of the peak at a mid-latitude row.
     const y = 4
     const i = y * 16 + (peakX + 1)
-    expect(result.summerMoist[i]).toBeCloseTo(2 * result.winterMoist[i], 6)
+    expect(result.winterMoist[i]).toBeGreaterThan(0)
+    expect(result.winterMoist[i]).toBeLessThan(result.summerMoist[i])
   })
 })

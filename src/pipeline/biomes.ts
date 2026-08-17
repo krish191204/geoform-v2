@@ -165,10 +165,8 @@ export function computeBiomes(
   for (let i = 0; i < n; i++) {
     const s = summer[i]
     const w = winter[i]
-    // Use the latitude-aware `tempMeanIn` from the climate step when it
-    // is supplied; otherwise fall back to the symmetric summer/winter
-    // average (kept for callers and tests that pass synthetic summer/
-    // winter arrays without a corresponding latitude-aware field).
+    // Use the climate step's annual mean when supplied; otherwise
+    // fall back to (summer + winter) / 2.
     tempMean[i] = tempMeanIn ? tempMeanIn[i] : (s + w) / 2
     // tempRange is always non-negative by construction (summer ≥ winter).
     tempRange[i] = s - w

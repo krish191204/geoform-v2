@@ -283,6 +283,8 @@ describe('inspectCell', () => {
     const view = inspectCell(world, 0, 0)
     expect(view.display.tempSummer).toBe('28°C')
     expect(view.display.tempWinter).toBe('-4°C')
+    // Range follows the rounded seasonal pair, not a second rounding of the raw delta.
+    expect(view.display.tempRange).toBe('32°C')
   })
 
   it('formats moisture to two decimals', () => {

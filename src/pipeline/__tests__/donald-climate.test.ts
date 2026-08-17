@@ -416,19 +416,16 @@ describe('Donald bar: rain shadow', () => {
         const west = elev[y * w + ((x - 2 + w) % w)]
         const east = elev[y * w + ((x + 2) % w)]
         if (elev[i] < west + 100 || elev[i] < east + 100) continue
-        // The seasonal climate marches air east-to-west (windX = -1), so
-        // the WINDWARD face of a ridge is the EASTERN slope and the LEE
-        // is the WESTERN slope. Precip falls on the east face as air is
-        // forced uphill; by the time the air crests, airM is depleted.
+        // Prevailing west wind: windward is the western slope, lee is east.
         for (let dx = 1; dx <= 2; dx++) {
-          const j = y * w + ((x + dx) % w) // east face — windward
+          const j = y * w + ((x - dx + w) % w) // west face — windward
           if (elev[j] >= seaLevel) {
             windwardSum += moist[j]
             windwardN++
           }
         }
         for (let dx = 1; dx <= 2; dx++) {
-          const j = y * w + ((x - dx + w) % w) // west face — lee
+          const j = y * w + ((x + dx) % w) // east face — lee
           if (elev[j] >= seaLevel) {
             leeSum += moist[j]
             leeN++

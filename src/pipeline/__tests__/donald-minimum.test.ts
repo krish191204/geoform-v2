@@ -34,7 +34,7 @@ describe('Donald minimum', () => {
   it('windward > lee on a mid-latitude N-S ridge', async () => {
     // Single continent at mid-lat (lat 0.5) with a N-S ridge down the
     // middle. Prevailing wind is west-to-east (the climate march).
-    // Windward (east side) should receive more moisture than lee (west).
+    // Windward (west side) should receive more moisture than lee (east).
     const tw = makeContinentWorld()
     const meta = {
       seed: 42,
@@ -116,13 +116,13 @@ describe('Donald minimum', () => {
       for (let x = 0; x < tw.width; x++) {
         const i = y * tw.width + x
         if (tw.mask[i] < 0.5) continue
-        // East of the ridge column = windward, west of the ridge = lee.
-        if (x > ridgeX) {
-          eastMoist += moist[i]
-          eastCount++
-        } else {
+        // West of the ridge column = windward, east of the ridge = lee.
+        if (x < ridgeX) {
           westMoist += moist[i]
           westCount++
+        } else {
+          eastMoist += moist[i]
+          eastCount++
         }
       }
     }
@@ -131,7 +131,7 @@ describe('Donald minimum', () => {
     // The strict physics claim: windward mean moisture must beat lee by
     // a meaningful margin, not just "> 0". The old assertion was a
     // vacuous pass when both sides read 0.
-    expect(eastMean - westMean).toBeGreaterThan(0.05)
+    expect(westMean - eastMean).toBeGreaterThan(0.05)
   })
 
   it('icy peak stays separate from warm desert', async () => {

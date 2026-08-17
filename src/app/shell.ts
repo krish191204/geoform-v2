@@ -75,7 +75,7 @@ function makeInitialBundle(): ShellBundle {
     world: null,
     meta: { ...DEFAULT_META },
     tool: 'draw-land',
-    brushSize: 14,
+    brushSize: 22,
     strength: 1,
     issues: [],
     provenance: null,

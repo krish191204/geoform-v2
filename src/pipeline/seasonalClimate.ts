@@ -6,13 +6,19 @@
  * Outputs: per-cell summer and winter temperature (°C) plus summer
  * and winter moisture (0..1).
  *
- * The "Donald bar" rules — no ice↔warm-desert dualism, smooth
- * temperature gradients, measurable continentality, windward/lee
- * asymmetry from orography, conserved moisture — are structurally
- * satisfied here. The math is simple on purpose: a Phase-1
- * approximation that gets the qualitative behaviour right before
- * Phase 2 wires up proper Hadley cells, Ferrel westerlies, and a
- * Clausius–Clapeyron moisture budget.
+ * The model is a Phase-1 Earth analogue, not a GCM. It has to be
+ * geographically honest enough that a writer hovering a cell is not
+ * lied to:
+ *
+ *   - Equator is hot, poles are cold. (The previous insolation proxy
+ *     made both ~30 °C and put 40 °C on open ocean.)
+ *   - Seasonal amplitude grows with |latitude| and with distance from
+ *     the sea. Equator stays mild; interiors swing.
+ *   - Ocean has thermal inertia: SST stays inside roughly −1.8..30 °C
+ *     with a small annual range.
+ *   - Rain is not only orographic. Flat ocean and coasts get a
+ *     latitude baseline (ITCZ / storm-track); ridges still wet the
+ *     windward face and dry the lee.
  */
 
 import { idx, wrapX, latRad, bfsDistanceFromSea } from './helpers'
@@ -47,12 +53,10 @@ export interface SeasonalClimateResult {
   /** Winter mean temperature per cell, °C. */
   winter: Float32Array
   /**
-   * Latitude-aware annual mean temperature per cell, °C. This is NOT
-   * `(summer + winter) / 2` — that averages a symmetric summer/winter
-   * formula and is therefore latitude-blind (every cell reads 30 °C).
-   * Instead `tempMean` is driven by the daily-averaged solar insolation
-   * proxy `cos(latRad) * sin(obliquity)`, which gives ~21 °C at the
-   * equator and ~15 °C at the poles, with the lapse rate applied on top.
+   * Annual mean temperature per cell, °C. Equal to
+   * `(summer + winter) / 2` after lapse, continentality, ocean
+   * inertia, and clamps — so the inspector, the temperature layer,
+   * and the biome classifier all read the same planet.
    */
   tempMean: Float32Array
   /** Summer precipitation index per cell, 0..1. */
@@ -65,23 +69,20 @@ export interface SeasonalClimateResult {
 // Tunables
 // ---------------------------------------------------------------------------
 
-/**
- * Tunable constants for the Phase-1 model. Phase 2 will replace some
- * of these with physics-derived equivalents (real solar zenith,
- * Hadley-cell wind vectors, Clausius–Clapeyron moisture capacity).
- * For now the values reproduce the qualitative behaviour the audit
- * flagged as broken: continentality, rain shadow, moisture
- * conservation, and a smooth seasonal gradient.
- */
-const BASE_TEMP_C = 30
+/** Sea-level annual mean at the equator, °C. */
+const EQUATOR_MEAN_C = 27
+/** Sea-level annual mean at the poles, °C. */
+const POLE_MEAN_C = -18
 const LAPSE_RATE_C_PER_KM = 6.5
 const COASTALITY_SCALE_CELLS = 80
-const WINTER_CONT_DELTA_C = 25
-const SUMMER_CONT_DELTA_C = 10
-const TEMP_CLAMP_MIN_C = -40
-const TEMP_CLAMP_MAX_C = 50
-const PRECIP_PER_KM_UPSLOPE = 0.4
+const LAND_TEMP_MIN_C = -40
+const LAND_TEMP_MAX_C = 48
+const OCEAN_SST_MIN_C = -1.8
+const OCEAN_SST_MAX_C = 30
+const PRECIP_PER_KM_UPSLOPE = 0.45
+const OCEAN_EVAP = 0.18
 const WINTER_PRECIP_SCALE = 0.5
+const EARTH_OBLIQUITY_DEG = 23.5
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -93,31 +94,25 @@ const WINTER_PRECIP_SCALE = 0.5
  * Deterministic given `(mask, elev, obliquity, threshold)`. Same inputs
  * → same outputs, bit-for-bit, regardless of `_seed`. The wind model
  * is the Phase-1 single-direction simplification: a uniform
- * west-blowing easterly (`windX = -1`, `windY = 0`) that marches each
- * row from east to west with horizontal wrap. Phase 2 will add
- * latitude-band wind profiles (trade winds / westerlies / polar
- * easterlies).
+ * west wind (`windX = +1`) that marches each row from west to east
+ * with horizontal wrap — windward is the west face of a ridge, lee
+ * is the east face. That matches the post-Make-sense rain-shadow
+ * check. Phase 2 will add latitude-band wind profiles (trade winds /
+ * westerlies / polar easterlies).
  *
  * Donald-bar invariants this step satisfies:
  *
  *   - **No ice↔warm-desert dualism.** Temperature varies smoothly
- *     with latitude, elevation, and coastal proximity — there is no
- *     categorical boundary where a cold cell sits next to a hot,
- *     dry one.
+ *     with latitude, elevation, and coastal proximity.
  *   - **No abrupt discontinuities.** Adjacent cells have similar
- *     temperatures because every input to the temperature formula
- *     (insolation, lapse rate, continentality) is a continuous field.
- *   - **Measurable continentality.** `winter -= (1 - coastality) * 25`
- *     and `summer += (1 - coastality) * 10`, so inland cells have an
- *     annual range ~35 °C larger than coastal cells at the same
- *     latitude.
- *   - **Windward wetter than lee.** The precipitation march extracts
- *     moisture whenever the current cell is higher than its upstream
- *     neighbour (i.e. the air is forced up), which is exactly the
- *     windward side of an N-S ridge.
- *   - **Moisture is conserved.** `precip = min(extract, airM)` and
- *     `airM -= precip`, so no cell's moisture index can exceed the
- *     initial 1.0 saturation.
+ *     temperatures because every input is a continuous field.
+ *   - **Measurable continentality.** Inland cells get a larger
+ *     annual range than coastal cells at the same latitude.
+ *   - **Windward wetter than lee.** Orographic extract still fires
+ *     on ascent; a latitude baseline sits under that so oceans are
+ *     not bone-dry.
+ *   - **Moisture is conserved on the orographic march.** Baseline
+ *     rain is evaporation, then the total is clamped to 1.0.
  */
 export function computeSeasonalClimate(
   orogeny: OrogenyResult,
@@ -132,162 +127,135 @@ export function computeSeasonalClimate(
   const n = width * height
   const summer = new Float32Array(n)
   const winter = new Float32Array(n)
-  // Latitude-aware annual mean. Computed alongside summer/winter so
-  // the inner loop produces all three fields in one pass. See the
-  // docstring on `tempMean` above for why this is NOT
-  // `(summer + winter) / 2`.
   const tempMean = new Float32Array(n)
   const summerMoist = new Float32Array(n)
   const winterMoist = new Float32Array(n)
 
-  // Step 1: BFS distance from the nearest sea cell. Distance is in
-  // 4-neighbour cells (Manhattan grid distance), horizontal wraps,
-  // vertical does not.
   const coastDist = bfsDistanceFromSea(mask, width, height, threshold)
 
-  // Step 2: per-cell summer and winter temperature.
-  //
-  // Latitude comes from helpers.latRad (y=0 is the north pole,
-  // y=height-1 is the south pole). The seasonal zenith-cosine
-  // `cosZ = sin(obliquity) * cos(lat)` is a Phase-1 simplification;
-  // it has the right shape — high summer insolation at high
-  // latitudes, low winter insolation — even if the absolute
-  // magnitude differs from a full solar-geometry calculation.
   const obliquityRad = (obliquityDeg * Math.PI) / 180
   const sinObl = Math.sin(obliquityRad)
+  const earthSinObl = Math.sin((EARTH_OBLIQUITY_DEG * Math.PI) / 180)
+  const seasonScale = earthSinObl > 1e-6 ? sinObl / earthSinObl : 0
 
-  // `tempMean` is the latitude-driven annual mean. The summer/winter
-  // formulas above are symmetric in `cosZ` — `(summer + winter) / 2`
-  // averages to `BASE_TEMP_C` regardless of latitude, which would
-  // give every cell 30 °C and leave the biome classifier blind to
-  // equator-vs-pole. We therefore build `tempMean` from the
-  // daily-averaged solar-insolation proxy `cos(lat) * sin(obliquity)`
-  // directly, with the lapse rate applied on top.
-  //
-  //   latFactor = 0.5 + 0.5 * cos(lat) * sin(obliquity)
-  //   tempMean  = BASE_TEMP_C * latFactor − elevKm * LAPSE_RATE
-  //
-  // At the equator (lat=0) `cos(lat)=1` and we get
-  //   0.5 + 0.5 * sin(23.5°) ≈ 0.7  →  21 °C
-  // At the pole (lat=π/2) `cos(lat)=0` and we get
-  //   0.5                       = 0.5  →  15 °C
-  // Note: we use `cos(lat)` (not `sin(lat)`) because `helpers.latRad`
-  // is 0 at the equator and ±π/2 at the poles.
   for (let y = 0; y < height; y++) {
     const lat = latRad(y, height)
-    const cosZ = sinObl * Math.cos(lat)
-    // Summer insolation exceeds winter at non-polar latitudes: at
-    // summer solstice the noon sun is high, at winter solstice it is
-    // low. The Phase-1 simplification uses the same cosine sweep as
-    // the zenith angle, but with summer=max and winter=min so the
-    // annual range (summer − winter) is always non-negative.
-    const summerInsol = 1 + cosZ
-    const winterInsol = 1 - cosZ
-    const summerBase = BASE_TEMP_C * summerInsol
-    const winterBase = BASE_TEMP_C * winterInsol
-    // Latitude factor for the annual mean. See the block comment
-    // above for derivation.
-    const latFactor = 0.5 + 0.5 * Math.cos(lat) * sinObl
+    const cosLat = Math.max(0, Math.cos(lat))
+    const latSeason = Math.pow(Math.abs(Math.sin(lat)), 0.9)
+    const annualSea = POLE_MEAN_C + (EQUATOR_MEAN_C - POLE_MEAN_C) * cosLat
 
     for (let x = 0; x < width; x++) {
       const i = idx(width, x, y)
-      const elevKm = orogeny.elev[i] / 1000
-      const lapse = elevKm * LAPSE_RATE_C_PER_KM
-      // Coastality is 1 at the shore, decays toward 0 deep inland.
-      // A scale of 80 cells gives a believable continentality
-      // half-life: at 80 cells from the sea coastality is 0.5, at
-      // 240 cells it is 0.25.
-      // Continentality widens the annual *range*, not the annual
-      // mean — so it appears in `summer` and `winter` below but NOT
-      // in `tempMean`.
+      const isOcean = mask[i] < threshold
       const coastality = 1 / (1 + coastDist[i] / COASTALITY_SCALE_CELLS)
-      const inland = 1 - coastality
+      const inland = isOcean ? 0 : 1 - coastality
+      const lapse = isOcean ? 0 : (orogeny.elev[i] / 1000) * LAPSE_RATE_C_PER_KM
 
-      let s = summerBase - lapse + inland * SUMMER_CONT_DELTA_C
-      let w = winterBase - lapse - inland * WINTER_CONT_DELTA_C
+      const half = isOcean
+        ? (1.2 + 3.8 * latSeason) * seasonScale
+        : (2.5 + 11 * latSeason + inland * (9 + 14 * latSeason)) * seasonScale
 
-      if (s < TEMP_CLAMP_MIN_C) s = TEMP_CLAMP_MIN_C
-      else if (s > TEMP_CLAMP_MAX_C) s = TEMP_CLAMP_MAX_C
-      if (w < TEMP_CLAMP_MIN_C) w = TEMP_CLAMP_MIN_C
-      else if (w > TEMP_CLAMP_MAX_C) w = TEMP_CLAMP_MAX_C
+      let s = annualSea + half - lapse
+      let w = annualSea - half - lapse
+      if (isOcean) {
+        s = clampNum(s, OCEAN_SST_MIN_C, OCEAN_SST_MAX_C)
+        w = clampNum(w, OCEAN_SST_MIN_C, OCEAN_SST_MAX_C)
+      } else {
+        s = clampNum(s, LAND_TEMP_MIN_C, LAND_TEMP_MAX_C)
+        w = clampNum(w, LAND_TEMP_MIN_C, LAND_TEMP_MAX_C)
+      }
+      if (w > s) {
+        const mid = (s + w) / 2
+        s = mid
+        w = mid
+      }
 
       summer[i] = s
       winter[i] = w
-
-      // Annual mean from the latitude-driven formula, with the
-      // lapse rate applied on top. Clamped to the same range as the
-      // seasonal fields so downstream consumers never see NaN or
-      // out-of-range values from a high-altitude cell.
-      let tm = BASE_TEMP_C * latFactor - lapse
-      if (tm < TEMP_CLAMP_MIN_C) tm = TEMP_CLAMP_MIN_C
-      else if (tm > TEMP_CLAMP_MAX_C) tm = TEMP_CLAMP_MAX_C
-      tempMean[i] = tm
+      tempMean[i] = (s + w) / 2
     }
   }
 
-  // Step 3: precipitation march.
-  //
-  // Each row is an independent air column. Air enters the row at the
-  // eastern edge (x = width-1) fully saturated (`airM = 1.0`). It
-  // marches west (x = width-1, width-2, ..., 0), passing over each
-  // cell. Whenever the current cell is higher than its upstream
-  // (eastern neighbour, wrapped) cell, the air is being forced up
-  // the slope and drops its excess moisture as precipitation.
-  // `precip = min(extract, airM)` and `airM -= precip` together
-  // guarantee conservation.
-  marchPrecipitation(orogeny.elev, width, height, summerMoist, 1.0)
-  // Winter is generally drier — same march, halved output.
-  marchPrecipitation(orogeny.elev, width, height, winterMoist, WINTER_PRECIP_SCALE)
+  marchPrecipitation(orogeny.elev, mask, threshold, width, height, summerMoist, 1.0)
+  marchPrecipitation(orogeny.elev, mask, threshold, width, height, winterMoist, WINTER_PRECIP_SCALE)
+
+  for (let y = 0; y < height; y++) {
+    const lat = latRad(y, height)
+    const base = latitudePrecip(lat)
+    for (let x = 0; x < width; x++) {
+      const i = idx(width, x, y)
+      const isOcean = mask[i] < threshold
+      const coastality = 1 / (1 + coastDist[i] / COASTALITY_SCALE_CELLS)
+      const wet = isOcean ? base + 0.14 : base * (0.55 + 0.45 * coastality)
+      const upstreamI = idx(width, wrapX(x - 1, width), y)
+      const descending = !isOcean && orogeny.elev[i] < orogeny.elev[upstreamI]
+      const foehn = descending ? 0.6 : 1
+      summerMoist[i] = clampNum(summerMoist[i] + wet * 0.85 * foehn, 0, 1)
+      winterMoist[i] = clampNum(winterMoist[i] + wet * 0.85 * WINTER_PRECIP_SCALE * foehn, 0, 1)
+    }
+  }
 
   return { summer, winter, tempMean, summerMoist, winterMoist }
 }
 
 // ---------------------------------------------------------------------------
-// Precipitation march
+// Latitude moisture + precipitation march
 // ---------------------------------------------------------------------------
 
 /**
- * March a column of saturated air east-to-west across each row,
+ * Background precipitation from latitude: wet ITCZ, dry subtropics,
+ * wet mid-latitude storm track, drier poles. Orography modulates
+ * this; it does not replace it.
+ */
+function latitudePrecip(lat: number): number {
+  const deg = Math.abs(lat) * (180 / Math.PI)
+  const itcz = Math.exp(-(deg * deg) / 196) * 0.48
+  const storm = Math.exp(-((deg - 50) * (deg - 50)) / 144) * 0.36
+  const subtrop = Math.exp(-((deg - 27) * (deg - 27)) / 64) * 0.18
+  return clampNum(0.1 + itcz + storm - subtrop, 0.05, 0.85)
+}
+
+function clampNum(v: number, lo: number, hi: number): number {
+  if (v < lo) return lo
+  if (v > hi) return hi
+  return v
+}
+
+/**
+ * March a column of saturated air west-to-east across each row,
  * extracting moisture whenever the current cell is higher than its
- * upstream (eastern neighbour, wrapped) cell. The cylinder wraps:
+ * upstream (western neighbour, wrapped) cell. The cylinder wraps:
  * the air column is continuous across the x=0 / x=width-1 seam. We
  * prime with two air-circuits (no deposit, just let `airM` stabilize
  * around the cylinder) and then take one deposit pass that
- * accumulates actual precipitation. The "Donald bar" moisture
- * conservation invariant is preserved by construction: `precip =
- * min(extract, airM)` and `airM -= precip`, so no cell's moisture
- * index can exceed the initial 1.0 saturation, even when upstream
- * ridges have already eaten the air column dry.
+ * accumulates actual precipitation. Ocean cells recharge the column
+ * (evaporation) so coasts can rain even after an upstream continent
+ * wrung the air dry.
  *
  * `scale` is applied to the precipitation that lands on each cell:
  * `1.0` for summer, `0.5` for winter.
  *
- * The "extract on ascent" condition is what makes the windward side
- * of an N-S ridge wetter than the lee side: air climbs the windward
- * face and drops its moisture there; by the time it crests and
- * starts descending on the lee side, `airM` is depleted and no
- * further precipitation can fall.
+ * The "extract on ascent" condition is what makes the windward
+ * (west) side of an N-S ridge wetter than the lee (east) side.
  */
 function marchPrecipitation(
   elev: Float32Array,
+  mask: Float32Array,
+  threshold: number,
   width: number,
   height: number,
   out: Float32Array,
   scale: number,
 ): void {
-  // Cylinder wrap: keep `airM` continuous across x=0/x=width-1.
-  // 1 pass alone leaves a discontinuity at x=0 (the air column is
-  // already-depleted when the wind reaches the wrap). We do 2 prime
-  // circuits (no deposit, just let the airM settle around the cylinder)
-  // and then 1 deposit pass that captures the actual precipitation.
-  // Single wind direction (west) — never average with the eastbound
-  // march, that would destroy the rain shadow.
   const march = (deposit: boolean) => {
     for (let y = 0; y < height; y++) {
       let airM = 1.0
-      for (let x = width - 1; x >= 0; x--) {
+      for (let x = 0; x < width; x++) {
         const i = idx(width, x, y)
-        const upstreamI = idx(width, wrapX(x + 1, width), y)
+        if (mask[i] < threshold) {
+          airM = airM + OCEAN_EVAP < 1 ? airM + OCEAN_EVAP : 1
+        }
+        const upstreamI = idx(width, wrapX(x - 1, width), y)
         const upstreamElev = elev[upstreamI]
         const currentElev = elev[i]
         if (currentElev > upstreamElev) {
@@ -299,7 +267,7 @@ function marchPrecipitation(
       }
     }
   }
-  march(false)  // prime 1
-  march(false)  // prime 2
-  march(true)   // deposit
+  march(false)
+  march(false)
+  march(true)
 }

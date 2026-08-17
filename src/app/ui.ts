@@ -202,7 +202,9 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
     refs.seasonBar.append(btn)
   }
 
-  refs.hudTool.textContent = toolHudLabel(state.tool)
+  refs.hudTool.textContent = state.world
+    ? (LAYER_CHIPS.find((chip) => chip.id === state.layer)?.label ?? 'Atlas')
+    : toolHudLabel(state.tool)
   refs.hudSeason.textContent = state.world
     ? state.season === 'summer'
       ? 'Summer'
