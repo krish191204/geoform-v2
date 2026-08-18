@@ -158,6 +158,7 @@ export class PlanetView {
         showRivers: layer === 'relief' || layer === 'biome',
         bakeCities: true,
         vignette: false,
+        wrapEdge: true,
       }),
       this.renderer,
       { srgb: true },

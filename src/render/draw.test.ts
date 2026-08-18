@@ -480,6 +480,7 @@ describe('globe bakes', () => {
     const globe = bakeWorldImageDataSmooth(world, 'summer', 'relief', 256, {
       bakeCities: false,
       vignette: false,
+      wrapEdge: true,
     })
     const luma = (x: number, y: number) => {
       const [r, g, b] = pixel(globe, x, y)

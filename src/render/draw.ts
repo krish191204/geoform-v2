@@ -728,7 +728,13 @@ export function bakeWorldImageDataSmooth(
   season: Season,
   layer: Layer,
   outW: number,
-  options: { showRivers?: boolean; bakeCities?: boolean; vignette?: boolean } = {},
+  options: {
+    showRivers?: boolean
+    bakeCities?: boolean
+    vignette?: boolean
+    /** Match first/last texels for a RepeatWrapping globe texture. */
+    wrapEdge?: boolean
+  } = {},
 ): ImageData {
   const { width: w, height: h } = world.meta
   const cw = Math.max(1, outW)
@@ -760,8 +766,23 @@ export function bakeWorldImageDataSmooth(
     }
   }
   if (options.bakeCities ?? true) stampCities(image, world, scale)
+  if (options.wrapEdge) stitchRepeatedEdge(image)
   if (options.vignette ?? true) applyVignette(image)
   return image
+}
+
+function stitchRepeatedEdge(image: ImageData): void {
+  if (image.width < 2) return
+  const data = image.data
+  for (let y = 0; y < image.height; y++) {
+    const left = y * image.width * 4
+    const right = (y * image.width + image.width - 1) * 4
+    for (let channel = 0; channel < 3; channel++) {
+      const value = Math.round((data[left + channel] + data[right + channel]) * 0.5)
+      data[left + channel] = value
+      data[right + channel] = value
+    }
+  }
 }
 
 /**
