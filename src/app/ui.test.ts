@@ -155,6 +155,38 @@ describe('critique grading UI', () => {
     expect(work.textContent).toContain('Fix: Break the walls with gulfs and peninsulas.')
     expect(work.textContent).not.toContain('%')
   })
+
+  it('labels a derived assessment as a World grade with six system rows', () => {
+    const work = mountStageWork(
+      view({
+        stage: 'critique',
+        world: { cities: [] } as unknown as World,
+        maskCommitted: true,
+        makeSenseComplete: true,
+        issues: [
+          {
+            id: 'ice-desert-dualism',
+            severity: 'critical',
+            title: 'Ice adjacent to tropical desert',
+            critique: 'The temperature gradient is physically discontinuous.',
+            fix: 'Move the continent or rerun climate.',
+            evidence: [],
+          },
+        ],
+      }),
+    )
+    expect(work.querySelector('h3')?.textContent).toBe('World grade')
+    expect((work.querySelector('[data-letter-grade]') as HTMLElement).dataset.letterGrade).toBe(
+      'F',
+    )
+    expect(work.querySelectorAll('[data-grade-criterion]')).toHaveLength(6)
+    expect(work.textContent).toContain('Climate continuity')
+    expect(work.textContent).toContain('Hydrology')
+    expect(work.textContent).toContain('Tectonic structure')
+    expect(work.textContent).toContain('Biome diversity')
+    expect(work.textContent).toContain('Settlement pattern')
+    expect(work.textContent).toContain('Sketch fidelity')
+  })
 })
 
 describe('sketch vs leftover grounded world', () => {
