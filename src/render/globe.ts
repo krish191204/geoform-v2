@@ -13,11 +13,11 @@ import {
 } from './draw'
 import type { Layer, World } from '../world/types'
 
-const BAKE = 6
+const BAKE = 4
 const WIDTH_SEG = 192
 const HEIGHT_SEG = 128
 const DISPLACE = 0.065
-const TEX_MAX = 4096
+const TEX_MAX = 2048
 
 function imageDataToTexture(
   image: ImageData,
@@ -70,7 +70,7 @@ export class PlanetView {
     this.canvas = canvas
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
     this.renderer.setClearColor(0x000000, 0)
-    this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1))
+    this.renderer.setPixelRatio(import.meta.env.PROD ? 1 : Math.min(2, window.devicePixelRatio || 1))
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.05

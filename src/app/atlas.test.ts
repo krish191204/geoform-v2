@@ -6,6 +6,12 @@ describe('atlasBakeWidth', () => {
     expect(atlasBakeWidth(1600, 768)).toBe(3072)
     expect(atlasBakeWidth(5000, 768)).toBe(4096)
     expect(atlasBakeWidth(200, 64)).toBe(256)
+    expect(atlasBakeWidth(1600, 768, true)).toBe(768)
+  })
+
+  it('matches Geoform 1 published-build raster budget so Vercel stays interactive', () => {
+    expect(atlasBakeWidth(1600, 768, { prod: true, gridH: 384 })).toBe(1536)
+    expect(atlasBakeWidth(1600, 768, { preview: true, prod: true, gridH: 384 })).toBe(768)
   })
 })
 

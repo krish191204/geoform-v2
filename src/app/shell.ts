@@ -133,6 +133,7 @@ export function mountApp(root: HTMLElement): void {
   root.append(chrome.root, layout)
 
   let toolsRefs: ToolsRefs | null = null
+  let painting = false
   let paintRaf = 0
   let planet: import('../render/globe').PlanetView | null = null
   let planetLoad: Promise<import('../render/globe').PlanetView | null> | null = null
@@ -210,6 +211,7 @@ export function mountApp(root: HTMLElement): void {
       season: flags.season,
       issues: state.stage === 'critique' ? state.issues : [],
       showCities: Boolean(showWorld && state.world && state.world.cities.length > 0),
+      preview: painting && !showWorld,
     })
   }
 
@@ -260,7 +262,8 @@ export function mountApp(root: HTMLElement): void {
 
   function attachCanvas(): void {
     const canvas = map.canvas
-    let painting = false
+
+    let lastPaintCell: { x: number; y: number } | null = null
 
     const onPoint = (clientX: number, clientY: number, isDown: boolean) => {
       const cell = cellFromPointer(
@@ -273,9 +276,12 @@ export function mountApp(root: HTMLElement): void {
       if (!cell) return
       const { x, y } = cell
 
-      inspectAt(x, y)
-      if (state.tool === 'inspect') return
-      if (!isDown && !painting) return
+      const hovering = !isDown && !painting
+      if (state.tool === 'inspect' || hovering) {
+        inspectAt(x, y)
+        if (state.tool === 'inspect') return
+        if (hovering) return
+      }
 
       if (state.tool === 'place-city' || state.tool === 'remove-city') {
         if (!isDown) return
@@ -318,11 +324,7 @@ export function mountApp(root: HTMLElement): void {
         strength: state.strength,
         tool: state.tool,
       })
-      inspectAt(x, y)
-      updateChrome(chrome, buildView(bundle))
-      updateMapShell(map, buildView(bundle))
-      updateInspector(inspector, buildView(bundle))
-      if (toolsRefs) updateStageTools(toolsRefs, buildView(bundle))
+      lastPaintCell = { x, y }
       requestPaint()
     }
 
@@ -336,9 +338,12 @@ export function mountApp(root: HTMLElement): void {
     })
     canvas.addEventListener('pointerup', () => {
       painting = false
+      if (lastPaintCell) inspectAt(lastPaintCell.x, lastPaintCell.y)
+      render()
     })
     canvas.addEventListener('pointercancel', () => {
       painting = false
+      render()
     })
   }
 

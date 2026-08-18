@@ -29,13 +29,48 @@ export const LAYER_CHIPS: readonly { id: Layer; label: string; title: string }[]
 const LAND_RGB: readonly [number, number, number] = [0x8a, 0x7a, 0x5a]
 const SEA_FILL = '#163a44'
 
-/** Geoform 1 HD raster: at least 4 pixels per cell, then CSS-downsample. */
+/** Geoform 1 HD raster: at least 4 pixels per cell locally, then CSS-downsample. */
 export const ATLAS_CELL_SCALE = 4
 export const ATLAS_BAKE_CAP = 4096
+/** Geoform 1 published-build cap so Vercel stays interactive. */
+export const ATLAS_PROD_MAX_PIXELS = 1_500_000
+
+export interface AtlasBakeOpts {
+  preview?: boolean
+  gridH?: number
+  prod?: boolean
+}
+
+/** Raster scale: 4× locally; production matches Geoform 1's 1.5M-pixel budget. */
+export function atlasCellScale(gridW: number, gridH: number, opts: AtlasBakeOpts = {}): number {
+  if (opts.preview) return 1
+  const cells = Math.max(1, gridW * gridH)
+  const prod = opts.prod ?? import.meta.env.PROD
+  if (!prod) return ATLAS_CELL_SCALE
+  const maxScale = Math.max(2, Math.floor(Math.sqrt(ATLAS_PROD_MAX_PIXELS / cells)))
+  return Math.min(ATLAS_CELL_SCALE, maxScale)
+}
 
 /** Bake width for the atlas: oversample the grid, never exceed the WebGL-ish cap. */
-export function atlasBakeWidth(letterboxW: number, gridW: number): number {
-  return Math.min(ATLAS_BAKE_CAP, Math.max(letterboxW, gridW * ATLAS_CELL_SCALE))
+export function atlasBakeWidth(
+  letterboxW: number,
+  gridW: number,
+  previewOrOpts: boolean | AtlasBakeOpts = false,
+): number {
+  const opts: AtlasBakeOpts = typeof previewOrOpts === 'boolean' ? { preview: previewOrOpts } : previewOrOpts
+  const gridH = Math.max(1, opts.gridH ?? Math.round(gridW / 2))
+  const scale = atlasCellScale(gridW, gridH, opts)
+  const prod = opts.prod ?? import.meta.env.PROD
+  const floor = opts.preview || prod ? gridW * scale : Math.max(letterboxW, gridW * scale)
+  let width = Math.min(ATLAS_BAKE_CAP, floor)
+  if (prod && !opts.preview) {
+    const maxW = Math.max(
+      gridW * 2,
+      Math.floor(Math.sqrt(ATLAS_PROD_MAX_PIXELS * (gridW / gridH))),
+    )
+    width = Math.min(width, maxW)
+  }
+  return width
 }
 
 export interface AtlasPaintOpts {
@@ -46,6 +81,8 @@ export interface AtlasPaintOpts {
   season: Season
   issues?: readonly Issue[]
   showCities?: boolean
+  /** Stroke preview: native grid scale, no 4× oversample. */
+  preview?: boolean
 }
 
 /**
@@ -54,7 +91,9 @@ export interface AtlasPaintOpts {
  */
 export function sizeCanvas(canvas: HTMLCanvasElement): { width: number; height: number } {
   const rect = canvas.getBoundingClientRect()
-  const dpr = Math.min(2, typeof devicePixelRatio === 'number' ? devicePixelRatio : 1)
+  const dpr = import.meta.env.PROD
+    ? 1
+    : Math.min(2, typeof devicePixelRatio === 'number' ? devicePixelRatio : 1)
   const width = Math.max(320, Math.floor((rect.width || 640) * dpr))
   const height = Math.max(180, Math.floor((rect.height || 320) * dpr))
   if (canvas.width !== width || canvas.height !== height) {
@@ -85,6 +124,36 @@ export function cellFromPointer(
   return { x, y }
 }
 
+const worldBakeCache = new WeakMap<World, { key: string; image: ImageData }>()
+let blitCanvas: HTMLCanvasElement | null = null
+
+function blitScratch(width: number, height: number): CanvasRenderingContext2D | null {
+  if (!blitCanvas) blitCanvas = document.createElement('canvas')
+  if (blitCanvas.width !== width || blitCanvas.height !== height) {
+    blitCanvas.width = width
+    blitCanvas.height = height
+  }
+  return blitCanvas.getContext('2d')
+}
+
+function cachedWorldBake(
+  world: World,
+  season: Season,
+  layer: Layer,
+  bakeW: number,
+): ImageData {
+  const showRivers = layer === 'relief' || layer === 'biome'
+  const key = `${season}|${layer}|${bakeW}|${showRivers ? 1 : 0}`
+  const hit = worldBakeCache.get(world)
+  if (hit && hit.key === key) return hit.image
+  const image = bakeWorldImageDataSmooth(world, season, layer, bakeW, {
+    showRivers,
+    bakeCities: false,
+  })
+  worldBakeCache.set(world, { key, image })
+  return image
+}
+
 /** Paint the atlas into `canvas`. World wins over mask. */
 export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): void {
   const ctx = canvas.getContext('2d')
@@ -96,25 +165,22 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
   const { meta } = opts
   const aspect = meta.width / Math.max(1, meta.height)
   const box = letterbox(cw, ch, aspect)
-  const bakeW = atlasBakeWidth(box.w, meta.width)
+  const bakeW = atlasBakeWidth(box.w, meta.width, {
+    preview: opts.preview === true,
+    gridH: meta.height,
+  })
   const bakeH = Math.max(1, Math.round((bakeW * meta.height) / Math.max(1, meta.width)))
 
   const image = opts.world
-    ? bakeWorldImageDataSmooth(opts.world, opts.season, opts.layer, bakeW, {
-        showRivers: opts.layer === 'relief' || opts.layer === 'biome',
-        bakeCities: false,
-      })
-    : upsampleMask(opts.mask, meta, bakeW, bakeH)
+    ? cachedWorldBake(opts.world, opts.season, opts.layer, bakeW)
+    : upsampleMask(opts.mask, meta, bakeW, bakeH, opts.preview === true)
 
-  const tmp = document.createElement('canvas')
-  tmp.width = image.width
-  tmp.height = image.height
-  const tctx = tmp.getContext('2d')
+  const tctx = blitScratch(image.width, image.height)
   if (!tctx) return
   tctx.putImageData(image, 0, 0)
   ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(tmp, box.x, box.y, box.w, box.h)
+  ctx.imageSmoothingQuality = opts.preview ? 'low' : 'high'
+  ctx.drawImage(tctx.canvas, box.x, box.y, box.w, box.h)
 
   if (opts.issues && opts.issues.length > 0) {
     ctx.save()
@@ -153,12 +219,43 @@ function letterbox(cw: number, ch: number, aspect: number): BlitBox {
   }
 }
 
-function upsampleMask(
+function upsampleMaskPreview(
   mask: Float32Array | null,
   meta: WorldMeta,
   outW: number,
   outH: number,
 ): ImageData {
+  const w = meta.width
+  const h = meta.height
+  const cw = Math.max(1, outW)
+  const ch = Math.max(1, outH)
+  const image = new ImageData(cw, ch)
+  const data = image.data
+  const threshold = meta.threshold
+  const wrap = (x: number) => ((x % w) + w) % w
+  for (let py = 0; py < ch; py++) {
+    const y = Math.max(0, Math.min(h - 1, Math.floor(((py + 0.5) * h) / ch)))
+    for (let px = 0; px < cw; px++) {
+      const x = wrap(Math.floor(((px + 0.5) * w) / cw))
+      const land = Boolean(mask && mask[y * w + x] >= threshold)
+      const o = (py * cw + px) * 4
+      data[o] = land ? LAND_RGB[0] : 12
+      data[o + 1] = land ? LAND_RGB[1] : 41
+      data[o + 2] = land ? LAND_RGB[2] : 63
+      data[o + 3] = 255
+    }
+  }
+  return image
+}
+
+function upsampleMask(
+  mask: Float32Array | null,
+  meta: WorldMeta,
+  outW: number,
+  outH: number,
+  preview = false,
+): ImageData {
+  if (preview) return upsampleMaskPreview(mask, meta, outW, outH)
   const w = meta.width
   const h = meta.height
   const cw = Math.max(1, outW)
