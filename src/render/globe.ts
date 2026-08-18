@@ -16,7 +16,7 @@ import type { Layer, World } from '../world/types'
 const BAKE = 4
 const WIDTH_SEG = 192
 const HEIGHT_SEG = 128
-const DISPLACE = 0.065
+const DISPLACE = 0.035
 const TEX_MAX = 2048
 
 function imageDataToTexture(
@@ -59,7 +59,7 @@ export class PlanetView {
   private roughTex: THREE.CanvasTexture | null = null
   private yaw = 0.85
   private pitch = 0.22
-  private distance = 3.15
+  private distance = 3.45
   private dragging = false
   private lastX = 0
   private lastY = 0
@@ -73,7 +73,7 @@ export class PlanetView {
     this.renderer.setPixelRatio(import.meta.env.PROD ? 1 : Math.min(2, window.devicePixelRatio || 1))
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 1.05
+    this.renderer.toneMappingExposure = 0.96
 
     this.scene = new THREE.Scene()
     this.camera = new THREE.PerspectiveCamera(32, 1, 0.1, 40)
@@ -101,12 +101,12 @@ export class PlanetView {
     this.scene.add(this.atmosphere)
 
     // Geoform 1 paper-day: cool ambient + warm key + cool fill. No HDRI, no bloom.
-    this.scene.add(new THREE.AmbientLight(0x9ab0c8, 0.48))
-    this.sun = new THREE.DirectionalLight(0xfff6e8, 1.45)
+    this.scene.add(new THREE.AmbientLight(0x9ab0c8, 0.58))
+    this.sun = new THREE.DirectionalLight(0xfff6e8, 1.18)
     this.sun.target.position.set(0, 0, 0)
     this.scene.add(this.sun)
     this.scene.add(this.sun.target)
-    this.fill = new THREE.DirectionalLight(0x88a8d0, 0.35)
+    this.fill = new THREE.DirectionalLight(0x88a8d0, 0.28)
     this.fill.position.set(-2.2, 0.4, -1.6)
     this.scene.add(this.fill)
     this.scene.add(this.makeStars())
@@ -181,9 +181,9 @@ export class PlanetView {
     const mat = this.globe.material as THREE.MeshStandardMaterial
     mat.map = this.colorTex
     mat.bumpMap = this.bumpTex
-    mat.bumpScale = 0.055
+    mat.bumpScale = 0.028
     mat.normalMap = this.normalTex
-    mat.normalScale = new THREE.Vector2(1.2, 1.2)
+    mat.normalScale = new THREE.Vector2(0.72, 0.72)
     mat.displacementMap = this.dispTex
     mat.displacementScale = DISPLACE
     mat.roughnessMap = this.roughTex
@@ -206,7 +206,7 @@ export class PlanetView {
   reset(): void {
     this.yaw = 0.85
     this.pitch = 0.22
-    this.distance = 3.15
+    this.distance = 3.45
     this.applyCamera()
   }
 

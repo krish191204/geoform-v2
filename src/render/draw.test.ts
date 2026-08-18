@@ -474,6 +474,22 @@ describe('globe bakes', () => {
     expect(atlasRatio).toBeLessThan(globeRatio)
   })
 
+  it('keeps globe colour continuous across the repeated date line', () => {
+    const world = makeWorld({ width: 32, height: 16, elev: () => 0 })
+    world.mask.fill(0)
+    const globe = bakeWorldImageDataSmooth(world, 'summer', 'relief', 256, {
+      bakeCities: false,
+      vignette: false,
+    })
+    const luma = (x: number, y: number) => {
+      const [r, g, b] = pixel(globe, x, y)
+      return r + g + b
+    }
+    for (let y = 8; y < globe.height - 8; y += 12) {
+      expect(Math.abs(luma(0, y) - luma(globe.width - 1, y))).toBeLessThan(12)
+    }
+  })
+
   it('paints empty ocean as deep water, not a lagoon shelf', () => {
     const world = makeWorld({ width: 16, height: 8, elev: () => 0 })
     world.mask.fill(0)

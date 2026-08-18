@@ -740,6 +740,8 @@ button:disabled {
     height: auto;
     overflow: visible;
     padding: 0.35rem 0.8rem 1rem;
+    align-content: start;
+    container-type: normal;
   }
 
   .panel {
@@ -748,6 +750,8 @@ button:disabled {
 
   .map-shell {
     width: 100%;
+    max-width: none;
+    margin: 0;
     align-self: start;
   }
 
@@ -798,11 +802,27 @@ button:disabled {
     right: 0.5rem;
     bottom: 0.5rem;
     gap: 0.22rem;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .map-overlay::-webkit-scrollbar {
+    display: none;
+  }
+
+  .map-overlay .chip {
+    flex: 0 0 auto;
   }
 
   .chip {
     padding: 0.25rem 0.48rem;
     font-size: 0.68rem;
+  }
+
+  .is-sketch-surface .map-seasons,
+  .is-sketch-surface .map-overlay {
+    display: none;
   }
 
   .map-hint {

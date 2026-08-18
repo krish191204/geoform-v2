@@ -404,9 +404,12 @@ function sampleScalar(field: ArrayLike<number>, world: World, x: number, y: numb
   return lerp(lerp(v00, v10, fx), lerp(v01, v11, fx), fy)
 }
 
-/** Seeded paper grain — static and centred, so redraws never shimmer. */
-function paperGrain(x: number, y: number): number {
-  const raw = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453
+/** Seeded paper grain — static, centred, and periodic across the date line. */
+function paperGrain(x: number, y: number, width: number): number {
+  const theta = (wrapX(x, width) / Math.max(1, width)) * Math.PI * 2
+  const raw =
+    Math.sin(Math.cos(theta) * 19.1398 + Math.sin(theta) * 31.733 + y * 78.233) *
+    43758.5453
   return (raw - Math.floor(raw)) * 0.06 - 0.03
 }
 
@@ -513,12 +516,13 @@ function applyPaperLook(
   // so the ocean has depth without animated noise or false bathymetry.
   if (ocean && (layer === 'relief' || layer === 'biome' || layer === 'elevation')) {
     const shelf = e < 0 ? ramp(1 + e / 1800) : 0.28
+    const lon = (wrapX(x, world.meta.width) / Math.max(1, world.meta.width)) * Math.PI * 2
     const swell =
-      Math.sin(x * 0.11 + Math.cos(y * 0.08) * 1.7) *
-      Math.sin(y * 0.14 - x * 0.025)
+      Math.sin(lon * 3 + Math.cos(y * 0.08) * 1.7) *
+      Math.sin(y * 0.14 - lon * 0.7)
     const ripple =
-      Math.sin(x * 0.43 + Math.cos(y * 0.2) * 2.1) *
-      Math.sin(y * 0.37 + x * 0.035)
+      Math.sin(lon * 11 + Math.cos(y * 0.2) * 2.1) *
+      Math.sin(y * 0.37 + lon * 1.6)
     const shimmer = (swell * 0.6 + ripple * 0.4) * (0.55 + shelf * 0.45)
     rgb = [
       clamp(rgb[0] + shimmer * 4),
@@ -555,7 +559,7 @@ function applyPaperLook(
   }
 
   // Micro-texture so flats don't look like solid fill (Geoform 1, every layer).
-  const grain = paperGrain(x, y)
+  const grain = paperGrain(x, y, world.meta.width)
   rgb = [clamp(rgb[0] * (1 + grain)), clamp(rgb[1] * (1 + grain)), clamp(rgb[2] * (1 + grain))]
 
   return rgb
