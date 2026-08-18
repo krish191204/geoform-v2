@@ -88,6 +88,7 @@ export function mountChrome(): ChromeRefs {
     { class: 'brand-group' },
     brand,
     el('p', { class: 'tagline' }, 'Draw the idea. Ground it in geography.'),
+    el('a', { class: 'guide-link', href: '/briefing.html' }, 'How it works'),
   )
   const saveBtn = el(
     'button',

@@ -101,6 +101,13 @@ describe('chrome hierarchy', () => {
     expect(chrome.clearSeaBtn.classList.contains('destructive-quiet')).toBe(true)
     expect(chrome.saveMeta.getAttribute('aria-live')).toBe('polite')
   })
+
+  it('links How it works to the interactive briefing page', () => {
+    const chrome = mountChrome()
+    const guide = chrome.root.querySelector('.guide-link') as HTMLAnchorElement
+    expect(guide.textContent).toBe('How it works')
+    expect(guide.getAttribute('href')).toBe('/briefing.html')
+  })
 })
 
 describe('sketch tools', () => {

@@ -86,6 +86,19 @@ body {
   letter-spacing: 0.01em;
 }
 
+.guide-link {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(28, 34, 28, 0.25);
+  white-space: nowrap;
+}
+
+.guide-link:hover,
+.guide-link:focus-visible {
+  color: var(--ink);
+}
+
 .nav-trailing {
   display: flex;
   align-items: center;
