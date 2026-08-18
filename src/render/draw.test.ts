@@ -486,7 +486,12 @@ describe('globe bakes', () => {
       return r + g + b
     }
     for (let y = 8; y < globe.height - 8; y += 12) {
-      expect(Math.abs(luma(0, y) - luma(globe.width - 1, y))).toBeLessThanOrEqual(14)
+      const seam = Math.abs(luma(0, y) - luma(globe.width - 1, y))
+      const leftNeighbour = Math.abs(luma(1, y) - luma(0, y))
+      const rightNeighbour = Math.abs(
+        luma(globe.width - 1, y) - luma(globe.width - 2, y),
+      )
+      expect(seam).toBeLessThanOrEqual(Math.max(leftNeighbour, rightNeighbour) + 4)
     }
   })
 
