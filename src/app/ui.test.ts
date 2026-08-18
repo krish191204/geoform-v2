@@ -63,13 +63,42 @@ describe('updateMapShell hint and HUD', () => {
     expect(map.hint.hidden).toBe(true)
   })
 
-  it('HUD is Atlas | Planet only', () => {
+  it('HUD keeps view controls and adds derived context only after Make sense', () => {
     const map = mountMapShell()
     const hud = map.root.querySelector('.map-hud')
     expect(hud).toBeTruthy()
-    expect(hud?.querySelectorAll('span').length).toBe(0)
-    expect(map.viewAtlas.textContent).toBe('Atlas')
-    expect(map.viewPlanet.textContent).toBe('Planet')
+    expect(map.viewAtlas.textContent).toContain('Atlas')
+    expect(map.viewPlanet.textContent).toContain('Planet')
+    updateMapShell(map, view())
+    expect(map.context.hidden).toBe(true)
+
+    const world = { cities: [] } as unknown as World
+    updateMapShell(
+      map,
+      view({ world, stage: 'make-sense', makeSenseComplete: true, layer: 'biome' }),
+    )
+    expect(map.context.hidden).toBe(false)
+    expect(map.context.textContent).toBe('Biome · Summer')
+  })
+
+  it('gives layer controls decorative icons and explicit pressed state', () => {
+    const map = mountMapShell()
+    const world = { cities: [] } as unknown as World
+    updateMapShell(map, view({ world, stage: 'make-sense', makeSenseComplete: true }))
+    const relief = map.overlay.querySelector('[data-look="relief"]') as HTMLButtonElement
+    const biome = map.overlay.querySelector('[data-look="biome"]') as HTMLButtonElement
+    expect(relief.querySelector('.control-icon')?.getAttribute('aria-hidden')).toBe('true')
+    expect(relief.getAttribute('aria-pressed')).toBe('true')
+    expect(biome.getAttribute('aria-pressed')).toBe('false')
+  })
+})
+
+describe('chrome hierarchy', () => {
+  it('demotes Clear sea and exposes save feedback as a live status', () => {
+    const chrome = mountChrome()
+    expect(chrome.clearSeaBtn.classList.contains('primary')).toBe(false)
+    expect(chrome.clearSeaBtn.classList.contains('destructive-quiet')).toBe(true)
+    expect(chrome.saveMeta.getAttribute('aria-live')).toBe('polite')
   })
 })
 

@@ -434,11 +434,20 @@ export function mountApp(root: HTMLElement): void {
     announceCoach({ kind: 'app.stage', from, to: target, trigger: 'user' })
   })
 
+  function showSaveResult(ok: boolean, subject: 'world' | 'sketch'): void {
+    chrome.saveMeta.classList.toggle('is-saved', ok)
+    chrome.saveMeta.classList.toggle('is-error', !ok)
+    chrome.saveMeta.textContent = ok
+      ? `${subject === 'world' ? 'World' : 'Sketch'} saved`
+      : 'Save failed'
+  }
+
   window.addEventListener(APP_EVENTS.SAVE, () => {
     if (state.world) {
       const json = serializeWorld(state.world)
       const bytes = json.length
       const ok = saveWorld(state.world)
+      showSaveResult(ok, 'world')
       announceCoach(
         ok
           ? { kind: 'persist.saved', key: 'world', bytes, ok: true }
@@ -448,12 +457,14 @@ export function mountApp(root: HTMLElement): void {
       const json = serializeMask(state.meta, flags.mask)
       const bytes = json.length
       const ok = saveMask(state.meta, flags.mask)
+      showSaveResult(ok, 'sketch')
       announceCoach(
         ok
           ? { kind: 'persist.saved', key: 'mask', bytes, ok: true }
           : { kind: 'persist.failed', key: 'mask', reason: 'quota', bytes },
       )
     } else {
+      showSaveResult(false, 'sketch')
       announceCoach({ kind: 'persist.failed', key: 'mask', reason: 'shape', bytes: 0 })
     }
   })

@@ -92,6 +92,21 @@ describe('Sketch → Worldbuild walkthrough', () => {
     root.remove()
   })
 
+  it('shows visible save feedback after persisting a sketch', () => {
+    const root = document.createElement('div')
+    document.body.append(root)
+    mountApp(root)
+
+    ;(root.querySelector('[data-landform="continents"]') as HTMLButtonElement).click()
+    ;(root.querySelector('.save-action') as HTMLButtonElement).click()
+
+    const saveMeta = root.querySelector('.save-meta') as HTMLElement
+    expect(saveMeta.textContent).toBe('Sketch saved')
+    expect(saveMeta.classList.contains('is-saved')).toBe(true)
+
+    root.remove()
+  })
+
   it('Make sense grounds climate, mixed towns, and oceanic plates', async () => {
     const tw = makeContinentWorld()
     const meta = {

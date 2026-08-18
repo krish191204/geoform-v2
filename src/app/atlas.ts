@@ -16,14 +16,14 @@ import { drawIssueOverlays } from '../critique/preview'
 
 export type { Season }
 
-export const LAYER_CHIPS: readonly { id: Layer; label: string; title: string }[] = [
-  { id: 'relief', label: 'Relief', title: 'Landform, hillshade, and rivers' },
-  { id: 'biome', label: 'Biome', title: 'Holdridge class' },
-  { id: 'moisture', label: 'Moisture', title: 'Precipitation, 0–1' },
-  { id: 'temperature', label: 'Temperature', title: 'Mean temperature, °C' },
-  { id: 'suitability', label: 'Settle', title: 'Where people can live' },
-  { id: 'plates', label: 'Plates', title: 'Tectonic plates' },
-  { id: 'elevation', label: 'Height', title: 'Elevation in metres' },
+export const LAYER_CHIPS: readonly { id: Layer; label: string; title: string; icon: string }[] = [
+  { id: 'relief', label: 'Relief', title: 'Landform, hillshade, and rivers', icon: '⌁' },
+  { id: 'biome', label: 'Biome', title: 'Holdridge class', icon: '◐' },
+  { id: 'moisture', label: 'Moisture', title: 'Precipitation, 0–1', icon: '≈' },
+  { id: 'temperature', label: 'Temperature', title: 'Mean temperature, °C', icon: '°' },
+  { id: 'suitability', label: 'Settle', title: 'Where people can live', icon: '⌂' },
+  { id: 'plates', label: 'Plates', title: 'Tectonic plates', icon: '◇' },
+  { id: 'elevation', label: 'Height', title: 'Elevation in metres', icon: '↟' },
 ]
 
 const LAND_RGB: readonly [number, number, number] = [0x94, 0x86, 0x65]

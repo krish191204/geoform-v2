@@ -62,6 +62,10 @@ function fire<T>(type: string, detail?: T): void {
   window.dispatchEvent(new CustomEvent(type, { detail }))
 }
 
+function controlIcon(glyph: string): HTMLSpanElement {
+  return el('span', { class: 'control-icon', 'aria-hidden': 'true' }, glyph)
+}
+
 // ---------------------------------------------------------------------------
 // Chrome (brand + actions + stage rail)
 // ---------------------------------------------------------------------------
@@ -78,21 +82,36 @@ export function mountChrome(): ChromeRefs {
   const stageButtons = {} as ChromeRefs['stageButtons']
 
   const brand = el('a', { class: 'brand-lock', href: '/' }, 'Geoform')
-  const saveBtn = el('button', { type: 'button', class: 'action-btn' }, 'Save')
+  const brandGroup = el(
+    'div',
+    { class: 'brand-group' },
+    brand,
+    el('p', { class: 'tagline' }, 'Draw the idea. Ground it in geography.'),
+  )
+  const saveBtn = el(
+    'button',
+    { type: 'button', class: 'action-btn save-action', title: 'Save this world locally' },
+    controlIcon('⌑'),
+    el('span', {}, 'Save'),
+  )
   saveBtn.addEventListener('click', () => fire(APP_EVENTS.SAVE))
   const clearSeaBtn = el(
     'button',
-    { type: 'button', class: 'primary', title: 'Wipe the canvas back to empty ocean' },
+    { type: 'button', class: 'action-btn destructive-quiet', title: 'Wipe the canvas back to empty ocean' },
+    controlIcon('×'),
     'Clear sea',
   )
   clearSeaBtn.addEventListener('click', () => fire(APP_EVENTS.CLEAR_SEA))
-  const saveMeta = el('span', { class: 'save-meta' }, 'No save yet')
+  const saveMeta = el(
+    'span',
+    { class: 'save-meta', role: 'status', 'aria-live': 'polite' },
+    'Not saved',
+  )
 
   const topnav = el(
     'nav',
     { class: 'topnav', 'aria-label': 'Geoform' },
-    brand,
-    el('p', { class: 'tagline' }, 'Draw land. We ground it in geography.'),
+    brandGroup,
     el('div', { class: 'nav-trailing' }, saveBtn, clearSeaBtn, saveMeta),
   )
 
@@ -139,6 +158,7 @@ export interface MapShellRefs {
   readonly globe: HTMLCanvasElement
   readonly overlay: HTMLElement
   readonly seasonBar: HTMLElement
+  readonly context: HTMLElement
   readonly viewAtlas: HTMLButtonElement
   readonly viewPlanet: HTMLButtonElement
   readonly loading: HTMLElement
@@ -149,16 +169,32 @@ export function mountMapShell(): MapShellRefs {
   const canvas = el('canvas', { id: 'map', class: 'map' })
   const globe = el('canvas', { id: 'globe', hidden: true })
   const overlay = el('div', { class: 'map-overlay', id: 'layers' })
-  const seasonBar = el('div', { class: 'map-seasons' })
+  const seasonBar = el('div', { class: 'map-seasons', 'aria-label': 'Map season' })
+  const context = el('span', { class: 'map-context', hidden: true })
   const viewAtlas = el(
     'button',
-    { type: 'button', class: 'view-toggle active', id: 'viewAtlas', title: 'Flat atlas' },
-    'Atlas',
+    {
+      type: 'button',
+      class: 'view-toggle active',
+      id: 'viewAtlas',
+      title: 'Flat atlas',
+      'aria-pressed': 'true',
+    },
+    controlIcon('▱'),
+    el('span', {}, 'Atlas'),
   )
   const viewPlanet = el(
     'button',
-    { type: 'button', class: 'view-toggle', id: 'viewPlanet', title: 'Rotate the planet', disabled: true },
-    'Planet',
+    {
+      type: 'button',
+      class: 'view-toggle',
+      id: 'viewPlanet',
+      title: 'Rotate the planet',
+      disabled: true,
+      'aria-pressed': 'false',
+    },
+    controlIcon('○'),
+    el('span', {}, 'Planet'),
   )
   viewAtlas.addEventListener('click', () => {
     const detail: ViewChangeDetail = { view: 'atlas' }
@@ -168,7 +204,7 @@ export function mountMapShell(): MapShellRefs {
     const detail: ViewChangeDetail = { view: 'planet' }
     fire(APP_EVENTS.VIEW_CHANGE, detail)
   })
-  const hud = el('div', { class: 'map-hud' }, viewAtlas, viewPlanet)
+  const hud = el('div', { class: 'map-hud' }, context, viewAtlas, viewPlanet)
   const loading = el('div', { class: 'loading', id: 'loading', hidden: true }, 'Grounding the doodle…')
   const hint = el(
     'div',
@@ -193,6 +229,7 @@ export function mountMapShell(): MapShellRefs {
     globe,
     overlay,
     seasonBar,
+    context,
     viewAtlas,
     viewPlanet,
     loading,
@@ -217,8 +254,10 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
         'data-look': chip.id,
         title: chip.title,
         disabled: !derived,
+        'aria-pressed': String(derived && state.layer === chip.id),
       },
-      chip.label,
+      controlIcon(chip.icon),
+      el('span', {}, chip.label),
     )
     btn.addEventListener('click', () => {
       if (!derived) return
@@ -236,8 +275,10 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
         type: 'button',
         class: 'chip' + (derived && state.season === season ? ' active' : ''),
         disabled: !derived,
+        'aria-pressed': String(derived && state.season === season),
       },
-      season === 'summer' ? 'Summer' : 'Winter',
+      controlIcon(season === 'summer' ? '☼' : '✣'),
+      el('span', {}, season === 'summer' ? 'Summer' : 'Winter'),
     )
     btn.addEventListener('click', () => {
       if (!derived) return
@@ -249,7 +290,16 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
 
   refs.viewAtlas.classList.toggle('active', state.viewMode === 'atlas')
   refs.viewPlanet.classList.toggle('active', state.viewMode === 'planet')
+  refs.viewAtlas.setAttribute('aria-pressed', String(state.viewMode === 'atlas'))
+  refs.viewPlanet.setAttribute('aria-pressed', String(derived && state.viewMode === 'planet'))
   refs.viewPlanet.disabled = !derived
+  refs.context.hidden = !derived
+  refs.context.textContent = derived
+    ? `${LAYER_CHIPS.find((chip) => chip.id === state.layer)?.label ?? 'Relief'} · ${
+        state.season === 'summer' ? 'Summer' : 'Winter'
+      }`
+    : ''
+  refs.root.classList.toggle('is-sketch-surface', !derived)
   refs.canvas.hidden = derived && state.viewMode === 'planet'
   refs.globe.hidden = !(derived && state.viewMode === 'planet')
   refs.loading.hidden = !state.isProcessing
@@ -375,6 +425,7 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
         type: 'button',
         class: 'tool' + (state.tool === tool.id ? ' active' : ''),
         'data-tool': tool.id,
+        'aria-pressed': String(state.tool === tool.id),
       },
       tool.label,
       el('small', {}, tool.desc),
@@ -496,6 +547,7 @@ function mountWorldbuildTools(state: ShellStateView): HTMLElement {
         type: 'button',
         class: 'tool' + (state.tool === tool.id ? ' active' : ''),
         'data-tool': tool.id,
+        'aria-pressed': String(state.tool === tool.id),
       },
       tool.label,
       el('small', {}, tool.desc),
@@ -525,7 +577,9 @@ function mountWorldbuildTools(state: ShellStateView): HTMLElement {
 export function updateStageTools(refs: ToolsRefs, state: ShellStateView): void {
   if (refs.stage !== state.stage) return
   for (const btn of Array.from(refs.root.querySelectorAll<HTMLButtonElement>('[data-tool]'))) {
-    btn.classList.toggle('active', btn.dataset.tool === state.tool)
+    const active = btn.dataset.tool === state.tool
+    btn.classList.toggle('active', active)
+    btn.setAttribute('aria-pressed', String(active))
   }
   const brushVal = refs.root.querySelector('#brushVal')
   if (brushVal) brushVal.textContent = String(state.brushSize)

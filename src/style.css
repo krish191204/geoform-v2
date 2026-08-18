@@ -54,10 +54,17 @@ body {
 
 .topnav {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem 1rem;
   flex-wrap: wrap;
+}
+
+.brand-group {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  min-width: 0;
 }
 
 .brand-lock {
@@ -73,8 +80,10 @@ body {
 .tagline {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 0.9rem;
-  flex: 1;
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 0.84rem;
+  font-style: italic;
+  letter-spacing: 0.01em;
 }
 
 .nav-trailing {
@@ -137,66 +146,24 @@ body {
   cursor: not-allowed;
 }
 
-.topbar {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1.5rem;
-  padding: 1.25rem 1.75rem 0.75rem;
-}
-
-.brand {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-}
-
-.brand h1 {
-  margin: 0;
-  font-family: 'Fraunces', Georgia, serif;
-  font-weight: 700;
-  font-size: clamp(2rem, 4vw, 2.75rem);
-  letter-spacing: -0.02em;
-  line-height: 0.95;
-  color: var(--ink);
-}
-
-.brand p {
-  margin: 0;
-  max-width: 36rem;
-  color: var(--ink-soft);
-  font-size: 0.95rem;
-}
-
 .save-meta {
   font-size: 0.78rem;
   color: var(--ink-soft);
-  max-width: 10rem;
-}
-
-.seed-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.seed-row label {
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--ink-soft);
-}
-
-.seed-row input {
-  width: 7rem;
-  border: 1px solid rgba(28, 34, 28, 0.18);
-  background: rgba(255, 255, 255, 0.55);
+  min-width: 5.5rem;
+  padding: 0.28rem 0.5rem;
   border-radius: 999px;
-  padding: 0.45rem 0.8rem;
-  font: inherit;
-  color: var(--ink);
+  text-align: center;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.save-meta.is-saved {
+  color: #29462a;
+  background: rgba(74, 107, 69, 0.16);
+}
+
+.save-meta.is-error {
+  color: #762f1b;
+  background: rgba(184, 90, 42, 0.14);
 }
 
 button,
@@ -212,11 +179,18 @@ button,
   transition: background 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
 }
 
-button:hover,
+button:not(:disabled):not(.active):not(.primary):hover,
 .tool.active {
   background: var(--ink);
   color: var(--paper);
   border-color: var(--ink);
+}
+
+button:focus-visible,
+input:focus-visible,
+a:focus-visible {
+  outline: 3px solid rgba(184, 90, 42, 0.42);
+  outline-offset: 2px;
 }
 
 button.primary {
@@ -230,9 +204,26 @@ button.primary:hover {
   border-color: #9a471f;
 }
 
+.destructive-quiet {
+  color: #713922;
+  border-color: rgba(113, 57, 34, 0.22);
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.control-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 1em;
+  min-width: 1em;
+  font-family: Georgia, serif;
+  font-size: 1.08em;
+  line-height: 1;
+}
+
 .layout {
   display: grid;
   grid-template-columns: 16.5rem minmax(0, 1fr) 17rem;
+  grid-template-areas: 'tools map inspector';
   gap: 0.75rem;
   padding: 0.25rem 0.85rem 0.85rem;
   min-height: 0;
@@ -249,6 +240,14 @@ button.primary:hover {
   backdrop-filter: blur(10px);
   min-height: 0;
   overflow: auto;
+}
+
+.tools-panel {
+  grid-area: tools;
+}
+
+.inspector {
+  grid-area: inspector;
 }
 
 .panel h2 {
@@ -324,6 +323,7 @@ button.primary:hover {
 }
 
 .map-shell {
+  grid-area: map;
   position: relative;
   border-radius: var(--radius);
   overflow: hidden;
@@ -347,9 +347,8 @@ button.primary:hover {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background:
-    linear-gradient(180deg, rgba(243, 238, 220, 0.06), transparent 18%),
-    radial-gradient(ellipse at center, transparent 55%, rgba(20, 24, 20, 0.28) 100%);
+  background: linear-gradient(180deg, rgba(243, 238, 220, 0.055), transparent 18%);
+  box-shadow: inset 0 0 0 1px rgba(243, 238, 220, 0.05);
   z-index: 1;
 }
 
@@ -397,6 +396,9 @@ button.primary:hover {
   border-radius: 999px;
   padding: 0.28rem 0.7rem;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
 }
 
 .view-toggle.active {
@@ -434,10 +436,6 @@ button.primary:hover {
   z-index: 3;
 }
 
-.brand a {
-  color: var(--copper);
-}
-
 .chip {
   pointer-events: auto;
   font-size: 0.8rem;
@@ -446,6 +444,9 @@ button.primary:hover {
   border: 1px solid rgba(28, 34, 28, 0.12);
   border-radius: 999px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
 .chip.active {
@@ -540,6 +541,24 @@ button.primary:hover {
   pointer-events: none;
 }
 
+.map-context {
+  align-self: center;
+  margin-right: 0.12rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  color: rgba(243, 238, 227, 0.88);
+  background: rgba(8, 20, 24, 0.48);
+  border: 1px solid rgba(243, 238, 220, 0.12);
+  font-size: 0.7rem;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.is-sketch-surface .map-seasons,
+.is-sketch-surface .map-overlay {
+  opacity: 0.3;
+}
+
 .map-hint {
   position: absolute;
   left: 50%;
@@ -576,6 +595,21 @@ button.primary:hover {
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.45);
   font-size: 0.86rem;
+}
+
+.coach-info {
+  border-left: 3px solid rgba(31, 90, 102, 0.55);
+}
+
+.coach-success {
+  border-left: 3px solid rgba(74, 107, 69, 0.7);
+  background: rgba(238, 246, 236, 0.62);
+}
+
+.coach-warn,
+.coach-error {
+  border-left: 3px solid rgba(184, 90, 42, 0.72);
+  background: rgba(251, 237, 224, 0.64);
 }
 
 .coach-body,
@@ -678,17 +712,114 @@ button:disabled {
 }
 
 @media (max-width: 980px) {
+  html,
+  body {
+    height: auto;
+    min-height: 100%;
+    overflow: auto;
+  }
+
+  #app,
+  #app-root {
+    height: auto;
+    min-height: 100vh;
+    grid-template-rows: auto auto;
+  }
+
+  .chrome {
+    position: static;
+  }
+
   .layout {
     grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(360px, 55vh) auto;
+    grid-template-rows: auto auto auto;
+    grid-template-areas:
+      'map'
+      'tools'
+      'inspector';
+    height: auto;
+    overflow: visible;
+    padding: 0.35rem 0.8rem 1rem;
+  }
+
+  .panel {
+    overflow: visible;
+  }
+
+  .map-shell {
+    width: 100%;
+    align-self: start;
   }
 
   .ux-stage-rail {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .topbar {
-    flex-direction: column;
-    align-items: flex-start;
+  .topnav {
+    align-items: center;
+  }
+}
+
+@media (max-width: 640px) {
+  .chrome {
+    padding-inline: 0.65rem;
+  }
+
+  .brand-group {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .nav-trailing {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .save-meta {
+    margin-left: auto;
+  }
+
+  .map-context {
+    display: none;
+  }
+
+  .map-seasons {
+    left: 0.5rem;
+    top: 0.5rem;
+  }
+
+  .map-hud {
+    right: 0.5rem;
+    top: 0.5rem;
+  }
+
+  .map-overlay {
+    left: 0.5rem;
+    right: 0.5rem;
+    bottom: 0.5rem;
+    gap: 0.22rem;
+  }
+
+  .chip {
+    padding: 0.25rem 0.48rem;
+    font-size: 0.68rem;
+  }
+
+  .map-hint {
+    max-width: calc(100% - 2rem);
+    border-radius: 12px;
+    font-size: 0.95rem;
+    text-align: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
