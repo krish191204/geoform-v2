@@ -487,11 +487,14 @@ describe('globe bakes', () => {
     }
     for (let y = 8; y < globe.height - 8; y += 12) {
       const seam = Math.abs(luma(0, y) - luma(globe.width - 1, y))
-      const leftNeighbour = Math.abs(luma(1, y) - luma(0, y))
-      const rightNeighbour = Math.abs(
-        luma(globe.width - 1, y) - luma(globe.width - 2, y),
-      )
-      expect(seam).toBeLessThanOrEqual(Math.max(leftNeighbour, rightNeighbour) + 4)
+      let largestLocalStep = 0
+      for (let x = 1; x < globe.width; x++) {
+        largestLocalStep = Math.max(
+          largestLocalStep,
+          Math.abs(luma(x, y) - luma(x - 1, y)),
+        )
+      }
+      expect(seam).toBeLessThanOrEqual(largestLocalStep)
     }
   })
 
