@@ -407,10 +407,9 @@ function sampleScalar(field: ArrayLike<number>, world: World, x: number, y: numb
 /** Seeded paper grain — static, centred, and periodic across the date line. */
 function paperGrain(x: number, y: number, width: number): number {
   const theta = (wrapX(x, width) / Math.max(1, width)) * Math.PI * 2
-  const raw =
-    Math.sin(Math.cos(theta) * 19.1398 + Math.sin(theta) * 31.733 + y * 78.233) *
-    43758.5453
-  return (raw - Math.floor(raw)) * 0.06 - 0.03
+  const fine = Math.sin(theta * 31 + y * 17.13)
+  const cross = Math.sin(theta * 13 - y * 29.71)
+  return (fine * 0.68 + cross * 0.32) * 0.025
 }
 
 // ---------------------------------------------------------------------------
