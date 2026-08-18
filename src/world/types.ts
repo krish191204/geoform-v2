@@ -50,11 +50,11 @@ export interface WorldMeta {
   threshold: number
 }
 
-/** Defaults for a fresh sketch; spread and override. */
+/** Defaults for a fresh sketch — Geoform 1 HD grid. Spread and override. */
 export const DEFAULT_META: Readonly<WorldMeta> = {
   seed: 1,
-  width: 512,
-  height: 256,
+  width: 768,
+  height: 384,
   planetRadiusKm: 6371,
   obliquityDeg: 23.5,
   seaLevel: 0.5,
@@ -76,12 +76,23 @@ export const SEASONS_V1: Seasons = 2
 // ---------------------------------------------------------------------------
 
 /** A settlement placed during Worldbuild. */
+export type SettlementRole =
+  | 'seat_of_power'
+  | 'farmland'
+  | 'fishing'
+  | 'mining'
+  | 'hunting'
+  | 'trade'
+  | 'pastoral'
+
 export interface City {
   x: number
   y: number
   name: string
   /** 0..1 suitability score accounting for seasonality. */
   seasonal: number
+  /** What this town does — set when auto-placed or inferred on found. */
+  role?: SettlementRole
 }
 
 // ---------------------------------------------------------------------------

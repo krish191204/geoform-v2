@@ -85,7 +85,7 @@ function makeCanvas(w: number, h: number): HTMLCanvasElement {
   // Override the prototype method on this instance so `getContext('2d')`
   // returns our mock. happy-dom's default returns null, which causes
   // `pixelAt` to throw "no 2d context".
-  canvas.getContext = (() => ctx) as HTMLCanvasElement['getContext']
+  canvas.getContext = (() => ctx) as unknown as HTMLCanvasElement['getContext']
   return canvas
 }
 

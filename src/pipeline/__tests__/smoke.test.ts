@@ -106,9 +106,7 @@ describe('smoke: bootEmpty', () => {
   it('returns a width*height zero mask', () => {
     const { meta, mask } = bootEmpty()
     expect(mask.length).toBe(meta.width * meta.height)
-    for (let i = 0; i < mask.length; i++) {
-      expect(mask[i]).toBe(0)
-    }
+    expect(mask.every((v) => v === 0)).toBe(true)
   })
 
   it('respects overrides (small grid)', () => {

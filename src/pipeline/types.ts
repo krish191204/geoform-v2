@@ -158,6 +158,11 @@ export interface MakeSenseResult {
   biome: string[]
   /** Per-cell suitability score, 0..1; length W*H. */
   suitability: Float32Array
+  /**
+   * Grounded land mask (0..1). Closest plausible shoreline to the sketch.
+   * Never an alias of `input.mask`.
+   */
+  mask: Float32Array
   /** Anti-gaslight trail of what the pipeline did and how the mask moved. */
   provenance: {
     /** Ordered list of step results. */

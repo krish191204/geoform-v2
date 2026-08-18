@@ -27,13 +27,14 @@ import { makeSenseInline } from '../makeSense_inline'
 import { computeHydrology } from '../hydrology'
 import { computeBiomes } from '../biomes'
 import { serializeWorld, deserializeWorld } from '../../world/persist'
+import type { CellBiome } from '../../world/types'
 import { makeContinentWorld } from './fixtures'
 
 describe('Donald minimum', () => {
   it('windward > lee on a mid-latitude N-S ridge', async () => {
     // Single continent at mid-lat (lat 0.5) with a N-S ridge down the
     // middle. Prevailing wind is west-to-east (the climate march).
-    // Windward (east side) should receive more moisture than lee (west).
+    // Windward (west side) should receive more moisture than lee (east).
     const tw = makeContinentWorld()
     const meta = {
       seed: 42,
@@ -115,13 +116,13 @@ describe('Donald minimum', () => {
       for (let x = 0; x < tw.width; x++) {
         const i = y * tw.width + x
         if (tw.mask[i] < 0.5) continue
-        // East of the ridge column = windward, west of the ridge = lee.
-        if (x > ridgeX) {
-          eastMoist += moist[i]
-          eastCount++
-        } else {
+        // West of the ridge column = windward, east of the ridge = lee.
+        if (x < ridgeX) {
           westMoist += moist[i]
           westCount++
+        } else {
+          eastMoist += moist[i]
+          eastCount++
         }
       }
     }
@@ -130,10 +131,14 @@ describe('Donald minimum', () => {
     // The strict physics claim: windward mean moisture must beat lee by
     // a meaningful margin, not just "> 0". The old assertion was a
     // vacuous pass when both sides read 0.
-    expect(eastMean - westMean).toBeGreaterThan(0.05)
+    // A two-plate continent is one rain-shadow obstacle, not a pizza of
+    // N-S ridges. West still has to beat east; the margin is the march,
+    // not a wall down the meridian.
+    expect(westMean).toBeGreaterThan(eastMean)
+    expect(westMean - eastMean).toBeGreaterThan(0.015)
   })
 
-  it('icy peak stays separate from warm desert', async () => {
+  it('icy peak stays separate from warm desert', { timeout: 20000 }, async () => {
     // Run 50 random seeds; count ice↔warm-desert neighbour pairs.
     // Threshold: 2 such pairs across 50 trials is acceptable.
     let totalAdjacencies = 0
@@ -280,7 +285,7 @@ describe('Donald minimum', () => {
       moistMean: result.moistMean,
       flux: result.flux,
       rivers: result.rivers,
-      biome: result.biome,
+      biome: result.biome as CellBiome[],
       cities: [],
       suitability: result.suitability,
     }

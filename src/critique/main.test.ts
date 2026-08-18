@@ -216,7 +216,7 @@ describe('critiqueMask', () => {
     expect(r.issues.some((i) => i.id === 'polar-strip' && i.severity === 'major')).toBe(true)
   })
 
-  it('returns a clean (100) score on a benign single-continent mask', () => {
+  it('does not give 100 to a stamped rectangle', () => {
     const w = 64
     const h = 32
     const mask = makeMask(w, h)
@@ -226,8 +226,71 @@ describe('critiqueMask', () => {
       }
     }
     const r = critiqueMask(mask, makeMeta({ width: w, height: h }), 0.5)
-    expect(r.issues).toEqual([])
-    expect(r.score).toBe(100)
+    expect(r.issues.some((i) => i.id === 'box-continent')).toBe(true)
+    expect(r.issues.some((i) => i.id === 'not-a-planet-yet')).toBe(true)
+    expect(r.score).toBeLessThanOrEqual(40)
+  })
+
+  it('flags inland paint holes', () => {
+    const w = 48
+    const h = 24
+    const mask = makeMask(w, h)
+    for (let y = 6; y <= 17; y++) {
+      for (let x = 10; x <= 30; x++) {
+        mask[y * w + x] = 0.9
+      }
+    }
+    for (let y = 9; y <= 14; y++) {
+      for (let x = 16; x <= 24; x++) {
+        mask[y * w + x] = 0
+      }
+    }
+    const r = critiqueMask(mask, makeMeta({ width: w, height: h }), 0.5)
+    expect(r.issues.some((i) => i.id === 'paint-holes')).toBe(true)
+    expect(r.score).toBeLessThan(90)
+  })
+
+  it('never scores a mid-range doodle as a finished planet', () => {
+    const w = 64
+    const h = 32
+    const mask = makeMask(w, h)
+    for (let y = 6; y < 26; y++) {
+      for (let x = 8; x < 28; x++) {
+        if (((x + y) & 1) === 0) mask[y * w + x] = 0.9
+      }
+    }
+    const r = critiqueMask(mask, makeMeta({ width: w, height: h }), 0.5)
+    expect(r.score).toBeLessThan(40)
+    expect(r.issues.length).toBeGreaterThan(0)
+    expect(r.issues.some((i) => i.id === 'not-a-planet-yet' && i.severity === 'critical')).toBe(
+      true,
+    )
+  })
+
+  it('fails a smiley face — that is a cartoon, not a B-minus planet', () => {
+    const w = 64
+    const h = 32
+    const mask = makeMask(w, h)
+    const stampDisc = (cx: number, cy: number, r: number) => {
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r) mask[y * w + x] = 0.9
+        }
+      }
+    }
+    stampDisc(22, 12, 3)
+    stampDisc(42, 12, 3)
+    for (let x = 16; x <= 48; x++) {
+      const t = (x - 16) / 32
+      const y = Math.round(22 + 6 * Math.sin(t * Math.PI))
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy
+        if (yy >= 0 && yy < h) mask[yy * w + x] = 0.9
+      }
+    }
+    const r = critiqueMask(mask, makeMeta({ width: w, height: h }), 0.5)
+    expect(r.score).toBeLessThanOrEqual(20)
+    expect(r.issues.some((i) => i.id === 'not-a-planet-yet')).toBe(true)
   })
 
   it('orders its issues critical-first', () => {
@@ -420,6 +483,57 @@ describe('critiqueWorld', () => {
     expect(hasCritical).toBe(true)
     expect(hasMajor).toBe(true)
     expect(r.issues[0].severity).toBe('critical')
+  })
+
+  it('flags stained-glass plates as major', () => {
+    const w = makeWorld()
+    const w_ = w.meta.width
+    const h = w.meta.height
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w_; x++) {
+        const k = y * w_ + x
+        w.mask[k] = 0.9
+        w.plateId[k] = ((x + y) % 8) + 1
+      }
+    }
+    const r = critiqueWorld(w)
+    expect(r.issues.some((i) => i.id === 'plate-stained-glass')).toBe(true)
+    expect(r.score).toBeLessThanOrEqual(90)
+  })
+
+  it('flags a uniform steppe continent as major', () => {
+    const w = makeWorld()
+    for (let i = 0; i < w.biome.length; i++) w.biome[i] = 'steppe'
+    const r = critiqueWorld(w)
+    expect(r.issues.some((i) => i.id === 'uniform-biome')).toBe(true)
+  })
+
+  it('flags an all-capital city list as major', () => {
+    const w = makeWorld()
+    w.cities = Array.from({ length: 8 }, (_, i) => ({
+      x: i,
+      y: 1,
+      name: `Cap${i}`,
+      seasonal: 0.5,
+      role: 'seat_of_power' as const,
+    }))
+    const r = critiqueWorld(w)
+    expect(r.issues.some((i) => i.id === 'all-capitals')).toBe(true)
+  })
+
+  it('flags a mostly-capital city list as major', () => {
+    const w = makeWorld()
+    w.cities = Array.from({ length: 11 }, (_, i) => ({
+      x: i,
+      y: 1,
+      name: `Cap${i}`,
+      seasonal: 0.5,
+      role: 'seat_of_power' as const,
+    }))
+    w.cities.push({ x: 12, y: 1, name: 'Farm', seasonal: 0.5, role: 'farmland' })
+    w.cities.push({ x: 13, y: 1, name: 'Keep', seasonal: 0.5, role: 'farmland' })
+    const r = critiqueWorld(w)
+    expect(r.issues.some((i) => i.id === 'all-capitals')).toBe(true)
   })
 })
 

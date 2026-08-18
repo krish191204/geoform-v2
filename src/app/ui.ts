@@ -1,38 +1,37 @@
 /**
- * DOM scaffolding for the 4-stage shell.
+ * DOM scaffolding for the 4-stage shell — Geoform 1 chrome, v2 state.
  *
- * Three regions mount into `root`:
+ * Persistent regions (mounted once by the shell):
+ *   chrome (brand + Clear sea + stage rail)
+ *   map shell (atlas canvas + layer chips)
+ *   inspector (coach + stage work + cell readout)
  *
- *   ┌─ topbar (always visible) ──────────────────────────────────────┐
- *   │ [Sketch]  Critique  Make sense  Worldbuild                    │
- *   │                              [Save]  [Reset]  [Inspector]     │
- *   └────────────────────────────────────────────────────────────────┘
- *   ┌─ stage-body ───────────────────────────────────────────────────┐
- *   │   <per-stage UI mounts here>                                  │
- *   └────────────────────────────────────────────────────────────────┘
- *   ┌─ coach-bar (bottom) ───────────────────────────────────────────┐
- *   │   Last `coach:message` (tone-colored badge)                   │
- *   └────────────────────────────────────────────────────────────────┘
- *
- * Pure DOM. No state mutation — the shell owns the state and passes it
- * in. Buttons dispatch `app:*` events on `window`; the shell listens.
+ * Per-stage regions swap in the left tools column and the inspector
+ * work block. Buttons dispatch `app:*` events; the shell owns state.
  */
 
-import type { Stage, Tool } from '../world/types'
+import type { Layer, Stage, Tool } from '../world/types'
 import {
   APP_EVENTS,
   MAKE_SENSE_STEPS,
   STAGE_LABEL,
+  STAGE_NUM,
   STAGE_ORDER,
   STAGES,
   type BrushChangeDetail,
+  type LandformStampDetail,
+  type LayerChangeDetail,
   type MetaChangeDetail,
+  type SeasonChangeDetail,
   type ShellStateView,
   type StageTransitionDetail,
-  type StrengthChangeDetail,
   type ToolChangeDetail,
+  type ViewChangeDetail,
 } from './stages'
-import { hasAnyLand, renderMaskToCanvas } from './canvas_paint'
+import { LAYER_CHIPS } from './atlas'
+import { SETTLEMENT_ROLE_LABEL } from '../sketch/settlements'
+import { LANDFORM_OPTIONS } from '../sketch/landforms'
+import { hasAnyLand } from './canvas_paint'
 
 // ---------------------------------------------------------------------------
 // DOM helpers
@@ -64,207 +63,311 @@ function fire<T>(type: string, detail?: T): void {
 }
 
 // ---------------------------------------------------------------------------
-// Topbar
+// Chrome (brand + actions + stage rail)
 // ---------------------------------------------------------------------------
 
-export interface TopbarRefs {
+export interface ChromeRefs {
   readonly root: HTMLElement
-  readonly stageButtons: Readonly<Record<Stage, HTMLButtonElement>>
+  readonly stageButtons: Record<Stage, HTMLButtonElement>
   readonly saveBtn: HTMLButtonElement
-  readonly resetBtn: HTMLButtonElement
-  readonly inspectorBtn: HTMLButtonElement
+  readonly clearSeaBtn: HTMLButtonElement
   readonly saveMeta: HTMLElement
 }
 
-export function mountTopbar(): TopbarRefs {
-  const stageButtons = {} as Record<Stage, HTMLButtonElement>
+export function mountChrome(): ChromeRefs {
+  const stageButtons = {} as ChromeRefs['stageButtons']
 
-  const nav = el('nav', { class: 'stage-nav', 'aria-label': 'Pipeline stages' })
+  const brand = el('a', { class: 'brand-lock', href: '/' }, 'Geoform')
+  const saveBtn = el('button', { type: 'button', class: 'action-btn' }, 'Save')
+  saveBtn.addEventListener('click', () => fire(APP_EVENTS.SAVE))
+  const clearSeaBtn = el(
+    'button',
+    { type: 'button', class: 'primary', title: 'Wipe the canvas back to empty ocean' },
+    'Clear sea',
+  )
+  clearSeaBtn.addEventListener('click', () => fire(APP_EVENTS.CLEAR_SEA))
+  const saveMeta = el('span', { class: 'save-meta' }, 'No save yet')
+
+  const topnav = el(
+    'nav',
+    { class: 'topnav', 'aria-label': 'Geoform' },
+    brand,
+    el('p', { class: 'tagline' }, 'Draw land. We ground it in geography.'),
+    el('div', { class: 'nav-trailing' }, saveBtn, clearSeaBtn, saveMeta),
+  )
+
+  const rail = el('nav', { class: 'ux-stage-rail', 'aria-label': 'Worldbuilding stages' })
   for (const stage of STAGE_ORDER) {
     const btn = el(
       'button',
-      { type: 'button', class: 'stage-btn', 'data-stage': stage },
-      STAGE_LABEL[stage],
+      { type: 'button', class: 'ux-stage-btn', 'data-stage': stage },
+      el('small', {}, STAGE_NUM[stage]),
+      el('strong', {}, STAGE_LABEL[stage]),
     )
     btn.addEventListener('click', () => {
       const detail: StageTransitionDetail = { stage }
       fire(APP_EVENTS.STAGE_TRANSITION, detail)
     })
     stageButtons[stage] = btn
-    nav.append(btn)
+    rail.append(btn)
   }
 
-  const saveBtn = el(
-    'button',
-    { type: 'button', class: 'action-btn', title: 'Save current state' },
-    'Save',
-  )
-  saveBtn.addEventListener('click', () => fire(APP_EVENTS.SAVE))
-
-  const resetBtn = el(
-    'button',
-    { type: 'button', class: 'action-btn', title: 'Clear derived world' },
-    'Reset',
-  )
-  resetBtn.addEventListener('click', () => fire(APP_EVENTS.RESET))
-
-  const inspectorBtn = el(
-    'button',
-    { type: 'button', class: 'action-btn', title: 'Toggle inspector' },
-    'Inspector',
-  )
-  inspectorBtn.addEventListener('click', () => fire(APP_EVENTS.TOGGLE_INSPECTOR))
-
-  const saveMeta = el('span', { class: 'save-meta' }, 'No save yet')
-
-  const actions = el(
-    'div',
-    { class: 'topbar-actions' },
-    saveBtn,
-    resetBtn,
-    inspectorBtn,
-    saveMeta,
-  )
-
-  const brand = el(
-    'div',
-    { class: 'brand' },
-    el('h1', {}, 'Geoform'),
-    el(
-      'p',
-      {},
-      'Sketch a mask. Critique finds issues. Make-sense derives a world. Worldbuild places cities.',
-    ),
-  )
-
-  const root = el(
-    'header',
-    { class: 'topbar' },
-    brand,
-    nav,
-    actions,
-  )
-
-  return { root, stageButtons, saveBtn, resetBtn, inspectorBtn, saveMeta }
+  const root = el('header', { class: 'chrome' }, topnav, rail)
+  return { root, stageButtons, saveBtn, clearSeaBtn, saveMeta }
 }
 
-/** Apply current state to the topbar — disabled flags, active highlight, Reset visibility. */
-export function updateTopbar(refs: TopbarRefs, state: ShellStateView): void {
+export function updateChrome(refs: ChromeRefs, state: ShellStateView): void {
   for (const stage of STAGE_ORDER) {
     const btn = refs.stageButtons[stage]
     const isActive = state.stage === stage
     const reachable = isActive || STAGES[stage].canEnter(state)
     btn.classList.toggle('active', isActive)
     btn.disabled = !reachable
-    btn.setAttribute('aria-current', isActive ? 'step' : 'false')
+    if (isActive) btn.setAttribute('aria-current', 'step')
+    else btn.removeAttribute('aria-current')
   }
-  refs.resetBtn.style.display = state.stage === 'make-sense' ? '' : 'none'
+  refs.clearSeaBtn.disabled = state.isProcessing
 }
 
 // ---------------------------------------------------------------------------
-// Stage body
+// Map shell
 // ---------------------------------------------------------------------------
 
-export interface StageBody {
+export interface MapShellRefs {
   readonly root: HTMLElement
-  /** Replace the current stage UI with `content`. */
-  mount(content: HTMLElement): void
-  /** Clear the current stage UI (used during processing transitions). */
-  clear(): void
+  readonly canvas: HTMLCanvasElement
+  readonly globe: HTMLCanvasElement
+  readonly overlay: HTMLElement
+  readonly seasonBar: HTMLElement
+  readonly viewAtlas: HTMLButtonElement
+  readonly viewPlanet: HTMLButtonElement
+  readonly loading: HTMLElement
+  readonly hint: HTMLElement
 }
 
-export function mountStageBody(): StageBody {
-  const root = el('section', { class: 'stage-body', 'aria-label': 'Stage content' })
-  let current: HTMLElement | null = null
+export function mountMapShell(): MapShellRefs {
+  const canvas = el('canvas', { id: 'map', class: 'map' })
+  const globe = el('canvas', { id: 'globe', hidden: true })
+  const overlay = el('div', { class: 'map-overlay', id: 'layers' })
+  const seasonBar = el('div', { class: 'map-seasons' })
+  const viewAtlas = el(
+    'button',
+    { type: 'button', class: 'view-toggle active', id: 'viewAtlas', title: 'Flat atlas' },
+    'Atlas',
+  )
+  const viewPlanet = el(
+    'button',
+    { type: 'button', class: 'view-toggle', id: 'viewPlanet', title: 'Rotate the planet', disabled: true },
+    'Planet',
+  )
+  viewAtlas.addEventListener('click', () => {
+    const detail: ViewChangeDetail = { view: 'atlas' }
+    fire(APP_EVENTS.VIEW_CHANGE, detail)
+  })
+  viewPlanet.addEventListener('click', () => {
+    const detail: ViewChangeDetail = { view: 'planet' }
+    fire(APP_EVENTS.VIEW_CHANGE, detail)
+  })
+  const hud = el('div', { class: 'map-hud' }, viewAtlas, viewPlanet)
+  const loading = el('div', { class: 'loading', id: 'loading', hidden: true }, 'Grounding the doodle…')
+  const hint = el(
+    'div',
+    { class: 'map-hint', id: 'mapHint' },
+    'Pick continents or islands, or paint land',
+  )
+
+  const root = el(
+    'section',
+    { class: 'map-shell' },
+    canvas,
+    globe,
+    overlay,
+    seasonBar,
+    hud,
+    loading,
+    hint,
+  )
   return {
     root,
-    mount(content) {
-      if (current && current !== content) root.removeChild(current)
-      current = content
-      if (content.parentNode !== root) root.append(content)
-    },
-    clear() {
-      if (current) {
-        root.removeChild(current)
-        current = null
-      }
-    },
+    canvas,
+    globe,
+    overlay,
+    seasonBar,
+    viewAtlas,
+    viewPlanet,
+    loading,
+    hint,
   }
 }
 
+/** Atlas layers / inspector climate exist only after Make sense, never on Sketch. */
+export function showingDerivedWorld(state: Pick<ShellStateView, 'world' | 'stage'>): boolean {
+  return Boolean(state.world) && state.stage !== 'sketch'
+}
+
+export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void {
+  const derived = showingDerivedWorld(state)
+  refs.overlay.replaceChildren()
+  for (const chip of LAYER_CHIPS) {
+    const btn = el(
+      'button',
+      {
+        type: 'button',
+        class: 'chip' + (derived && state.layer === chip.id ? ' active' : ''),
+        'data-look': chip.id,
+        title: chip.title,
+        disabled: !derived,
+      },
+      chip.label,
+    )
+    btn.addEventListener('click', () => {
+      if (!derived) return
+      const detail: LayerChangeDetail = { layer: chip.id }
+      fire(APP_EVENTS.LAYER_CHANGE, detail)
+    })
+    refs.overlay.append(btn)
+  }
+
+  refs.seasonBar.replaceChildren()
+  for (const season of ['summer', 'winter'] as const) {
+    const btn = el(
+      'button',
+      {
+        type: 'button',
+        class: 'chip' + (derived && state.season === season ? ' active' : ''),
+        disabled: !derived,
+      },
+      season === 'summer' ? 'Summer' : 'Winter',
+    )
+    btn.addEventListener('click', () => {
+      if (!derived) return
+      const detail: SeasonChangeDetail = { season }
+      fire(APP_EVENTS.SEASON_CHANGE, detail)
+    })
+    refs.seasonBar.append(btn)
+  }
+
+  refs.viewAtlas.classList.toggle('active', state.viewMode === 'atlas')
+  refs.viewPlanet.classList.toggle('active', state.viewMode === 'planet')
+  refs.viewPlanet.disabled = !derived
+  refs.canvas.hidden = derived && state.viewMode === 'planet'
+  refs.globe.hidden = !(derived && state.viewMode === 'planet')
+  refs.loading.hidden = !state.isProcessing
+  const empty = !hasAnyLand(state.mask, state.meta.threshold)
+  refs.hint.hidden = !empty || state.stage !== 'sketch'
+}
+
 // ---------------------------------------------------------------------------
-// Coach bar
+// Inspector
 // ---------------------------------------------------------------------------
 
-/**
- * Mount the bottom coach bar. Listens for `coach:message` events on
- * `window` and shows the last message in a tone-colored badge.
- */
-export function mountCoachBar(): HTMLElement {
-  const root = el('footer', { class: 'coach-bar', 'aria-label': 'Coach' })
-  const badge = el('span', { class: 'coach-badge coach-empty' }, 'Ready')
-  root.append(badge)
+export interface InspectorRefs {
+  readonly root: HTMLElement
+  readonly coach: HTMLElement
+  readonly workHost: HTMLElement
+  readonly inspect: HTMLElement
+  readonly status: HTMLElement
+}
+
+export function mountInspector(): InspectorRefs {
+  const coach = el('div', { id: 'coach', class: 'coach-card', role: 'status', 'aria-live': 'polite' })
+  coach.append(
+    el(
+      'p',
+      { class: 'coach-empty' },
+      'Empty ocean. Stamp a landform or paint. Critique when the blob looks like a continent.',
+    ),
+  )
+  const workHost = el('div', { id: 'stageWork', class: 'stage-work' })
+  const inspect = el('div', { id: 'inspect' })
+  inspect.append(
+    el('p', { class: 'hint' }, 'Hover the map. After Make sense, this cell is real geography.'),
+  )
+  const status = el('div', { class: 'status', id: 'status' }, 'Empty ocean.')
 
   window.addEventListener('coach:message', (ev) => {
-    // Coach-engine emits `message` (see src/app/coach.ts). Old UI
-    // read `text` — that field doesn't exist, so the badge stayed
-    // empty. Read the correct field.
     const detail = (ev as CustomEvent).detail as
-      | { tone?: 'info' | 'success' | 'warn' | 'error'; message?: string }
+      | { tone?: string; message?: string; text?: string }
       | undefined
     const tone = detail?.tone ?? 'info'
-    const text = detail?.message ?? ''
-    badge.className = `coach-badge coach-${tone}`
-    badge.textContent = text
+    const text = detail?.message ?? detail?.text ?? ''
+    coach.className = `coach-card coach-${tone}`
+    coach.replaceChildren(el('p', { class: 'coach-body' }, text))
   })
 
-  return root
+  const root = el(
+    'aside',
+    { class: 'panel inspector' },
+    el('h2', {}, 'Coach'),
+    coach,
+    workHost,
+    el('h2', {}, 'Inspector'),
+    inspect,
+    status,
+  )
+  return { root, coach, workHost, inspect, status }
+}
+
+export function updateInspector(refs: InspectorRefs, state: ShellStateView): void {
+  const derived = showingDerivedWorld(state)
+  if (state.inspectHtml) {
+    refs.inspect.innerHTML = state.inspectHtml
+  }
+  const land = landCellCount(state.mask, state.meta.threshold)
+  const total = state.meta.width * state.meta.height
+  const pct = total > 0 ? Math.round((land / total) * 100) : 0
+  if (derived) {
+    refs.status.textContent = `Grounded world · ${pct}% land · score ${Math.round(state.score)}`
+  } else if (land > 0) {
+    refs.status.textContent = `Sketch · ${land} land cells (${pct}%) · not geography yet`
+  } else {
+    refs.status.textContent = `Empty ocean · ${state.meta.width}×${state.meta.height}`
+  }
+}
+
+export function landCellCount(mask: Float32Array | null, threshold: number): number {
+  if (!mask) return 0
+  let n = 0
+  for (let i = 0; i < mask.length; i++) if (mask[i] >= threshold) n++
+  return n
 }
 
 // ---------------------------------------------------------------------------
-// Stage UI — shared bits
-// ---------------------------------------------------------------------------
-
-function makeCanvas(idSuffix: string): HTMLCanvasElement {
-  return el('canvas', { class: 'map', id: `map-${idSuffix}` })
-}
-
-function makeMapShell(canvas: HTMLCanvasElement): HTMLElement {
-  return el('section', { class: 'map-shell' }, canvas)
-}
-
-// ---------------------------------------------------------------------------
-// Sketch stage
+// Left tools (per stage)
 // ---------------------------------------------------------------------------
 
 const SKETCH_TOOLS: readonly { id: Tool; label: string; desc: string }[] = [
-  { id: 'draw-land', label: 'Draw land', desc: 'Stamp a soft land dab onto the mask' },
-  { id: 'erase-land', label: 'Erase land', desc: 'Subtract from the mask' },
-  { id: 'place-city', label: 'Place city', desc: 'Found a settlement (Worldbuild only)' },
-  { id: 'remove-city', label: 'Remove city', desc: 'Remove nearest settlement (Worldbuild only)' },
+  { id: 'draw-land', label: 'Land', desc: 'Paint continent blobs' },
+  { id: 'erase-land', label: 'Ocean', desc: 'Erase land back to sea' },
   { id: 'inspect', label: 'Inspect', desc: 'Read the cell under the cursor' },
-  { id: 'none', label: 'Cursor', desc: 'Default cursor (no-op)' },
 ]
 
-export interface SketchStageRefs {
+const WORLDBUILD_TOOLS: readonly { id: Tool; label: string; desc: string }[] = [
+  { id: 'place-city', label: 'Place city', desc: 'Found a settlement on suitable land' },
+  { id: 'remove-city', label: 'Remove city', desc: 'Remove nearest settlement' },
+  { id: 'inspect', label: 'Inspect', desc: 'Read the cell under the cursor' },
+]
+
+export interface ToolsRefs {
   readonly root: HTMLElement
-  readonly canvas: HTMLCanvasElement
-  readonly toolButtons: Readonly<Record<Tool, HTMLButtonElement>>
-  readonly brushVal: HTMLElement
-  readonly planetRadiusVal: HTMLElement
-  readonly obliquityVal: HTMLElement
-  readonly seaLevelVal: HTMLElement
-  readonly thresholdVal: HTMLElement
-  readonly critiqueBtn: HTMLButtonElement
+  readonly stage: ShellStateView['stage']
 }
 
-/** Build the Sketch-stage UI. Buttons fire `app:*` events. */
-export function mountSketchStage(state: ShellStateView): SketchStageRefs {
-  const root = el('div', { class: 'stage stage-sketch' })
+export function mountStageTools(state: ShellStateView): ToolsRefs {
+  switch (state.stage) {
+    case 'sketch':
+      return { root: mountSketchTools(state), stage: 'sketch' }
+    case 'critique':
+      return { root: mountCritiqueTools(), stage: 'critique' }
+    case 'make-sense':
+      return { root: mountMakeSenseTools(state), stage: 'make-sense' }
+    case 'worldbuild':
+      return { root: mountWorldbuildTools(state), stage: 'worldbuild' }
+  }
+}
 
-  // Left: tools + brush + strength
+function mountSketchTools(state: ShellStateView): HTMLElement {
   const toolGrid = el('div', { class: 'tool-grid' })
-  const toolButtons = {} as Record<Tool, HTMLButtonElement>
   for (const tool of SKETCH_TOOLS) {
     const btn = el(
       'button',
@@ -280,7 +383,6 @@ export function mountSketchStage(state: ShellStateView): SketchStageRefs {
       const detail: ToolChangeDetail = { tool: tool.id }
       fire(APP_EVENTS.TOOL_CHANGE, detail)
     })
-    toolButtons[tool.id] = btn
     toolGrid.append(btn)
   }
 
@@ -288,241 +390,232 @@ export function mountSketchStage(state: ShellStateView): SketchStageRefs {
   const brushSlider = el('input', {
     type: 'range',
     min: 2,
-    max: 64,
+    max: 48,
     value: state.brushSize,
   }) as HTMLInputElement
   brushSlider.addEventListener('input', () => {
     const detail: BrushChangeDetail = { size: Number(brushSlider.value) }
     fire(APP_EVENTS.BRUSH_CHANGE, detail)
+    brushVal.textContent = String(brushSlider.value)
   })
 
-  const strengthSlider = el('input', {
-    type: 'range',
-    min: 1,
-    max: 100,
-    value: Math.round(state.strength * 100),
-  }) as HTMLInputElement
-  strengthSlider.addEventListener('input', () => {
-    const detail: StrengthChangeDetail = { strength: Number(strengthSlider.value) / 100 }
-    fire(APP_EVENTS.STRENGTH_CHANGE, detail)
-  })
-
-  const left = el(
-    'aside',
-    { class: 'panel' },
-    el('h2', {}, 'Tools'),
-    toolGrid,
-    el(
-      'div',
-      { class: 'slider-row' },
-      el('label', {}, 'Brush size · ', brushVal),
-      brushSlider,
-    ),
-    el('div', { class: 'slider-row' }, el('label', {}, 'Strength'), strengthSlider),
-    el(
-      'p',
-      { class: 'hint' },
-      'Paint the mask. The Critique button commits the mask and runs critique.',
-    ),
-  )
-  root.append(left)
-
-  // Center: canvas
-  const canvas = makeCanvas('sketch')
-  root.append(makeMapShell(canvas))
-  // Paint the initial mask view (all-ocean if no mask yet).
-  renderMaskToCanvas(canvas, state.mask, state.meta)
-
-  // Right: meta controls + commit button
-  const meta = state.meta
-  const planetRadiusVal = el('span', { id: 'planetRadiusVal' }, String(meta.planetRadiusKm))
-  const planetRadiusSlider = el('input', {
+  const radiusVal = el('span', { id: 'planetRadiusVal' }, String(state.meta.planetRadiusKm))
+  const radiusSlider = el('input', {
     type: 'range',
     min: 2000,
     max: 50000,
-    step: 100,
-    value: meta.planetRadiusKm,
+    step: 1,
+    value: state.meta.planetRadiusKm,
   }) as HTMLInputElement
-  planetRadiusSlider.addEventListener('input', () => {
-    const detail: MetaChangeDetail = { meta: { planetRadiusKm: Number(planetRadiusSlider.value) } }
+  radiusSlider.addEventListener('input', () => {
+    const detail: MetaChangeDetail = { meta: { planetRadiusKm: Number(radiusSlider.value) } }
     fire(APP_EVENTS.META_CHANGE, detail)
+    radiusVal.textContent = String(radiusSlider.value)
   })
 
-  const obliquityVal = el('span', { id: 'obliquityVal' }, String(meta.obliquityDeg))
-  const obliquitySlider = el('input', {
-    type: 'range',
-    min: 0,
-    max: 45,
-    step: 0.5,
-    value: meta.obliquityDeg,
-  }) as HTMLInputElement
-  obliquitySlider.addEventListener('input', () => {
-    const detail: MetaChangeDetail = { meta: { obliquityDeg: Number(obliquitySlider.value) } }
-    fire(APP_EVENTS.META_CHANGE, detail)
-  })
-
-  const seaLevelVal = el('span', { id: 'seaLevelVal' }, String(meta.seaLevel))
-  const seaLevelSlider = el('input', {
-    type: 'range',
-    min: 0,
-    max: 100,
-    value: Math.round(meta.seaLevel * 100),
-  }) as HTMLInputElement
-  seaLevelSlider.addEventListener('input', () => {
-    const detail: MetaChangeDetail = {
-      meta: { seaLevel: Number(seaLevelSlider.value) / 100 },
-    }
-    fire(APP_EVENTS.META_CHANGE, detail)
-  })
-
-  const thresholdVal = el('span', { id: 'thresholdVal' }, String(meta.threshold))
-  const thresholdSlider = el('input', {
-    type: 'range',
-    min: 0,
-    max: 100,
-    value: Math.round(meta.threshold * 100),
-  }) as HTMLInputElement
-  thresholdSlider.addEventListener('input', () => {
-    const detail: MetaChangeDetail = {
-      meta: { threshold: Number(thresholdSlider.value) / 100 },
-    }
-    fire(APP_EVENTS.META_CHANGE, detail)
-  })
+  const landformGrid = el('div', { class: 'style-grid', 'aria-label': 'Landform doodles' })
+  for (const opt of LANDFORM_OPTIONS) {
+    const btn = el(
+      'button',
+      {
+        type: 'button',
+        class: 'style-chip',
+        'data-landform': opt.id,
+      },
+      opt.label,
+      el('small', {}, opt.desc),
+    )
+    btn.addEventListener('click', () => {
+      const detail: LandformStampDetail = { kind: opt.id }
+      fire(APP_EVENTS.STAMP_LANDFORM, detail)
+    })
+    landformGrid.append(btn)
+  }
 
   const critiqueBtn = el('button', { type: 'button', class: 'primary' }, 'Critique')
   critiqueBtn.disabled = state.isProcessing || !hasAnyLand(state.mask, state.meta.threshold)
   critiqueBtn.addEventListener('click', () => fire(APP_EVENTS.COMMIT_SKETCH))
 
-  const right = el(
-    'aside',
-    { class: 'panel' },
-    el('h2', {}, 'Planet'),
+  return el(
+    'div',
+    { class: 'tools-inner' },
+    el('h2', {}, 'Draw'),
+    toolGrid,
+    el('h3', {}, 'Landforms'),
+    landformGrid,
+    el('div', { class: 'slider-row' }, el('label', {}, 'Brush · ', brushVal), brushSlider),
     el(
       'div',
       { class: 'slider-row' },
-      el('label', {}, 'Planet radius (km) · ', planetRadiusVal),
-      planetRadiusSlider,
+      el('label', {}, 'Planet radius · ', radiusVal, ' km'),
+      radiusSlider,
     ),
     el(
-      'div',
-      { class: 'slider-row' },
-      el('label', {}, 'Obliquity (deg) · ', obliquityVal),
-      obliquitySlider,
+      'p',
+      { class: 'hint' },
+      'Stamp a doodle, then paint or erase. Do not paint mountains — Make sense derives those.',
     ),
-    el(
-      'div',
-      { class: 'slider-row' },
-      el('label', {}, 'Sea level · ', seaLevelVal),
-      seaLevelSlider,
-    ),
-    el(
-      'div',
-      { class: 'slider-row' },
-      el('label', {}, 'Threshold · ', thresholdVal),
-      thresholdSlider,
-    ),
-    el('p', { class: 'hint' }, 'Meta is locked at Make-sense entry.'),
     critiqueBtn,
   )
-  root.append(right)
+}
 
-  return {
-    root,
-    canvas,
-    toolButtons,
-    brushVal,
-    planetRadiusVal,
-    obliquityVal,
-    seaLevelVal,
-    thresholdVal,
-    critiqueBtn,
+function mountCritiqueTools(): HTMLElement {
+  return el(
+    'div',
+    { class: 'tools-inner' },
+    el('h2', {}, 'Critique'),
+    el(
+      'p',
+      { class: 'hint' },
+      'This is what is wrong with the doodle. Overlays mark the cells. Make sense will ground the shape, not keep the geology you imagined.',
+    ),
+  )
+}
+
+function mountMakeSenseTools(state: ShellStateView): HTMLElement {
+  return el(
+    'div',
+    { class: 'tools-inner' },
+    el('h2', {}, 'Make sense'),
+    el(
+      'p',
+      { class: 'hint' },
+      state.makeSenseComplete
+        ? 'This atlas is the closest geographically honest planet to your sketch. Switch layers. Hover a cell.'
+        : 'Deriving plates, mountains, seasons, rivers, and biomes from the land you painted.',
+    ),
+  )
+}
+
+function mountWorldbuildTools(state: ShellStateView): HTMLElement {
+  const toolGrid = el('div', { class: 'tool-grid' })
+  for (const tool of WORLDBUILD_TOOLS) {
+    const btn = el(
+      'button',
+      {
+        type: 'button',
+        class: 'tool' + (state.tool === tool.id ? ' active' : ''),
+        'data-tool': tool.id,
+      },
+      tool.label,
+      el('small', {}, tool.desc),
+    )
+    btn.addEventListener('click', () => {
+      const detail: ToolChangeDetail = { tool: tool.id }
+      fire(APP_EVENTS.TOOL_CHANGE, detail)
+    })
+    toolGrid.append(btn)
+  }
+  const backBtn = el('button', { type: 'button' }, 'Back to Sketch')
+  backBtn.addEventListener('click', () => fire(APP_EVENTS.BACK_TO_SKETCH))
+  return el(
+    'div',
+    { class: 'tools-inner' },
+    el('h2', {}, 'Settlements'),
+    toolGrid,
+    el(
+      'p',
+      { class: 'hint' },
+      'Cities sit on the derived world. Towns were founded where the land can feed them — place or raze to edit.',
+    ),
+    backBtn,
+  )
+}
+
+export function updateStageTools(refs: ToolsRefs, state: ShellStateView): void {
+  if (refs.stage !== state.stage) return
+  for (const btn of Array.from(refs.root.querySelectorAll<HTMLButtonElement>('[data-tool]'))) {
+    btn.classList.toggle('active', btn.dataset.tool === state.tool)
+  }
+  const brushVal = refs.root.querySelector('#brushVal')
+  if (brushVal) brushVal.textContent = String(state.brushSize)
+  const radiusVal = refs.root.querySelector('#planetRadiusVal')
+  if (radiusVal) radiusVal.textContent = String(state.meta.planetRadiusKm)
+  const critiqueBtn = Array.from(refs.root.querySelectorAll('button')).find((b) => b.textContent === 'Critique')
+  if (critiqueBtn) {
+    critiqueBtn.disabled = state.isProcessing || !hasAnyLand(state.mask, state.meta.threshold)
   }
 }
 
-/** Apply state to the Sketch stage UI in place. */
-export function updateSketchStage(refs: SketchStageRefs, state: ShellStateView): void {
-  for (const tool of SKETCH_TOOLS) {
-    refs.toolButtons[tool.id].classList.toggle('active', state.tool === tool.id)
+// ---------------------------------------------------------------------------
+// Inspector stage work (issues, progress, cities)
+// ---------------------------------------------------------------------------
+
+export function mountStageWork(state: ShellStateView): HTMLElement {
+  switch (state.stage) {
+    case 'sketch':
+      return el(
+        'div',
+        {},
+        el('p', { class: 'hint' }, 'Stamp a landform or paint. Critique when the blob looks like a continent.'),
+      )
+    case 'critique':
+      return mountCritiqueWork(state)
+    case 'make-sense':
+      return mountMakeSenseWork(state)
+    case 'worldbuild':
+      return mountWorldbuildWork(state)
   }
-  refs.brushVal.textContent = String(state.brushSize)
-  refs.planetRadiusVal.textContent = String(state.meta.planetRadiusKm)
-  refs.obliquityVal.textContent = String(state.meta.obliquityDeg)
-  refs.seaLevelVal.textContent = String(state.meta.seaLevel)
-  refs.thresholdVal.textContent = String(state.meta.threshold)
-  refs.critiqueBtn.disabled = state.isProcessing || !hasAnyLand(state.mask, state.meta.threshold)
-  renderMaskToCanvas(refs.canvas, state.mask, state.meta)
 }
 
-// ---------------------------------------------------------------------------
-// Critique stage
-// ---------------------------------------------------------------------------
-
-export interface CritiqueStageRefs {
-  readonly root: HTMLElement
-  readonly canvas: HTMLCanvasElement
-  readonly scoreEl: HTMLElement
-  readonly issueList: HTMLElement
-  readonly makeSenseBtn: HTMLButtonElement
-}
-
-/** Build the Critique-stage UI. */
-export function mountCritiqueStage(state: ShellStateView): CritiqueStageRefs {
-  const root = el('div', { class: 'stage stage-critique' })
-
-  const canvas = makeCanvas('critique')
-  root.append(makeMapShell(canvas))
-  // Paint the mask view so the critique stage is not a blank canvas.
-  renderMaskToCanvas(canvas, state.mask, state.meta)
-
+function mountCritiqueWork(state: ShellStateView): HTMLElement {
   const scoreEl = el('div', { class: 'score' }, formatScore(state.score))
-
   const issueList = el('ul', { class: 'issue-list' })
   renderIssues(issueList, state.issues)
-
-  const makeSenseBtn = el(
-    'button',
-    { type: 'button', class: 'primary' },
-    'Make sense',
-  )
-  makeSenseBtn.disabled = state.score <= 0 || state.isProcessing
+  const makeSenseBtn = el('button', { type: 'button', class: 'primary' }, 'Make sense')
+  makeSenseBtn.disabled = state.isProcessing || !state.maskCommitted
   makeSenseBtn.addEventListener('click', () => fire(APP_EVENTS.MAKE_SENSE))
-
-  const right = el(
-    'aside',
-    { class: 'panel' },
-    el('h2', {}, 'Critique'),
-    el('p', { class: 'score-label' }, 'Score'),
+  return el(
+    'div',
+    {},
+    el('h3', {}, 'Score'),
     scoreEl,
     el('h3', {}, 'Issues'),
     issueList,
     makeSenseBtn,
   )
-  root.append(right)
-
-  return { root, canvas, scoreEl, issueList, makeSenseBtn }
 }
 
-/** Apply state to the Critique stage UI in place. */
-export function updateCritiqueStage(refs: CritiqueStageRefs, state: ShellStateView): void {
-  refs.scoreEl.textContent = formatScore(state.score)
-  renderIssues(refs.issueList, state.issues)
-  refs.makeSenseBtn.disabled = state.score <= 0 || state.isProcessing
-  renderMaskToCanvas(refs.canvas, state.mask, state.meta)
+function mountMakeSenseWork(state: ShellStateView): HTMLElement {
+  const progressList = el('ol', { class: 'progress-list' })
+  renderProgress(progressList, state.pipelineStep)
+  const worldbuildBtn = el('button', { type: 'button', class: 'primary' }, 'Worldbuild')
+  worldbuildBtn.disabled = !state.makeSenseComplete || state.isProcessing
+  worldbuildBtn.addEventListener('click', () => fire(APP_EVENTS.WORLDBUILD))
+  return el('div', {}, el('h3', {}, 'Pipeline'), progressList, worldbuildBtn)
+}
+
+function mountWorldbuildWork(state: ShellStateView): HTMLElement {
+  const n = state.world ? state.world.cities.length : 0
+  const list = el('ul', { class: 'city-list' })
+  if (state.world) {
+    for (const city of state.world.cities) {
+      const role = city.role ? SETTLEMENT_ROLE_LABEL[city.role] : ''
+      list.append(
+        el(
+          'li',
+          {},
+          el('span', {}, city.name),
+          el('span', {}, role ? `${role} · ${city.x}, ${city.y}` : `${city.x}, ${city.y}`),
+        ),
+      )
+    }
+  }
+  if (n === 0) list.append(el('li', {}, 'No cities yet — land may be too harsh to settle.'))
+  return el('div', {}, el('p', { class: 'cities-count' }, `Cities: ${n}`), list)
 }
 
 function formatScore(score: number): string {
-  if (score <= 0) return '—'
-  // score is 0..100 (from scoreFromIssues in src/critique/main.ts).
-  // Don't multiply by 100 here — that's the bug the original
-  // inverse-unit assumption produced (a real score of 75 displayed as
-  // "7500%").
   return `${Math.round(score)}%`
 }
 
-function renderIssues(list: HTMLElement, issues: readonly { id: string; severity: string; title: string }[]): void {
+function renderIssues(
+  list: HTMLElement,
+  issues: readonly { id: string; severity: string; title: string; critique?: string }[],
+): void {
   list.innerHTML = ''
   if (issues.length === 0) {
-    list.append(el('li', { class: 'issue-empty' }, 'No issues.'))
+    list.append(el('li', { class: 'issue-empty' }, 'No land/water issues. This is still not a geography grade — run Make sense.'))
     return
   }
   for (const issue of issues) {
@@ -531,213 +624,79 @@ function renderIssues(list: HTMLElement, issues: readonly { id: string; severity
         'li',
         { class: `issue issue-${issue.severity}` },
         el('span', { class: 'issue-title' }, issue.title),
+        issue.critique
+          ? el('span', { class: 'issue-critique' }, issue.critique)
+          : '',
         el('span', { class: 'issue-id' }, issue.id),
       ),
     )
   }
 }
 
-// ---------------------------------------------------------------------------
-// Make-sense stage
-// ---------------------------------------------------------------------------
-
-export interface MakeSenseStageRefs {
-  readonly root: HTMLElement
-  readonly canvas: HTMLCanvasElement
-  readonly progressList: HTMLElement
-  readonly cancelBtn: HTMLButtonElement
-  readonly worldbuildBtn: HTMLButtonElement
-}
-
-export function mountMakeSenseStage(state: ShellStateView): MakeSenseStageRefs {
-  const root = el('div', { class: 'stage stage-make-sense' })
-
-  const canvas = makeCanvas('make-sense')
-  root.append(makeMapShell(canvas))
-  // Paint the mask view so the make-sense stage is not a blank canvas.
-  renderMaskToCanvas(canvas, state.mask, state.meta)
-
-  const progressList = el('ol', { class: 'progress-list' })
-  renderProgress(progressList, state.makeSenseComplete ? MAKE_SENSE_STEPS.length : 0)
-
-  const cancelBtn = el('button', { type: 'button' }, 'Cancel')
-  cancelBtn.disabled = !state.isProcessing
-  cancelBtn.addEventListener('click', () => fire(APP_EVENTS.CANCEL_MAKE_SENSE))
-
-  const worldbuildBtn = el(
-    'button',
-    { type: 'button', class: 'primary' },
-    'Worldbuild',
-  )
-  worldbuildBtn.disabled = !state.makeSenseComplete || state.isProcessing
-  worldbuildBtn.addEventListener('click', () => fire(APP_EVENTS.WORLDBUILD))
-
-  const right = el(
-    'aside',
-    { class: 'panel' },
-    el('h2', {}, 'Make sense'),
-    el('p', { class: 'hint' }, 'Deriving world from the committed mask…'),
-    el('h3', {}, 'Pipeline'),
-    progressList,
-    el('div', { class: 'action-row' }, cancelBtn, worldbuildBtn),
-  )
-  root.append(right)
-
-  return { root, canvas, progressList, cancelBtn, worldbuildBtn }
-}
-
-export function updateMakeSenseStage(refs: MakeSenseStageRefs, state: ShellStateView): void {
-  const completed = state.makeSenseComplete ? MAKE_SENSE_STEPS.length : 0
-  renderProgress(refs.progressList, completed)
-  refs.cancelBtn.disabled = !state.isProcessing
-  refs.worldbuildBtn.disabled = !state.makeSenseComplete || state.isProcessing
-  // Once the world is derived, paint the world mask; otherwise paint the
-  // authored sketch mask so the canvas is not blank.
-  const paintMask = state.world ? state.world.mask : state.mask
-  renderMaskToCanvas(refs.canvas, paintMask, state.meta)
-}
-
 function renderProgress(list: HTMLElement, completedCount: number): void {
   list.innerHTML = ''
   MAKE_SENSE_STEPS.forEach((step, idx) => {
     const cls =
-      idx < completedCount ? 'progress-step done' : idx === completedCount ? 'progress-step active' : 'progress-step'
+      idx < completedCount
+        ? 'progress-step done'
+        : idx === completedCount
+          ? 'progress-step active'
+          : 'progress-step'
     list.append(el('li', { class: cls }, `${idx + 1}. ${step}`))
   })
 }
 
 // ---------------------------------------------------------------------------
-// Worldbuild stage
+// Inspect markup
 // ---------------------------------------------------------------------------
 
-const WORLDBUILD_TOOLS: readonly { id: Tool; label: string; desc: string }[] = [
-  { id: 'place-city', label: 'Place city', desc: 'Found a settlement on a suitable cell' },
-  { id: 'remove-city', label: 'Remove city', desc: 'Remove nearest settlement' },
-  { id: 'inspect', label: 'Inspect', desc: 'Read the cell under the cursor' },
-  { id: 'none', label: 'Cursor', desc: 'Default cursor (no-op)' },
-]
-
-export interface WorldbuildStageRefs {
-  readonly root: HTMLElement
-  readonly canvas: HTMLCanvasElement
-  readonly toolButtons: Readonly<Record<Tool, HTMLButtonElement>>
-  readonly backBtn: HTMLButtonElement
+export function emptyInspectHint(hasWorld = false): string {
+  return hasWorld
+    ? `<p class="hint">Hover a cell. This readout is the derived geography.</p>`
+    : `<p class="hint">Hover the map. After Make sense, this cell is real geography.</p>`
 }
 
-export function mountWorldbuildStage(state: ShellStateView): WorldbuildStageRefs {
-  const root = el('div', { class: 'stage stage-worldbuild' })
-
-  const toolGrid = el('div', { class: 'tool-grid' })
-  const toolButtons = {} as Record<Tool, HTMLButtonElement>
-  for (const tool of WORLDBUILD_TOOLS) {
-    const btn = el(
-      'button',
-      {
-        type: 'button',
-        class: 'tool' + (state.tool === tool.id ? ' active' : ''),
-        'data-tool': tool.id,
-      },
-      tool.label,
-      el('small', {}, tool.desc),
-    )
-    btn.addEventListener('click', () => {
-      const detail: ToolChangeDetail = { tool: tool.id }
-      fire(APP_EVENTS.TOOL_CHANGE, detail)
-    })
-    toolButtons[tool.id] = btn
-    toolGrid.append(btn)
-  }
-
-  const left = el(
-    'aside',
-    { class: 'panel' },
-    el('h2', {}, 'Tools'),
-    toolGrid,
-    el(
-      'p',
-      { class: 'hint' },
-      'Worldbuild works on the derived world. Cities persist if you go back to Sketch.',
-    ),
-  )
-  root.append(left)
-
-  const canvas = makeCanvas('worldbuild')
-  root.append(makeMapShell(canvas))
-  // Paint the mask view (cities are drawn on top by the worldbuild stage).
-  renderMaskToCanvas(canvas, state.world ? state.world.mask : state.mask, state.meta)
-
-  const backBtn = el('button', { type: 'button' }, 'Back to Sketch')
-  backBtn.addEventListener('click', () => fire(APP_EVENTS.BACK_TO_SKETCH))
-
-  const citiesCount = state.world ? state.world.cities.length : 0
-  const right = el(
-    'aside',
-    { class: 'panel' },
-    el('h2', {}, 'Worldbuild'),
-    el('p', { class: 'cities-count' }, `Cities: ${citiesCount}`),
-    backBtn,
-  )
-  root.append(right)
-
-  return { root, canvas, toolButtons, backBtn }
+export function sketchInspectHtml(
+  x: number,
+  y: number,
+  land: boolean,
+): string {
+  return `
+    <div class="inspect-head">
+      <strong>${x}, ${y}</strong>
+      <span class="pill ${land ? 'land' : 'sea'}">${land ? 'Land' : 'Ocean'}</span>
+    </div>
+    <p class="hint">Sketch only — elevation and climate do not exist until Make sense.</p>
+  `
 }
 
-export function updateWorldbuildStage(refs: WorldbuildStageRefs, state: ShellStateView): void {
-  for (const tool of WORLDBUILD_TOOLS) {
-    refs.toolButtons[tool.id].classList.toggle('active', state.tool === tool.id)
-  }
-  const citiesCount = state.world ? state.world.cities.length : 0
-  const countEl = refs.root.querySelector<HTMLElement>('.cities-count')
-  if (countEl) countEl.textContent = `Cities: ${citiesCount}`
-  // Paint the world mask (preferred) or the authored sketch mask.
-  const paintMask = state.world ? state.world.mask : state.mask
-  renderMaskToCanvas(refs.canvas, paintMask, state.meta)
+export function worldInspectHtml(display: {
+  elev: string
+  plateId: string
+  tempSummer: string
+  tempWinter: string
+  tempRange: string
+  moistSummer: string
+  moistWinter: string
+  biome: string
+}, x: number, y: number, land: boolean): string {
+  return `
+    <div class="inspect-head">
+      <strong>${x}, ${y}</strong>
+      <span class="pill ${land ? 'land' : 'sea'}">${land ? 'Land' : 'Ocean'}</span>
+    </div>
+    <dl>
+      <dt>Elevation</dt><dd>${display.elev}</dd>
+      <dt>Plate</dt><dd>${display.plateId}</dd>
+      <dt>Summer</dt><dd>${display.tempSummer}</dd>
+      <dt>Winter</dt><dd>${display.tempWinter}</dd>
+      <dt>Range</dt><dd>${display.tempRange}</dd>
+      <dt>Summer moisture</dt><dd>${display.moistSummer}</dd>
+      <dt>Winter moisture</dt><dd>${display.moistWinter}</dd>
+      <dt>Biome</dt><dd>${display.biome}</dd>
+    </dl>
+  `
 }
-
-// ---------------------------------------------------------------------------
-// Per-stage dispatcher
-// ---------------------------------------------------------------------------
-
-export type StageRefs =
-  | { readonly stage: 'sketch'; readonly refs: SketchStageRefs }
-  | { readonly stage: 'critique'; readonly refs: CritiqueStageRefs }
-  | { readonly stage: 'make-sense'; readonly refs: MakeSenseStageRefs }
-  | { readonly stage: 'worldbuild'; readonly refs: WorldbuildStageRefs }
-
-/** Mount the stage UI for the given state. */
-export function mountStageUI(state: ShellStateView): StageRefs {
-  switch (state.stage) {
-    case 'sketch':
-      return { stage: 'sketch', refs: mountSketchStage(state) }
-    case 'critique':
-      return { stage: 'critique', refs: mountCritiqueStage(state) }
-    case 'make-sense':
-      return { stage: 'make-sense', refs: mountMakeSenseStage(state) }
-    case 'worldbuild':
-      return { stage: 'worldbuild', refs: mountWorldbuildStage(state) }
-  }
-}
-
-/** Update an already-mounted stage UI in place. */
-export function updateStageUI(stage: StageRefs, state: ShellStateView): void {
-  switch (stage.stage) {
-    case 'sketch':
-      updateSketchStage(stage.refs, state)
-      return
-    case 'critique':
-      updateCritiqueStage(stage.refs, state)
-      return
-    case 'make-sense':
-      updateMakeSenseStage(stage.refs, state)
-      return
-    case 'worldbuild':
-      updateWorldbuildStage(stage.refs, state)
-      return
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Re-export for callers that want the canonical event names
-// ---------------------------------------------------------------------------
 
 export { APP_EVENTS }
+export type { Layer }

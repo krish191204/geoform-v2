@@ -1,18 +1,13 @@
 /**
  * Inline (testable) Make-sense pipeline.
  *
- * Stitches the seven Make-sense modules into a single deterministic run that
- * can be exercised in either the main thread or a Web Worker. Every step is
- * timed, recorded into `StepResult`s, and surfaced through the `onStep`
- * callback and the existing `announce` coach channel. After step 7 the
- * orchestrator enforces the mask lock: the big-components count must not
- * move by more than 5% of the input land area (small components under
- * 100 cells may disappear).
- *
- * Pipeline modules MUST NOT mutate `input.mask`. They read it; they emit
- * new typed arrays. The mask lock is therefore computed against the
- * input mask both before and after, so any drift across the seven
- * steps would show up here.
+ * Stitches the seven Make-sense modules into a single deterministic run.
+ * After freezeIntent the coastline is grounded to the closest plausible
+ * neighbour of the doodle (a copy — `input.mask` is never written).
+ * Plates, orogeny, climate, rivers, and biomes run on that grounded mask
+ * so the atlas is expected to look different. The mask lock then checks
+ * land area stayed within ±5%: the continent stays where it was drawn;
+ * the shoreline does not have to.
  */
 
 import { bigComponentsMask, meanLand } from './helpers'
@@ -27,6 +22,7 @@ import { computeSeasonalClimate } from './seasonalClimate'
 import { computeHydrology } from './hydrology'
 import { computeBiomes } from './biomes'
 import { computeSuitability } from './suitability'
+import { groundCoast } from './groundCoast'
 import { announce } from '../app/coach'
 
 // ---------------------------------------------------------------------------
@@ -189,13 +185,16 @@ export async function makeSenseInline(
     1,
   )
 
+  // Ground the doodle into a shoreline. Copy only — never write input.mask.
+  const land = groundCoast(mask, width, height, threshold, seed)
+
   // -- Step 2: plates ------------------------------------------------------
   // Voronoi-style assignment under the soft mask, deterministic from
   // `seed`. Emits per-cell plate id, drift velocity, the plate roster,
   // and the classified boundaries between adjacent plates.
   const t1 = now()
   const platesResult = assignPlatesUnderMask(
-    mask,
+    land,
     width,
     height,
     seed,
@@ -223,9 +222,9 @@ export async function makeSenseInline(
   // Convert plate boundaries + drift into elevation. Returns the elevation
   // field plus any auxiliary data the climate step needs.
   const t2 = now()
-  const orogeny = computeOrogeny(platesResult, mask, width, height, threshold)
-  const peakElev = peakLand(orogeny.elev, mask, threshold)
-  const meanElev = meanLandSafe(orogeny.elev, mask, threshold)
+  const orogeny = computeOrogeny(platesResult, land, width, height, threshold, seed)
+  const peakElev = peakLand(orogeny.elev, land, threshold)
+  const meanElev = meanLandSafe(orogeny.elev, land, threshold)
   stage(
     {
       stepName: STEP_OROGENY,
@@ -241,7 +240,7 @@ export async function makeSenseInline(
   const t3 = now()
   const seasonal = computeSeasonalClimate(
     orogeny,
-    mask,
+    land,
     width,
     height,
     threshold,
@@ -249,12 +248,12 @@ export async function makeSenseInline(
     obliquityDeg,
     seed,
   )
-  const meanSummerC = meanLandSafe(seasonal.summer, mask, threshold)
-  const meanWinterC = meanLandSafe(seasonal.winter, mask, threshold)
+  const meanSummerC = meanLandSafe(seasonal.summer, land, threshold)
+  const meanWinterC = meanLandSafe(seasonal.winter, land, threshold)
   const meanRangeC = meanDifferenceLand(
     seasonal.summer,
     seasonal.winter,
-    mask,
+    land,
     threshold,
   )
   stage(
@@ -270,9 +269,9 @@ export async function makeSenseInline(
   // Accumulate downhill flux from the elevation field; threshold the
   // accumulated flux into a rivers mask (Uint8).
   const t4 = now()
-  const hydro = computeHydrology(orogeny.elev, mask, width, height, threshold)
+  const hydro = computeHydrology(orogeny.elev, land, width, height, threshold)
   const riverCount = sumUint8(hydro.rivers)
-  const maxFlux = peakLand(hydro.flux, mask, threshold)
+  const maxFlux = peakLand(hydro.flux, land, threshold)
   stage(
     {
       stepName: STEP_HYDRO,
@@ -291,20 +290,18 @@ export async function makeSenseInline(
     seasonal.winter,
     seasonal.summerMoist,
     seasonal.winterMoist,
-    mask,
+    land,
     threshold,
     // Pass elevation so the alpine override (`elev >= 3500`) actually fires.
     // Without this, the alpine branch in `classifyBiome` is dead code.
     orogeny.elev,
-    // Pass the latitude-aware `tempMean` from the climate step so the
-    // biome classifier can distinguish equator from pole. Without this,
-    // `computeBiomes` falls back to the symmetric `(summer + winter) / 2`
-    // which collapses to `BASE_TEMP_C` at every latitude.
+    // Annual mean from the climate step (same as (summer+winter)/2 after
+    // lapse, ocean inertia, and clamps).
     seasonal.tempMean,
   )
   const biomeCounts = new Map<string, number>()
   for (let i = 0; i < biomesResult.biome.length; i++) {
-    if (mask[i] >= threshold) {
+    if (land[i] >= threshold) {
       const name = biomesResult.biome[i]
       biomeCounts.set(name, (biomeCounts.get(name) ?? 0) + 1)
     }
@@ -333,7 +330,7 @@ export async function makeSenseInline(
     biomesResult.biome,
     hydro.flux,
     hydro.rivers,
-    mask,
+    land,
     seasonal.summer,
     seasonal.winter,
     width,
@@ -359,14 +356,11 @@ export async function makeSenseInline(
   )
 
   // -- Annual aggregates ---------------------------------------------------
-  // tempMean comes straight from the seasonal climate step (latitude-
-  // aware; see `seasonalClimate.computeSeasonalClimate`). tempRange and
-  // moistMean remain simple symmetric derivations — tempRange is by
-  // construction non-negative (summer ≥ winter), and moistMean is the
-  // arithmetic mean of the two seasonal moisture indices.
-  const tempRange = new Float32Array(mask.length)
-  const moistMean = new Float32Array(mask.length)
-  for (let i = 0; i < mask.length; i++) {
+  // tempMean comes from the climate step. tempRange and moistMean
+  // are the seasonal deltas / means used by Critique and the inspector.
+  const tempRange = new Float32Array(land.length)
+  const moistMean = new Float32Array(land.length)
+  for (let i = 0; i < land.length; i++) {
     tempRange[i] = seasonal.summer[i] - seasonal.winter[i]
     moistMean[i] = 0.5 * (seasonal.summerMoist[i] + seasonal.winterMoist[i])
   }
@@ -377,7 +371,7 @@ export async function makeSenseInline(
   // of the input land area (with the per-component epsilon accounting
   // for sub-100-cell slivers that legitimately disappear under
   // thresholding).
-  const bigAfter = bigComponentsMask(mask, width, height, threshold, MASK_LOCK_MIN_COMPONENT)
+  const bigAfter = bigComponentsMask(land, width, height, threshold, MASK_LOCK_MIN_COMPONENT)
   let outputMaskArea = 0
   for (let i = 0; i < bigAfter.mask.length; i++) outputMaskArea += bigAfter.mask[i]
   const areaDelta = outputMaskArea - inputMaskArea
@@ -412,6 +406,7 @@ export async function makeSenseInline(
     rivers: hydro.rivers,
     biome: biomesResult.biome,
     suitability,
+    mask: land,
     provenance: {
       steps,
       inputMaskArea,
