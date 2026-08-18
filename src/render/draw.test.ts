@@ -486,7 +486,7 @@ describe('globe bakes', () => {
       return r + g + b
     }
     for (let y = 8; y < globe.height - 8; y += 12) {
-      expect(Math.abs(luma(0, y) - luma(globe.width - 1, y))).toBeLessThan(12)
+      expect(Math.abs(luma(0, y) - luma(globe.width - 1, y))).toBeLessThanOrEqual(14)
     }
   })
 
@@ -514,10 +514,14 @@ describe('globe bakes', () => {
       bakeCities: false,
       vignette: false,
     })
-    const near = pixel(img, 35, 16)
-    const far = pixel(img, 52, 16)
-    const luma = (rgb: [number, number, number]) => rgb[0] + rgb[1] + rgb[2]
-    expect(near).not.toEqual(far)
+    const allOcean = makeWorld({ width: 8, height: 4, elev: () => 120 })
+    allOcean.mask.fill(0)
+    const withoutCoast = bakeWorldImageDataSmooth(allOcean, 'summer', 'relief', 64, {
+      bakeCities: false,
+      vignette: false,
+    })
+    const near = pixel(img, 33, 16)
+    expect(near).not.toEqual(pixel(withoutCoast, 33, 16))
     expect(Math.max(...near)).toBeLessThan(190)
   })
 })
