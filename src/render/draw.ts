@@ -196,17 +196,17 @@ function ramp(v: number | undefined): number {
 function elevBandColor(e: number, ocean: boolean): [number, number, number] {
   if (!Number.isFinite(e)) return [120, 120, 120]
   if (ocean) {
-    // Pipeline abyssal default is 0 m; trenches go negative. Geoform 1 paints
-    // empty ocean as deep water, not a lagoon shelf.
-    const t = e >= 0 ? 0.22 : ramp((e + 1600) / 1600) * 0.22
-    return mix([8, 28, 48], [18, 62, 92], t / 0.45)
+    // Pipeline abyssal default is 0 m; trenches go negative. Keep the shelf
+    // legible without turning an unmeasured 0 m ocean into tropical shallows.
+    const shelf = e >= 0 ? 0.3 : ramp((e + 2200) / 2200) * 0.3
+    return mix([7, 25, 45], [22, 67, 91], shelf)
   }
-  if (e < 80) return mix([168, 176, 122], [92, 138, 72], ramp(e / 80))
-  if (e < 400) return mix([92, 138, 72], [58, 112, 58], (e - 80) / 320)
-  if (e < 1200) return mix([58, 112, 58], [110, 118, 72], (e - 400) / 800)
-  if (e < 2500) return mix([110, 118, 72], [128, 112, 88], (e - 1200) / 1300)
-  if (e < 5000) return mix([128, 112, 88], [168, 162, 152], (e - 2500) / 2500)
-  return mix([168, 162, 152], [246, 248, 250], ramp((e - 5000) / 3000))
+  if (e < 80) return mix([154, 158, 108], [100, 133, 76], ramp(e / 80))
+  if (e < 400) return mix([100, 133, 76], [66, 110, 62], (e - 80) / 320)
+  if (e < 1200) return mix([66, 110, 62], [105, 112, 69], (e - 400) / 800)
+  if (e < 2500) return mix([105, 112, 69], [130, 108, 82], (e - 1200) / 1300)
+  if (e < 5000) return mix([130, 108, 82], [174, 164, 146], (e - 2500) / 2500)
+  return mix([174, 164, 146], [235, 234, 225], ramp((e - 5000) / 3000))
 }
 
 function isOceanCell(world: World, i: number): boolean {
@@ -317,8 +317,9 @@ function sampleMask(world: World, x: number, y: number): number {
   )
 }
 
-/** Characteristic relief so rolling hills and ranges both shade. Elev is metres. */
-const SHADE_M = 600
+/** Characteristic relief scales in metres: local ridges plus broad landforms. */
+const LOCAL_SHADE_M = 1250
+const BROAD_SHADE_M = 5200
 /** Flux above this tints as a tributary (matches hydrology river cutoff). */
 const RIVER_VISIBLE = 8
 /** Flux above this tints as a main stem. */
@@ -403,9 +404,10 @@ function sampleScalar(field: ArrayLike<number>, world: World, x: number, y: numb
   return lerp(lerp(v00, v10, fx), lerp(v01, v11, fx), fy)
 }
 
-/** Seeded paper grain — static, so draw stays pure. Geoform 1 amplitude. */
+/** Seeded paper grain — static and centred, so redraws never shimmer. */
 function paperGrain(x: number, y: number): number {
-  return ((Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1) * 0.1 - 0.05
+  const raw = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453
+  return (raw - Math.floor(raw)) * 0.06 - 0.03
 }
 
 // ---------------------------------------------------------------------------
@@ -487,50 +489,68 @@ function applyPaperLook(
 
   // Hillshade on terrain-ish layers. Height stays a raw metre ramp.
   if (layer === 'relief' || layer === 'biome' || layer === 'plates') {
-    const er = sampleElev(world, x + 1, y)
-    const ed = sampleElev(world, x, y + 1)
-    const dx = (e - er) / SHADE_M
-    const dy = (e - ed) / SHADE_M
-    const shade = 0.72 + dx * 4.2 + dy * 3.0
-    const ambient = layer === 'biome' ? 0.55 : layer === 'plates' ? 0.48 : 0.35
-    const lit = ambient + ((1 - ambient) * clamp(shade, 0.45, 1.35)) / 1.15
+    const localDx =
+      (sampleElev(world, x - 1, y) - sampleElev(world, x + 1, y)) /
+      LOCAL_SHADE_M
+    const localDy =
+      (sampleElev(world, x, y - 1) - sampleElev(world, x, y + 1)) /
+      LOCAL_SHADE_M
+    const broadDx =
+      (sampleElev(world, x - 3, y) - sampleElev(world, x + 3, y)) /
+      BROAD_SHADE_M
+    const broadDy =
+      (sampleElev(world, x, y - 3) - sampleElev(world, x, y + 3)) /
+      BROAD_SHADE_M
+    const directional =
+      localDx * 0.78 + localDy * 0.58 + broadDx * 0.48 + broadDy * 0.34
+    const shade = clamp(0.97 + directional, 0.62, 1.24)
+    const strength = layer === 'relief' ? 0.94 : layer === 'biome' ? 0.58 : 0.48
+    const lit = lerp(1, shade, strength)
     rgb = [clamp(rgb[0] * lit), clamp(rgb[1] * lit), clamp(rgb[2] * lit)]
   }
 
-  // Still water grain — no animation (draw stays pure). Geoform 1 shimmer 0.14.
+  // Multi-scale still-water variation. Both frequencies are spatially fixed,
+  // so the ocean has depth without animated noise or false bathymetry.
   if (ocean && (layer === 'relief' || layer === 'biome' || layer === 'elevation')) {
-    const depth = e < 0 ? ramp(1 + e / 1200) : 0.35
-    const wave =
-      0.5 + 0.5 * Math.sin(x * 0.35 + Math.cos(y * 0.22) * 2) * Math.sin(y * 0.4)
-    const shimmer = wave * depth * 0.14
+    const shelf = e < 0 ? ramp(1 + e / 1800) : 0.28
+    const swell =
+      Math.sin(x * 0.11 + Math.cos(y * 0.08) * 1.7) *
+      Math.sin(y * 0.14 - x * 0.025)
+    const ripple =
+      Math.sin(x * 0.43 + Math.cos(y * 0.2) * 2.1) *
+      Math.sin(y * 0.37 + x * 0.035)
+    const shimmer = (swell * 0.6 + ripple * 0.4) * (0.55 + shelf * 0.45)
     rgb = [
-      clamp(rgb[0] + shimmer * 40),
-      clamp(rgb[1] + shimmer * 70),
-      clamp(rgb[2] + shimmer * 90),
+      clamp(rgb[0] + shimmer * 4),
+      clamp(rgb[1] + shimmer * 8),
+      clamp(rgb[2] + shimmer * 12),
     ]
   }
 
-  // Coastal ink/foam — skip plates so sutures stay readable.
+  // Coastal ink/foam — a narrow transition, not a white halo. Skip plates so
+  // tectonic sutures stay readable.
   if (layer !== 'plates') {
     const foam = coastAmount(world, x, y)
     if (foam > 0) {
       rgb = ocean
-        ? mix(rgb, [210, 230, 230], 0.28 * foam)
-        : mix(rgb, [30, 42, 36], 0.22 * foam)
+        ? mix(rgb, [174, 205, 205], 0.16 * foam)
+        : mix(rgb, [33, 41, 32], 0.25 * foam)
     }
   }
 
   // Rivers from flux (tributaries faint, mains brighter) — v1 network look.
   if (showRivers && !ocean && layer !== 'plates' && layer !== 'temperature') {
     const f = sampleScalar(world.flux, world, x, y)
-    const flagged = sampleScalar(world.rivers, world, x, y) >= 0.5
+    const riverCoverage = sampleScalar(world.rivers, world, x, y)
+    const flagged = riverCoverage >= 0.12
     if (f >= RIVER_VISIBLE || flagged) {
       const isMain = f >= RIVER_MAIN
       const strength = isMain
         ? Math.min(1, (f - RIVER_MAIN) / 40)
         : Math.min(1, Math.max(0, f - RIVER_VISIBLE) / 20)
-      const t = (isMain ? 0.55 : flagged ? 0.42 : 0.32) + strength * 0.38
-      rgb = mix(rgb, isMain ? [45, 125, 185] : [70, 155, 195], Math.min(1, t))
+      const coverage = Math.min(1, riverCoverage * 1.45)
+      const t = ((isMain ? 0.58 : flagged ? 0.4 : 0.3) + strength * 0.34) * coverage
+      rgb = mix(rgb, isMain ? [39, 105, 157] : [58, 132, 169], Math.min(0.9, t))
     }
   }
 
@@ -652,7 +672,7 @@ function sampleBilinear(
   return applyPaperLook(mixed, world, layer, xf, yf, showRivers)
 }
 
-/** Soft polar/limb darkening so the atlas doesn't read as a flat stamp. */
+/** Subtle print-edge darkening. CSS provides only the glass highlight. */
 export function applyVignette(image: ImageData): void {
   const cw = image.width
   const ch = image.height
@@ -662,7 +682,7 @@ export function applyVignette(image: ImageData): void {
     for (let px = 0; px < cw; px++) {
       const nx = ((px + 0.5) / cw) * 2 - 1
       const v = Math.min(1, Math.sqrt(nx * nx * 0.7 + ny * ny * 0.95))
-      const dark = 1 - v * v * 0.18
+      const dark = 1 - v * v * 0.12
       const o = (py * cw + px) * 4
       data[o] = Math.round(data[o] * dark)
       data[o + 1] = Math.round(data[o + 1] * dark)

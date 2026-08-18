@@ -222,6 +222,34 @@ describe('draw', () => {
     expect(pixel(withRivers, 1, 1)).not.toEqual(pixel(withoutRivers, 1, 1))
   })
 
+  it('uses multi-scale relief contrast without clipping the paper palette', () => {
+    const world = makeWorld({
+      width: 16,
+      height: 8,
+      elev: (x, y) => 120 + x * 180 + Math.sin(y * 1.7) * 480,
+    })
+    const img = bakeWorldImageDataSmooth(world, 'summer', 'relief', 64, {
+      bakeCities: false,
+      vignette: false,
+    })
+    const lumas: number[] = []
+    for (let y = 4; y < img.height - 4; y += 4) {
+      for (let x = 4; x < img.width - 4; x += 4) {
+        const [r, g, b] = pixel(img, x, y)
+        lumas.push(r + g + b)
+        expect(Math.max(r, g, b)).toBeLessThan(246)
+      }
+    }
+    expect(Math.max(...lumas) - Math.min(...lumas)).toBeGreaterThan(80)
+  })
+
+  it('keeps paper grain deterministic across redraws', () => {
+    const world = makeWorld({ width: 12, height: 6, elev: () => 700 })
+    const first = draw(world, 'summer', 'relief')
+    const second = draw(world, 'summer', 'relief')
+    expect(second.data).toEqual(first.data)
+  })
+
   it('up-scales with the scale option (nearest-neighbour)', () => {
     const world = makeWorld({ width: 4, height: 4 })
     const img = draw(world, 'summer', 'temperature', { scale: 3 })
@@ -447,11 +475,34 @@ describe('globe bakes', () => {
   })
 
   it('paints empty ocean as deep water, not a lagoon shelf', () => {
-    const world = makeWorld({ width: 4, height: 4, elev: () => 0 })
+    const world = makeWorld({ width: 16, height: 8, elev: () => 0 })
     world.mask.fill(0)
     const img = draw(world, 'summer', 'relief')
-    const [r, g, b] = pixel(img, 2, 2)
+    const [r, g, b] = pixel(img, 8, 4)
     expect(r + g + b).toBeLessThan(220)
+    const oceanColours = new Set<string>()
+    for (let y = 1; y < img.height - 1; y += 2) {
+      for (let x = 1; x < img.width - 1; x += 2) {
+        oceanColours.add(pixel(img, x, y).join(','))
+      }
+    }
+    expect(oceanColours.size).toBeGreaterThan(4)
+  })
+
+  it('softens the coast without a white halo', () => {
+    const world = makeWorld({ width: 8, height: 4, elev: () => 120 })
+    for (let y = 0; y < 4; y++) {
+      for (let x = 4; x < 8; x++) world.mask[y * 8 + x] = 0
+    }
+    const img = bakeWorldImageDataSmooth(world, 'summer', 'relief', 64, {
+      bakeCities: false,
+      vignette: false,
+    })
+    const near = pixel(img, 35, 16)
+    const far = pixel(img, 52, 16)
+    const luma = (rgb: [number, number, number]) => rgb[0] + rgb[1] + rgb[2]
+    expect(near).not.toEqual(far)
+    expect(Math.max(...near)).toBeLessThan(190)
   })
 })
 

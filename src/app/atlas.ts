@@ -26,7 +26,7 @@ export const LAYER_CHIPS: readonly { id: Layer; label: string; title: string }[]
   { id: 'elevation', label: 'Height', title: 'Elevation in metres' },
 ]
 
-const LAND_RGB: readonly [number, number, number] = [0x8a, 0x7a, 0x5a]
+const LAND_RGB: readonly [number, number, number] = [0x94, 0x86, 0x65]
 const SEA_FILL = '#163a44'
 
 /** Geoform 1 HD raster: at least 4 pixels per cell locally, then CSS-downsample. */
@@ -173,7 +173,7 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
 
   const image = opts.world
     ? cachedWorldBake(opts.world, opts.season, opts.layer, bakeW)
-    : upsampleMask(opts.mask, meta, bakeW, bakeH, opts.preview === true)
+    : bakeSketchMaskImageData(opts.mask, meta, bakeW, bakeH, opts.preview === true)
 
   const tctx = blitScratch(image.width, image.height)
   if (!tctx) return
@@ -248,7 +248,12 @@ function upsampleMaskPreview(
   return image
 }
 
-function upsampleMask(
+/**
+ * Bake Sketch as exactly two authored classes: flat land mask and ocean.
+ * Paper fibres, still-water variation, and edge antialiasing improve the
+ * drawing surface but never imply elevation, climate, or biome data.
+ */
+export function bakeSketchMaskImageData(
   mask: Float32Array | null,
   meta: WorldMeta,
   outW: number,
@@ -283,29 +288,41 @@ function upsampleMask(
     for (let px = 0; px < cw; px++) {
       const xf = ((px + 0.5) * w) / cw
       const t = sample(xf, yf)
-      const k = Math.max(0, Math.min(1, (t - threshold + 0.15) / 0.3))
-      const grain = ((Math.sin(xf * 12.9898 + yf * 78.233) * 43758.5453) % 1) * 0.1 - 0.05
-      // Geoform 1 empty ocean: deep navy + still-water caustic, not a flat teal fill.
-      const wave =
-        0.5 + 0.5 * Math.sin(xf * 0.35 + Math.cos(yf * 0.22) * 2) * Math.sin(yf * 0.4)
-      const shimmer = wave * 0.55 * 0.14
-      let r = 8 + (18 - 8) * 0.38 + shimmer * 40
-      let g = 28 + (62 - 28) * 0.38 + shimmer * 70
-      let b = 48 + (92 - 48) * 0.38 + shimmer * 90
-      r = r + (LAND_RGB[0] - r) * k
-      g = g + (LAND_RGB[1] - g) * k
-      b = b + (LAND_RGB[2] - b) * k
-      if (k > 0.22 && k < 0.78) {
-        const foam = 1 - Math.abs(k - 0.5) * 4
-        const edge = k < 0.5 ? [210, 230, 230] : [30, 42, 36]
-        const et = Math.max(0, foam) * (k < 0.5 ? 0.28 : 0.22)
-        r = r + (edge[0] - r) * et
-        g = g + (edge[1] - g) * et
-        b = b + (edge[2] - b) * et
+      const edge = Math.max(0, Math.min(1, (t - threshold + 0.12) / 0.24))
+      const k = edge * edge * (3 - 2 * edge)
+      const hash = Math.sin(xf * 12.9898 + yf * 78.233) * 43758.5453
+      const grain = (hash - Math.floor(hash)) * 0.05 - 0.025
+      // Geoform 1 empty ocean: deep navy with fixed, multi-scale variation.
+      const swell =
+        Math.sin(xf * 0.1 + Math.cos(yf * 0.08) * 1.6) *
+        Math.sin(yf * 0.14 - xf * 0.025)
+      const ripple =
+        Math.sin(xf * 0.4 + Math.cos(yf * 0.21) * 2) *
+        Math.sin(yf * 0.36 + xf * 0.03)
+      const shimmer = swell * 0.6 + ripple * 0.4
+      let r = 11 + shimmer * 3.5
+      let g = 39 + shimmer * 7
+      let b = 61 + shimmer * 10
+      const paperFibre = Math.sin(yf * 1.7 + Math.sin(xf * 0.32)) * 0.012
+      const landR = LAND_RGB[0] * (1 + grain + paperFibre)
+      const landG = LAND_RGB[1] * (1 + grain + paperFibre)
+      const landB = LAND_RGB[2] * (1 + grain + paperFibre)
+      r = r + (landR - r) * k
+      g = g + (landG - g) * k
+      b = b + (landB - b) * k
+      if (k > 0.12 && k < 0.88) {
+        const coast = Math.max(0, 1 - Math.abs(k - 0.5) * 2.65)
+        const ink = k < 0.5 ? [143, 178, 180] : [35, 43, 34]
+        const amount = coast * (k < 0.5 ? 0.12 : 0.2)
+        r = r + (ink[0] - r) * amount
+        g = g + (ink[1] - g) * amount
+        b = b + (ink[2] - b) * amount
       }
-      r = Math.max(0, Math.min(255, r * (1 + grain)))
-      g = Math.max(0, Math.min(255, g * (1 + grain)))
-      b = Math.max(0, Math.min(255, b * (1 + grain)))
+      // Ocean takes the same fixed print grain; land already received it above.
+      const oceanGrain = 1 + grain * (1 - k)
+      r = Math.max(0, Math.min(255, r * oceanGrain))
+      g = Math.max(0, Math.min(255, g * oceanGrain))
+      b = Math.max(0, Math.min(255, b * oceanGrain))
       const o = (py * cw + px) * 4
       data[o] = Math.round(r)
       data[o + 1] = Math.round(g)
