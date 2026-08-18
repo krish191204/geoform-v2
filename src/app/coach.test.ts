@@ -65,17 +65,18 @@ describe('renderCoach writer copy', () => {
     expect(copy.message).not.toMatch(/512|256|0 land/)
   })
 
-  it('critique names the score without pretending it is geography', () => {
+  it('critique names the readiness grade and finding counts', () => {
     const copy = renderCoach({
       kind: 'critique.grade',
-      score: 28,
+      letter: 'C',
+      scope: 'sketch',
       issueCount: 2,
       criticalCount: 1,
       majorCount: 1,
       minorCount: 0,
     })
-    expect(copy.message).toContain('Score 28')
-    expect(copy.message).toContain('not a geography grade')
+    expect(copy.message).toContain('Sketch readiness grade C')
+    expect(copy.message).toContain('1 critical, 1 major')
   })
 
   it('make sense complete does not boast pipeline telemetry', () => {
@@ -109,7 +110,8 @@ describe('renderCoach writer copy', () => {
       { kind: 'sketch.clearSea', clearedCells: 12, autopilotTriggered: false },
       {
         kind: 'critique.grade',
-        score: 28,
+        letter: 'C',
+        scope: 'sketch',
         issueCount: 2,
         criticalCount: 1,
         majorCount: 1,

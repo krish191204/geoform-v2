@@ -25,8 +25,8 @@ export type CoachEvent =
   | { kind: 'sketch.commit'; metaSeed: number; metaWidth: number; metaHeight: number; maskArea: number; bigComponents: number; threshold: number }
   /** Sea cells were cleared from the mask. */
   | { kind: 'sketch.clearSea'; clearedCells: number; autopilotTriggered: boolean }
-  /** Critique produced a score. */
-  | { kind: 'critique.grade'; score: number; issueCount: number; criticalCount: number; majorCount: number; minorCount: number }
+  /** Critique produced an explainable letter grade. */
+  | { kind: 'critique.grade'; letter: string; scope: 'sketch' | 'world'; issueCount: number; criticalCount: number; majorCount: number; minorCount: number }
   /** A single issue was highlighted on the overlay. */
   | { kind: 'critique.overlay'; issueId: string; severity: Issue['severity']; cellCount: number }
   /** Make-sense started. */
@@ -94,7 +94,9 @@ export function renderCoach(event: CoachEvent): { tone: CoachTone; message: stri
     case 'critique.grade':
       return {
         tone: 'warn',
-        message: `Score ${event.score} — ${event.criticalCount} critical, ${event.majorCount} major, ${event.minorCount} minor. This is not a geography grade yet.`,
+        message:
+          `${event.scope === 'sketch' ? 'Sketch readiness' : 'World'} grade ${event.letter} — ` +
+          `${event.criticalCount} critical, ${event.majorCount} major, ${event.minorCount} minor.`,
       }
     case 'critique.overlay':
       return {

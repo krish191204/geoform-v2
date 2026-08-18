@@ -42,7 +42,7 @@ function pointer(canvas: HTMLCanvasElement, type: string, clientX: number, clien
 }
 
 describe('Sketch → Worldbuild walkthrough', () => {
-  it('hides the empty-ocean hint after paint and Critique scores the doodle ≤ 40', () => {
+  it('hides the empty-ocean hint and gives the weak doodle an explainable F', () => {
     const root = document.createElement('div')
     document.body.append(root)
     mountApp(root)
@@ -64,10 +64,10 @@ describe('Sketch → Worldbuild walkthrough', () => {
     expect(critiqueBtn!.disabled).toBe(false)
     critiqueBtn!.click()
 
-    const scoreText = root.querySelector('.score')?.textContent ?? ''
-    const score = Number(scoreText.replace('%', ''))
-    expect(score).toBeGreaterThanOrEqual(0)
-    expect(score).toBeLessThanOrEqual(40)
+    const grade = root.querySelector('[data-letter-grade]') as HTMLElement
+    expect(grade.dataset.letterGrade).toBe('F')
+    expect(grade.textContent).toContain('Not ready to ground')
+    expect(root.querySelectorAll('[data-grade-criterion]').length).toBe(3)
     expect(hint.hidden).toBe(true)
 
     root.remove()

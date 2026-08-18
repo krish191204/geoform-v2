@@ -9,6 +9,7 @@ import {
   mountChrome,
   mountInspector,
   mountMapShell,
+  mountStageWork,
   mountStageTools,
   showingDerivedWorld,
   updateChrome,
@@ -124,6 +125,35 @@ describe('sketch tools', () => {
       'Continents & islands',
       'Island world',
     ])
+  })
+})
+
+describe('critique grading UI', () => {
+  it('shows an explainable letter grade, rubric outcomes, and fixes', () => {
+    const work = mountStageWork(
+      view({
+        stage: 'critique',
+        maskCommitted: true,
+        issues: [
+          {
+            id: 'box-continent',
+            severity: 'major',
+            title: 'Land is a stamped box',
+            critique: 'The largest landmass is rectangular.',
+            fix: 'Break the walls with gulfs and peninsulas.',
+            evidence: [],
+          },
+        ],
+      }),
+    )
+    const card = work.querySelector('[data-letter-grade]') as HTMLElement
+    expect(card.dataset.letterGrade).toBe('B')
+    expect(card.textContent).toContain('Mostly ready')
+    expect(work.querySelectorAll('[data-grade-criterion]')).toHaveLength(3)
+    expect(work.textContent).toContain('Landform composition')
+    expect(work.textContent).toContain('Concern')
+    expect(work.textContent).toContain('Fix: Break the walls with gulfs and peninsulas.')
+    expect(work.textContent).not.toContain('%')
   })
 })
 

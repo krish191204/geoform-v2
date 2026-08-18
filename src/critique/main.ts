@@ -37,8 +37,10 @@ import {
  * always emits `pre = false`.
  */
 export interface CritiqueResult {
-  /** 0..100. 100 means zero issues were found. Drops of 25/10/2 per critical/major/minor. */
+  /** Compatibility/provenance score. The UI presents `grade`, not this raw number. */
   score: number
+  /** Explainable A–F assessment with one result per evaluated system. */
+  grade: CritiqueGrade
   /** Sorted with critical first, then major, then minor. */
   issues: Issue[]
   /** True if this result was computed pre-Make-sense (mask only). */
@@ -48,6 +50,247 @@ export interface CritiqueResult {
 // Re-exported so callers don't need a second import path.
 export type { Issue }
 export { SEVERITY_WEIGHTS, scoreFromIssues, sortIssuesBySeverity }
+
+export type LetterGrade = 'A' | 'B' | 'C' | 'D' | 'F'
+export type GradeStatus = 'pass' | 'watch' | 'concern' | 'fail'
+
+export interface GradeCriterion {
+  id: string
+  label: string
+  description: string
+  weight: number
+  score: number
+  status: GradeStatus
+  issues: Issue[]
+}
+
+export interface CritiqueGrade {
+  /** Sketch grades readiness; World grades derived geography. */
+  scope: 'sketch' | 'world'
+  letter: LetterGrade
+  score: number
+  title: string
+  summary: string
+  criteria: GradeCriterion[]
+}
+
+interface CriterionDefinition {
+  id: string
+  label: string
+  description: string
+  weight: number
+  issueIds: ReadonlySet<string>
+}
+
+const set = (...ids: string[]): ReadonlySet<string> => new Set(ids)
+
+const SKETCH_CRITERIA: readonly CriterionDefinition[] = [
+  {
+    id: 'balance',
+    label: 'Land–water balance',
+    description: 'Enough land and ocean exist to support a legible world.',
+    weight: 35,
+    issueIds: set('too-little-land', 'too-much-land', 'polar-strip'),
+  },
+  {
+    id: 'coast',
+    label: 'Coastline quality',
+    description: 'Shorelines avoid brush holes, grid stairs, and scribbled outlines.',
+    weight: 35,
+    issueIds: set('scribble-coast', 'pixel-stairs', 'paint-holes'),
+  },
+  {
+    id: 'composition',
+    label: 'Landform composition',
+    description: 'Landmasses read as intentional continents or islands rather than stamps.',
+    weight: 30,
+    issueIds: set(
+      'too-many-speckles',
+      'speckle-share',
+      'box-continent',
+      'rectangle-continent',
+      'line-continent',
+    ),
+  },
+]
+
+const WORLD_CRITERIA: readonly CriterionDefinition[] = [
+  {
+    id: 'climate',
+    label: 'Climate continuity',
+    description: 'Temperature, seasonality, and rain shadows change plausibly.',
+    weight: 25,
+    issueIds: set('ice-desert-dualism', 'rain-shadow-flipped', 'no-continentality'),
+  },
+  {
+    id: 'hydrology',
+    label: 'Hydrology',
+    description: 'Water follows terrain and river routing does not contradict elevation.',
+    weight: 20,
+    issueIds: set('flux-on-maxima', 'no-ridge-rivers'),
+  },
+  {
+    id: 'tectonics',
+    label: 'Tectonic structure',
+    description: 'Plate boundaries form coherent belts instead of a Voronoi mesh.',
+    weight: 15,
+    issueIds: set('plate-stained-glass'),
+  },
+  {
+    id: 'biosphere',
+    label: 'Biome diversity',
+    description: 'Climate and altitude produce more than one dominant land biome.',
+    weight: 15,
+    issueIds: set('uniform-biome'),
+  },
+  {
+    id: 'settlement',
+    label: 'Settlement pattern',
+    description: 'Settlements occupy plausible sites and serve a mix of roles.',
+    weight: 10,
+    issueIds: set('all-capitals'),
+  },
+  {
+    id: 'fidelity',
+    label: 'Sketch fidelity',
+    description: 'Grounding preserves the authored continental intent.',
+    weight: 15,
+    issueIds: set('mask-drift'),
+  },
+]
+
+const GRADE_PENALTY: Readonly<Record<Issue['severity'], number>> = {
+  critical: 60,
+  major: 24,
+  minor: 8,
+}
+
+const UNGRADED_SCOPE_IDS: ReadonlySet<string> = set('not-a-planet-yet')
+
+function letterForScore(score: number): LetterGrade {
+  if (score >= 90) return 'A'
+  if (score >= 80) return 'B'
+  if (score >= 70) return 'C'
+  if (score >= 60) return 'D'
+  return 'F'
+}
+
+function criterionStatus(issues: readonly Issue[]): GradeStatus {
+  if (issues.some((issue) => issue.severity === 'critical')) return 'fail'
+  if (issues.some((issue) => issue.severity === 'major')) return 'concern'
+  if (issues.length > 0) return 'watch'
+  return 'pass'
+}
+
+function gradeTitle(scope: CritiqueGrade['scope'], letter: LetterGrade): string {
+  if (scope === 'sketch') {
+    return {
+      A: 'Ready to ground',
+      B: 'Mostly ready',
+      C: 'Needs reshaping',
+      D: 'Major redraw needed',
+      F: 'Not ready to ground',
+    }[letter]
+  }
+  return {
+    A: 'Coherent world',
+    B: 'Sound with one material issue',
+    C: 'Plausible with notable weaknesses',
+    D: 'Major systems need revision',
+    F: 'Fails a non-negotiable check',
+  }[letter]
+}
+
+/**
+ * Produce an explainable grade from named checks.
+ *
+ * Category scores use fixed, published deductions (critical 60, major 24,
+ * minor 8). The weighted mean is then capped by severity: any critical is F;
+ * one major can be no better than B, two no better than C, and three no
+ * better than D. This prevents a serious contradiction hiding inside a high
+ * average while keeping every grade reproducible from the visible issues.
+ */
+export function gradeCritique(
+  issues: readonly Issue[],
+  pre: boolean,
+): CritiqueGrade {
+  const scope: CritiqueGrade['scope'] = pre ? 'sketch' : 'world'
+  const definitions = pre ? SKETCH_CRITERIA : WORLD_CRITERIA
+  const gradedIssues = issues.filter((issue) => !UNGRADED_SCOPE_IDS.has(issue.id))
+  const assigned = new Set<Issue>()
+  const criteria = definitions.map<GradeCriterion>((definition) => {
+    const matching = gradedIssues.filter((issue) => definition.issueIds.has(issue.id))
+    matching.forEach((issue) => assigned.add(issue))
+    const deduction = matching.reduce(
+      (sum, issue) => sum + GRADE_PENALTY[issue.severity],
+      0,
+    )
+    return {
+      ...definition,
+      score: Math.max(0, 100 - deduction),
+      status: criterionStatus(matching),
+      issues: matching,
+    }
+  })
+
+  // New checks remain grade-bearing even before a rubric category is added.
+  const unassigned = gradedIssues.filter((issue) => !assigned.has(issue))
+  if (unassigned.length > 0) {
+    criteria.push({
+      id: 'other',
+      label: 'Other integrity checks',
+      description: 'Additional deterministic checks not yet grouped above.',
+      weight: 10,
+      score: Math.max(
+        0,
+        100 -
+          unassigned.reduce(
+            (sum, issue) => sum + GRADE_PENALTY[issue.severity],
+            0,
+          ),
+      ),
+      status: criterionStatus(unassigned),
+      issues: unassigned,
+    })
+  }
+
+  const totalWeight = criteria.reduce((sum, criterion) => sum + criterion.weight, 0)
+  let score =
+    totalWeight > 0
+      ? Math.round(
+          criteria.reduce(
+            (sum, criterion) => sum + criterion.score * criterion.weight,
+            0,
+          ) / totalWeight,
+        )
+      : 100
+  const criticalCount = gradedIssues.filter((issue) => issue.severity === 'critical').length
+  const majorCount = gradedIssues.filter((issue) => issue.severity === 'major').length
+  if (criticalCount > 0) score = Math.min(score, 59)
+  else if (majorCount >= 3) score = Math.min(score, 69)
+  else if (majorCount === 2) score = Math.min(score, 79)
+  else if (majorCount === 1) score = Math.min(score, 89)
+
+  const letter = letterForScore(score)
+  const findingText =
+    gradedIssues.length === 0
+      ? 'Every assessed check passed.'
+      : `${criticalCount} critical, ${majorCount} major, and ${
+          gradedIssues.length - criticalCount - majorCount
+        } minor findings determine this grade.`
+  const scopeText = pre
+    ? 'This grades sketch readiness only; climate, rivers, biomes, and tectonics are not assessed until Make sense.'
+    : 'This grades the derived world across the systems listed below.'
+
+  return {
+    scope,
+    letter,
+    score,
+    title: gradeTitle(scope, letter),
+    summary: `${findingText} ${scopeText}`,
+    criteria,
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 2. Pre-Make-sense helpers (mask only).
@@ -310,7 +553,12 @@ export function critiqueMask(
   const { width: w, height: h } = meta
   const issues: Issue[] = []
   if (mask.length !== w * h || w === 0 || h === 0) {
-    return { score: 100, issues: [], pre: true }
+    return {
+      score: 100,
+      grade: gradeCritique([], true),
+      issues: [],
+      pre: true,
+    }
   }
 
   // 3.1 — land share
@@ -534,6 +782,7 @@ export function critiqueMask(
   const baseScore = scoreFromIssues(sorted)
   return {
     score: applyScoreFloor(baseScore, sorted),
+    grade: gradeCritique(sorted, true),
     issues: sorted,
     pre: true,
   }
@@ -671,6 +920,7 @@ export function critiqueWorld(world: World): CritiqueResult {
   const sorted = sortIssuesBySeverity(issues)
   return {
     score: scoreFromIssues(sorted),
+    grade: gradeCritique(sorted, false),
     issues: sorted,
     pre: false,
   }

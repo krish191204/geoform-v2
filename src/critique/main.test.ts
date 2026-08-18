@@ -5,6 +5,7 @@ import {
   critiqueWorld,
   setPriorMask,
   clearPriorMask,
+  gradeCritique,
   SEVERITY_WEIGHTS,
   scoreFromIssues,
   sortIssuesBySeverity,
@@ -131,6 +132,74 @@ describe('scoreFromIssues', () => {
   })
 })
 
+describe('gradeCritique', () => {
+  it('awards A only when every assessed world check passes', () => {
+    const grade = gradeCritique([], false)
+    expect(grade.letter).toBe('A')
+    expect(grade.score).toBe(100)
+    expect(grade.scope).toBe('world')
+    expect(grade.criteria).toHaveLength(6)
+    expect(grade.criteria.every((criterion) => criterion.status === 'pass')).toBe(true)
+  })
+
+  it('makes any critical physical contradiction an F', () => {
+    const issue = {
+      ...mkIssue('critical'),
+      id: 'ice-desert-dualism',
+    }
+    const grade = gradeCritique([issue], false)
+    expect(grade.letter).toBe('F')
+    expect(grade.score).toBeLessThan(60)
+    expect(grade.criteria.find((criterion) => criterion.id === 'climate')?.status).toBe(
+      'fail',
+    )
+  })
+
+  it('caps one, two, and three major findings at B, C, and D', () => {
+    const major = (id: string) => ({ ...mkIssue('major'), id })
+    expect(gradeCritique([major('plate-stained-glass')], false).letter).toBe('B')
+    expect(
+      gradeCritique(
+        [major('plate-stained-glass'), major('uniform-biome')],
+        false,
+      ).letter,
+    ).toBe('C')
+    expect(
+      gradeCritique(
+        [
+          major('plate-stained-glass'),
+          major('uniform-biome'),
+          major('all-capitals'),
+        ],
+        false,
+      ).letter,
+    ).toBe('D')
+  })
+
+  it('grades sketch readiness without pretending the doodle is geography', () => {
+    const scopeNote = {
+      ...mkIssue('critical'),
+      id: 'not-a-planet-yet',
+    }
+    const grade = gradeCritique([scopeNote], true)
+    expect(grade.scope).toBe('sketch')
+    expect(grade.letter).toBe('A')
+    expect(grade.summary).toContain('readiness only')
+    expect(grade.summary).toContain('not assessed until Make sense')
+  })
+
+  it('keeps new unclassified checks grade-bearing', () => {
+    const grade = gradeCritique(
+      [{ ...mkIssue('major'), id: 'future-integrity-check' }],
+      false,
+    )
+    expect(grade.letter).toBe('B')
+    expect(grade.criteria.find((criterion) => criterion.id === 'other')?.issues).toHaveLength(
+      1,
+    )
+  })
+})
+
 describe('sortIssuesBySeverity', () => {
   it('puts critical first, then major, then minor', () => {
     const sorted = sortIssuesBySeverity([
@@ -165,6 +234,7 @@ describe('critiqueMask', () => {
   it('reports pre = true and runs on mask only', () => {
     const result = critiqueMask(makeMask(64, 32, 0), makeMeta({ width: 64, height: 32 }), 0.5)
     expect(result.pre).toBe(true)
+    expect(result.grade.scope).toBe('sketch')
     // Empty mask → land% = 0 → critical "mostly ocean".
     expect(result.issues.length).toBeGreaterThanOrEqual(1)
     expect(result.issues.some((i) => i.id === 'too-little-land')).toBe(true)
@@ -314,6 +384,7 @@ describe('critiqueWorld', () => {
     const w = makeWorld()
     const r = critiqueWorld(w)
     expect(r.pre).toBe(false)
+    expect(r.grade.scope).toBe('world')
   })
 
   it('runs on full World (uses temp/moist/elev/flux)', () => {

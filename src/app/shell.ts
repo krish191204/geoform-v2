@@ -516,7 +516,8 @@ export function mountApp(root: HTMLElement): void {
     for (const issue of result.issues) crit[issue.severity]++
     announceCoach({
       kind: 'critique.grade',
-      score: result.score,
+      letter: result.grade.letter,
+      scope: result.grade.scope,
       issueCount: result.issues.length,
       criticalCount: crit.critical,
       majorCount: crit.major,

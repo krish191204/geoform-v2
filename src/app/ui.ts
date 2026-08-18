@@ -10,7 +10,7 @@
  * work block. Buttons dispatch `app:*` events; the shell owns state.
  */
 
-import type { Layer, Stage, Tool } from '../world/types'
+import type { Issue, Layer, Stage, Tool } from '../world/types'
 import {
   APP_EVENTS,
   MAKE_SENSE_STEPS,
@@ -32,6 +32,7 @@ import { LAYER_CHIPS } from './atlas'
 import { SETTLEMENT_ROLE_LABEL } from '../sketch/settlements'
 import { LANDFORM_OPTIONS } from '../sketch/landforms'
 import { hasAnyLand } from './canvas_paint'
+import { gradeCritique, type GradeStatus } from '../critique/main'
 
 // ---------------------------------------------------------------------------
 // DOM helpers
@@ -367,7 +368,8 @@ export function updateInspector(refs: InspectorRefs, state: ShellStateView): voi
   const total = state.meta.width * state.meta.height
   const pct = total > 0 ? Math.round((land / total) * 100) : 0
   if (derived) {
-    refs.status.textContent = `Grounded world · ${pct}% land · score ${Math.round(state.score)}`
+    const grade = gradeCritique(state.issues, false)
+    refs.status.textContent = `Grounded world · ${pct}% land · grade ${grade.letter}`
   } else if (land > 0) {
     refs.status.textContent = `Sketch · ${land} land cells (${pct}%) · not geography yet`
   } else {
@@ -613,7 +615,48 @@ export function mountStageWork(state: ShellStateView): HTMLElement {
 }
 
 function mountCritiqueWork(state: ShellStateView): HTMLElement {
-  const scoreEl = el('div', { class: 'score' }, formatScore(state.score))
+  const grade = gradeCritique(state.issues, !state.world)
+  const criteria = el('ul', { class: 'grade-rubric', 'aria-label': 'Grade rubric' })
+  for (const criterion of grade.criteria) {
+    criteria.append(
+      el(
+        'li',
+        {
+          class: `grade-criterion grade-${criterion.status}`,
+          'data-grade-criterion': criterion.id,
+        },
+        el(
+          'div',
+          { class: 'grade-criterion-head' },
+          el('strong', {}, criterion.label),
+          el('span', { class: 'grade-status' }, gradeStatusLabel(criterion.status)),
+        ),
+        el('small', {}, criterion.description),
+        criterion.issues.length > 0
+          ? el(
+              'span',
+              { class: 'grade-findings' },
+              `${criterion.issues.length} finding${criterion.issues.length === 1 ? '' : 's'}`,
+            )
+          : '',
+      ),
+    )
+  }
+  const gradeCard = el(
+    'section',
+    {
+      class: `grade-card letter-${grade.letter.toLowerCase()}`,
+      'data-letter-grade': grade.letter,
+      'aria-label': `${grade.scope === 'sketch' ? 'Sketch readiness' : 'World'} grade ${grade.letter}`,
+    },
+    el('div', { class: 'grade-letter', 'aria-hidden': 'true' }, grade.letter),
+    el(
+      'div',
+      { class: 'grade-copy' },
+      el('strong', { class: 'grade-title' }, grade.title),
+      el('p', {}, grade.summary),
+    ),
+  )
   const issueList = el('ul', { class: 'issue-list' })
   renderIssues(issueList, state.issues)
   const makeSenseBtn = el('button', { type: 'button', class: 'primary' }, 'Make sense')
@@ -622,8 +665,14 @@ function mountCritiqueWork(state: ShellStateView): HTMLElement {
   return el(
     'div',
     {},
-    el('h3', {}, 'Score'),
-    scoreEl,
+    el('h3', {}, grade.scope === 'sketch' ? 'Sketch readiness grade' : 'World grade'),
+    gradeCard,
+    el(
+      'p',
+      { class: 'grade-method' },
+      'A–F is calculated from the named checks below. Any critical contradiction is an F.',
+    ),
+    criteria,
     el('h3', {}, 'Issues'),
     issueList,
     makeSenseBtn,
@@ -659,13 +708,18 @@ function mountWorldbuildWork(state: ShellStateView): HTMLElement {
   return el('div', {}, el('p', { class: 'cities-count' }, `Cities: ${n}`), list)
 }
 
-function formatScore(score: number): string {
-  return `${Math.round(score)}%`
+function gradeStatusLabel(status: GradeStatus): string {
+  return {
+    pass: 'Pass',
+    watch: 'Watch',
+    concern: 'Concern',
+    fail: 'Fail',
+  }[status]
 }
 
 function renderIssues(
   list: HTMLElement,
-  issues: readonly { id: string; severity: string; title: string; critique?: string }[],
+  issues: readonly Issue[],
 ): void {
   list.innerHTML = ''
   if (issues.length === 0) {
@@ -676,11 +730,23 @@ function renderIssues(
     list.append(
       el(
         'li',
-        { class: `issue issue-${issue.severity}` },
-        el('span', { class: 'issue-title' }, issue.title),
+        {
+          class: `issue issue-${issue.id === 'not-a-planet-yet' ? 'note' : issue.severity}`,
+        },
+        el(
+          'div',
+          { class: 'issue-head' },
+          el('span', { class: 'issue-title' }, issue.title),
+          el(
+            'span',
+            { class: 'issue-severity' },
+            issue.id === 'not-a-planet-yet' ? 'Scope' : issue.severity,
+          ),
+        ),
         issue.critique
           ? el('span', { class: 'issue-critique' }, issue.critique)
           : '',
+        el('span', { class: 'issue-fix' }, `Fix: ${issue.fix}`),
         el('span', { class: 'issue-id' }, issue.id),
       ),
     )
