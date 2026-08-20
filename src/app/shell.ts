@@ -43,7 +43,7 @@ import { inspectCell } from '../render/draw'
 import { createMaskBrushes, fireCommitHook } from '../sketch/maskBrushes'
 import { landformStampCopy, stampLandform } from '../sketch/landforms'
 import { placeCity, removeNearestCity } from '../sketch/worldbuild'
-import { inferSettlementRole, seedSettlements } from '../sketch/settlements'
+import { inferSettlementRole, seedSettlements, annotateSettlement } from '../sketch/settlements'
 import {
   makeSenseInline,
   provenanceFromResult,
@@ -55,6 +55,8 @@ import {
   saveWorld,
   serializeMask,
   serializeWorld,
+  downloadWorld,
+  downloadMask,
 } from '../world/persist'
 import { announce as announceCoach } from './coach'
 
@@ -299,6 +301,7 @@ export function mountApp(root: HTMLElement): void {
             )
           } else if (result.city) {
             result.city.role = inferSettlementRole(state.world, x, y)
+            annotateSettlement(state.world, result.city)
             announce('success', `${result.city.name} founded.`)
           }
         } else {
@@ -387,6 +390,7 @@ export function mountApp(root: HTMLElement): void {
                 )
               } else if (result.city) {
                 result.city.role = inferSettlementRole(state.world, x, y)
+                annotateSettlement(state.world, result.city)
                 announce('success', `${result.city.name} founded.`)
               }
             } else {
@@ -439,6 +443,7 @@ export function mountApp(root: HTMLElement): void {
       const json = serializeWorld(state.world)
       const bytes = json.length
       const ok = saveWorld(state.world)
+      if (!ok) downloadWorld(state.world)
       announceCoach(
         ok
           ? { kind: 'persist.saved', key: 'world', bytes, ok: true }
@@ -455,6 +460,18 @@ export function mountApp(root: HTMLElement): void {
       )
     } else {
       announceCoach({ kind: 'persist.failed', key: 'mask', reason: 'shape', bytes: 0 })
+    }
+  })
+
+  window.addEventListener(APP_EVENTS.DOWNLOAD, () => {
+    if (state.world) {
+      downloadWorld(state.world)
+      announce('success', 'Downloaded the world as JSON.')
+    } else if (flags.mask) {
+      downloadMask(state.meta, flags.mask)
+      announce('success', 'Downloaded the sketch mask as JSON.')
+    } else {
+      announce('warn', 'Nothing to download yet.')
     }
   })
 

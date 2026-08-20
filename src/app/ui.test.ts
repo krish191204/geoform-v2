@@ -49,6 +49,17 @@ describe('updateChrome aria-current', () => {
     expect(chrome.stageButtons['make-sense'].hasAttribute('aria-current')).toBe(false)
     expect(chrome.stageButtons.worldbuild.hasAttribute('aria-current')).toBe(false)
   })
+
+  it('offers Download JSON and disables it on empty ocean', () => {
+    const chrome = mountChrome()
+    expect(chrome.downloadBtn.textContent).toMatch(/Download JSON/)
+    updateChrome(chrome, view())
+    expect(chrome.downloadBtn.disabled).toBe(true)
+    const mask = new Float32Array(DEFAULT_META.width * DEFAULT_META.height)
+    mask[0] = 1
+    updateChrome(chrome, view({ mask }))
+    expect(chrome.downloadBtn.disabled).toBe(false)
+  })
 })
 
 describe('updateMapShell hint and HUD', () => {
@@ -108,9 +119,10 @@ describe('sketch vs leftover grounded world', () => {
     const map = mountMapShell()
     updateMapShell(map, view({ world, stage: 'sketch', layer: 'biome', mask }))
     const biome = map.overlay.querySelector('[data-look="biome"]') as HTMLButtonElement
-    expect(biome.title).toMatch(/Holdridge/i)
+    expect(biome.title).toMatch(/climate/i)
     expect(biome.disabled).toBe(true)
     expect(biome.classList.contains('active')).toBe(false)
+    expect(map.overlay.querySelector('.biome-legend')).toBeNull()
     expect(map.viewPlanet.disabled).toBe(true)
 
     const inspector = mountInspector()
@@ -126,6 +138,18 @@ describe('sketch vs leftover grounded world', () => {
     )
     expect(inspector.status.textContent).toContain('not geography yet')
     expect(inspector.status.textContent).not.toContain('Grounded world')
+  })
+
+  it('shows a grouped biome legend after Make sense', () => {
+    const world = { biome: ['tundra', 'rainforest', 'wetland', 'ocean'] } as unknown as World
+    const map = mountMapShell()
+    updateMapShell(map, view({ world, stage: 'worldbuild', layer: 'biome' }))
+    const legend = map.overlay.querySelector('.biome-legend')
+    expect(legend).toBeTruthy()
+    expect(legend?.textContent).toMatch(/Cold/)
+    expect(legend?.textContent).toMatch(/Forest/)
+    expect(legend?.textContent).toMatch(/Wet/)
+    expect(legend?.querySelectorAll('.biome-swatch').length).toBe(3)
   })
 })
 

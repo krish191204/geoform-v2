@@ -179,7 +179,7 @@ describe('draw', () => {
     for (let x = 0; x < width; x++) {
       const raw = hexToRgb(biomeColor(biome[x]))
       const got = pixel(img, x, 0)
-      // Biome is the Holdridge class plus hillshade, not a greener relief mix.
+      // Biome is the climate class plus hillshade, not a greener relief mix.
       expect(Math.abs(got[0] - raw[0])).toBeLessThan(120)
       expect(Math.abs(got[1] - raw[1])).toBeLessThan(120)
       expect(Math.abs(got[2] - raw[2])).toBeLessThan(120)
@@ -283,6 +283,21 @@ describe('inspectCell', () => {
     const view = inspectCell(world, 2, 2)
     expect(view.biome).toBe('—')
     expect(view.display.biome).toBe('—')
+  })
+
+  it('classifies sea cells as ice-edge, shelf, or open without a new chip', () => {
+    const world = makeWorld({ width: 24, height: 3 })
+    world.mask.fill(0)
+    world.mask[1 * 24 + 0] = 1
+    world.summer.fill(18)
+    world.summer[1 * 24 + 12] = -3
+    const shelf = inspectCell(world, 1, 1)
+    const ice = inspectCell(world, 12, 1)
+    const open = inspectCell(world, 8, 1)
+    expect(shelf.ocean).toBe('shelf')
+    expect(ice.ocean).toBe('ice-edge')
+    expect(open.ocean).toBe('open')
+    expect(shelf.display.ocean).toBe('Shelf')
   })
 
   it('formats temperatures as whole degrees Celsius', () => {

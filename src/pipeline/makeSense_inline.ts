@@ -20,10 +20,9 @@ import { assignPlatesUnderMask } from './plates'
 import { computeOrogeny } from './orogeny'
 import { computeSeasonalClimate } from './seasonalClimate'
 import { computeHydrology } from './hydrology'
-import { computeBiomes } from './biomes'
+import { computeBiomes, refineHydrologicBiomes } from './biomes'
 import { computeSuitability } from './suitability'
 import { groundCoast } from './groundCoast'
-import { announce } from '../app/coach'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -120,20 +119,13 @@ function packCell(i: number, width: number): number {
   return i
 }
 
-/** Record a step into the provenance trail, fire the callback, and announce. */
+/** Record a step into the provenance trail and fire the callback. */
 function recordStep(
   step: StepResult,
-  index: StepIndex,
+  _index: StepIndex,
   onStep: (step: StepResult) => void,
 ): void {
   onStep(step)
-  announce({
-    kind: 'makeSense.step',
-    stepName: step.stepName,
-    stepIndex: index,
-    totalSteps: TOTAL_STEPS,
-    elapsedMs: step.elapsedMs,
-  })
 }
 
 // ---------------------------------------------------------------------------
@@ -269,7 +261,14 @@ export async function makeSenseInline(
   // Accumulate downhill flux from the elevation field; threshold the
   // accumulated flux into a rivers mask (Uint8).
   const t4 = now()
-  const hydro = computeHydrology(orogeny.elev, land, width, height, threshold)
+  const hydro = computeHydrology(
+    orogeny.elev,
+    land,
+    width,
+    height,
+    threshold,
+    seasonal.summerMoist,
+  )
   const riverCount = sumUint8(hydro.rivers)
   const maxFlux = peakLand(hydro.flux, land, threshold)
   stage(
@@ -282,8 +281,7 @@ export async function makeSenseInline(
   )
 
   // -- Step 6: biomes ------------------------------------------------------
-  // Classify each land cell into one of the twelve atlas biomes from the
-  // seasonal climate + mask.
+  // Climate class first, then hydrologic overlays (wetland, mangrove).
   const t5 = now()
   const biomesResult = computeBiomes(
     seasonal.summer,
@@ -299,6 +297,16 @@ export async function makeSenseInline(
     // lapse, ocean inertia, and clamps).
     seasonal.tempMean,
   )
+  refineHydrologicBiomes(biomesResult.biome, {
+    elev: orogeny.elev,
+    flux: hydro.flux,
+    mask: land,
+    width,
+    height,
+    threshold,
+    tempMean: biomesResult.tempMean,
+    summerMoist: seasonal.summerMoist,
+  })
   const biomeCounts = new Map<string, number>()
   for (let i = 0; i < biomesResult.biome.length; i++) {
     if (land[i] >= threshold) {

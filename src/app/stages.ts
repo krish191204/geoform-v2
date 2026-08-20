@@ -169,6 +169,8 @@ export const APP_EVENTS = {
   STAGE_TRANSITION: 'app:stage-transition',
   /** Save button click. No detail. */
   SAVE: 'app:save',
+  /** Download JSON of the current mask or world. No detail. */
+  DOWNLOAD: 'app:download',
   /** Reset button click (Make-sense only). No detail. */
   RESET: 'app:reset',
   /** Clear sea — wipe mask + world, back to empty ocean. */

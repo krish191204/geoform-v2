@@ -16,7 +16,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { paintMask } from '../../sketch/paintMask'
 import { createMaskBrushes, fireCommitHook, DEFAULT_MIN_BIG_AREA } from '../../sketch/maskBrushes'
-import { saveMask, loadMask, serializeMask, deserializeMask, clearMask, hasMask } from '../../world/persist'
+import { saveMask, loadMask, serializeMask, deserializeMask, clearMask, hasMask, hasWorld, clearWorld } from '../../world/persist'
 import { makeSenseInline } from '../makeSense_inline'
 import {
   checkIceDesertDualism,
@@ -90,6 +90,11 @@ function toWorld(result: Awaited<ReturnType<typeof makeSenseInline>>, meta: Worl
 // ---------------------------------------------------------------------------
 
 describe('smoke: bootEmpty', () => {
+  beforeEach(() => {
+    clearMask()
+    clearWorld()
+  })
+
   it('returns a WorldMeta with sensible defaults', () => {
     const { meta } = bootEmpty()
     expect(meta.seed).toBe(DEFAULT_META.seed)
@@ -109,12 +114,10 @@ describe('smoke: bootEmpty', () => {
     expect(mask.every((v) => v === 0)).toBe(true)
   })
 
-  it('respects overrides (small grid)', () => {
-    const { meta, mask } = bootEmpty({ seed: 7, width: 16, height: 8 })
-    expect(meta.seed).toBe(7)
-    expect(meta.width).toBe(16)
-    expect(meta.height).toBe(8)
-    expect(mask.length).toBe(16 * 8)
+  it('does not load a derived world on boot', () => {
+    const { mask } = bootEmpty()
+    expect(hasWorld()).toBe(false)
+    expect(mask.every((v) => v === 0)).toBe(true)
   })
 })
 

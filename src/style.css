@@ -420,6 +420,35 @@ button.primary:hover {
   z-index: 2;
 }
 
+.biome-legend {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.85rem;
+  max-width: 22rem;
+  padding: 0.4rem 0.55rem;
+  background: rgba(231, 224, 210, 0.9);
+  border: 1px solid rgba(28, 34, 28, 0.12);
+  border-radius: 8px;
+}
+
+.biome-legend-group {
+  display: flex;
+  align-items: center;
+  gap: 0.28rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  color: #3a4038;
+}
+
+.biome-swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+  border: 1px solid rgba(28, 34, 28, 0.28);
+}
+
 .loading {
   position: absolute;
   inset: 0;

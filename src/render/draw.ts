@@ -18,6 +18,7 @@
  * no cached aggregates masquerading as fresh data.
  */
 import { biomeColor, type Layer, type World } from '../world/types'
+import { classifyOcean, type OceanClass } from '../pipeline/oceanClass'
 
 // ---------------------------------------------------------------------------
 // 1. Types
@@ -56,6 +57,8 @@ export interface CellInspectorView {
   moistWinter: number | undefined
   /** Per-cell biome name. */
   biome: string
+  /** Inspector-only sea class. Null on land. */
+  ocean: OceanClass | null
   /** Pre-formatted strings; every entry is "—" if the underlying field is missing. */
   display: {
     elev: string
@@ -66,6 +69,7 @@ export interface CellInspectorView {
     moistSummer: string
     moistWinter: string
     biome: string
+    ocean: string
   }
 }
 
@@ -117,6 +121,9 @@ export function inspectCell(world: World, x: number, y: number): CellInspectorVi
   const ms = summerMoist[i]
   const mw = winterMoist[i]
   const b = typeof biome[i] === 'string' && biome[i].length > 0 ? biome[i] : undefined
+  const ocean = classifyOcean(world.mask, world.summer, meta.width, meta.height, meta.threshold, x, y)
+  const oceanLabel =
+    ocean === 'ice-edge' ? 'Ice edge' : ocean === 'shelf' ? 'Shelf' : ocean === 'open' ? 'Open ocean' : '—'
   const rangeLabel =
     Number.isFinite(ts) && Number.isFinite(tw)
       ? `${Math.round(ts) - Math.round(tw)}°C`
@@ -131,6 +138,7 @@ export function inspectCell(world: World, x: number, y: number): CellInspectorVi
     moistSummer: isDefined(ms) ? ms : undefined,
     moistWinter: isDefined(mw) ? mw : undefined,
     biome: b ?? '—',
+    ocean,
     display: {
       elev: fmtMeters(e),
       plateId: fmtPlateId(pid),
@@ -140,6 +148,7 @@ export function inspectCell(world: World, x: number, y: number): CellInspectorVi
       moistSummer: fmtMoist(ms),
       moistWinter: fmtMoist(mw),
       biome: b ?? '—',
+      ocean: oceanLabel,
     },
   }
 }
@@ -460,7 +469,7 @@ function layerFill(
       // Temperature includes ocean (SST). Do not hide climate under a sea fill.
       return tempColor(season === 'summer' ? world.summer[i] : world.winter[i])
     case 'biome':
-      // One message: Holdridge class. Hillshade comes later; do not tint deserts green.
+      // One message: climate class. Hillshade comes later; do not tint deserts green.
       return hexToRgb(biomeColor(world.biome[i] ?? 'ocean'))
     case 'suitability':
       return ocean

@@ -10,7 +10,8 @@
  * work block. Buttons dispatch `app:*` events; the shell owns state.
  */
 
-import type { Layer, Stage, Tool } from '../world/types'
+import type { City, Layer, Stage, Tool } from '../world/types'
+import { groupedBiomeLegend } from '../world/types'
 import {
   APP_EVENTS,
   MAKE_SENSE_STEPS,
@@ -29,7 +30,7 @@ import {
   type ViewChangeDetail,
 } from './stages'
 import { LAYER_CHIPS } from './atlas'
-import { SETTLEMENT_ROLE_LABEL } from '../sketch/settlements'
+import { SETTLEMENT_PORT_LABEL, SETTLEMENT_RANK_LABEL, SETTLEMENT_ROLE_LABEL } from '../sketch/settlements'
 import { LANDFORM_OPTIONS } from '../sketch/landforms'
 import { hasAnyLand } from './canvas_paint'
 
@@ -70,6 +71,7 @@ export interface ChromeRefs {
   readonly root: HTMLElement
   readonly stageButtons: Record<Stage, HTMLButtonElement>
   readonly saveBtn: HTMLButtonElement
+  readonly downloadBtn: HTMLButtonElement
   readonly clearSeaBtn: HTMLButtonElement
   readonly saveMeta: HTMLElement
 }
@@ -80,6 +82,16 @@ export function mountChrome(): ChromeRefs {
   const brand = el('a', { class: 'brand-lock', href: '/' }, 'Geoform')
   const saveBtn = el('button', { type: 'button', class: 'action-btn' }, 'Save')
   saveBtn.addEventListener('click', () => fire(APP_EVENTS.SAVE))
+  const downloadBtn = el(
+    'button',
+    {
+      type: 'button',
+      class: 'action-btn',
+      title: 'Download JSON — the library until a cloud project exists',
+    },
+    'Download JSON',
+  )
+  downloadBtn.addEventListener('click', () => fire(APP_EVENTS.DOWNLOAD))
   const clearSeaBtn = el(
     'button',
     { type: 'button', class: 'primary', title: 'Wipe the canvas back to empty ocean' },
@@ -93,7 +105,7 @@ export function mountChrome(): ChromeRefs {
     { class: 'topnav', 'aria-label': 'Geoform' },
     brand,
     el('p', { class: 'tagline' }, 'Draw land. We ground it in geography.'),
-    el('div', { class: 'nav-trailing' }, saveBtn, clearSeaBtn, saveMeta),
+    el('div', { class: 'nav-trailing' }, saveBtn, downloadBtn, clearSeaBtn, saveMeta),
   )
 
   const rail = el('nav', { class: 'ux-stage-rail', 'aria-label': 'Worldbuilding stages' })
@@ -113,7 +125,7 @@ export function mountChrome(): ChromeRefs {
   }
 
   const root = el('header', { class: 'chrome' }, topnav, rail)
-  return { root, stageButtons, saveBtn, clearSeaBtn, saveMeta }
+  return { root, stageButtons, saveBtn, downloadBtn, clearSeaBtn, saveMeta }
 }
 
 export function updateChrome(refs: ChromeRefs, state: ShellStateView): void {
@@ -127,6 +139,7 @@ export function updateChrome(refs: ChromeRefs, state: ShellStateView): void {
     else btn.removeAttribute('aria-current')
   }
   refs.clearSeaBtn.disabled = state.isProcessing
+  refs.downloadBtn.disabled = !state.world && !state.mask
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +239,27 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
       fire(APP_EVENTS.LAYER_CHANGE, detail)
     })
     refs.overlay.append(btn)
+  }
+
+  if (derived && state.layer === 'biome' && state.world) {
+    const groups = groupedBiomeLegend(state.world.biome)
+    if (groups.length) {
+      const legend = el('div', { class: 'biome-legend', 'aria-label': 'Biome legend' })
+      for (const group of groups) {
+        const row = el('div', { class: 'biome-legend-group' }, el('span', {}, group.label))
+        for (const entry of group.entries) {
+          row.append(
+            el('span', {
+              class: 'biome-swatch',
+              title: entry.label,
+              style: `background:${entry.color}`,
+            }),
+          )
+        }
+        legend.append(row)
+      }
+      refs.overlay.append(legend)
+    }
   }
 
   refs.seasonBar.replaceChildren()
@@ -585,18 +619,31 @@ function mountMakeSenseWork(state: ShellStateView): HTMLElement {
   return el('div', {}, el('h3', {}, 'Pipeline'), progressList, worldbuildBtn)
 }
 
+function cityListBlurb(city: City): string {
+  const bits: string[] = []
+  if (city.role) bits.push(SETTLEMENT_ROLE_LABEL[city.role])
+  if (city.port && city.port !== 'none') {
+    if (city.role !== 'fishing' || city.port === 'river') {
+      bits.push(SETTLEMENT_PORT_LABEL[city.port])
+    }
+  }
+  if (city.rank && city.rank !== 'seat') bits.push(SETTLEMENT_RANK_LABEL[city.rank].toLowerCase())
+  if (city.oasis) bits.push('oasis')
+  bits.push(`${city.x}, ${city.y}`)
+  return bits.join(' · ')
+}
+
 function mountWorldbuildWork(state: ShellStateView): HTMLElement {
   const n = state.world ? state.world.cities.length : 0
   const list = el('ul', { class: 'city-list' })
   if (state.world) {
     for (const city of state.world.cities) {
-      const role = city.role ? SETTLEMENT_ROLE_LABEL[city.role] : ''
       list.append(
         el(
           'li',
           {},
           el('span', {}, city.name),
-          el('span', {}, role ? `${role} · ${city.x}, ${city.y}` : `${city.x}, ${city.y}`),
+          el('span', {}, cityListBlurb(city)),
         ),
       )
     }
@@ -679,7 +726,13 @@ export function worldInspectHtml(display: {
   moistSummer: string
   moistWinter: string
   biome: string
+  ocean?: string
 }, x: number, y: number, land: boolean): string {
+  const oceanRow =
+    !land && display.ocean && display.ocean !== '—'
+      ? `
+      <dt>Ocean</dt><dd>${display.ocean}</dd>`
+      : ''
   return `
     <div class="inspect-head">
       <strong>${x}, ${y}</strong>
@@ -693,7 +746,7 @@ export function worldInspectHtml(display: {
       <dt>Range</dt><dd>${display.tempRange}</dd>
       <dt>Summer moisture</dt><dd>${display.moistSummer}</dd>
       <dt>Winter moisture</dt><dd>${display.moistWinter}</dd>
-      <dt>Biome</dt><dd>${display.biome}</dd>
+      <dt>Biome</dt><dd>${display.biome}</dd>${oceanRow}
     </dl>
   `
 }

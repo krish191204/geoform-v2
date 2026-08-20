@@ -6,7 +6,7 @@
  * is not an empty map.
  */
 
-import type { CellBiome, City, SettlementRole, World } from '../world/types'
+import type { CellBiome, City, SettlementPort, SettlementRank, SettlementRole, World } from '../world/types'
 import { idx } from '../world/types'
 import { cityNameGenerator } from './worldbuild'
 
@@ -18,6 +18,17 @@ export const SETTLEMENT_ROLE_LABEL: Record<SettlementRole, string> = {
   hunting: 'Hunting camp',
   trade: 'Trade town',
   pastoral: 'Pastoral town',
+}
+
+export const SETTLEMENT_RANK_LABEL: Record<SettlementRank, string> = {
+  village: 'Village',
+  town: 'Town',
+  seat: 'Seat',
+}
+
+export const SETTLEMENT_PORT_LABEL: Record<Exclude<SettlementPort, 'none'>, string> = {
+  river: 'river port',
+  sea: 'sea port',
 }
 
 const ROLES: readonly SettlementRole[] = [
@@ -130,11 +141,13 @@ export function scoreSettlementRole(
         b === 'steppe' ||
         b === 'savanna' ||
         b === 'temperate-forest' ||
+        b === 'temperate-deciduous' ||
         b === 'mediterranean' ||
         b === 'rainforest'
       ) {
         score += 0.28
       }
+      if (isOasisSite(world, x, y)) score += 0.32
       if (river > 8) score += 0.12
       if (e < 1200) score += 0.1
       break
@@ -147,12 +160,15 @@ export function scoreSettlementRole(
       if (e > 800) score += 0.12
       break
     case 'hunting':
-      if (b === 'taiga' || b === 'tundra' || b === 'temperate-forest') score += 0.3
+      if (b === 'taiga' || b === 'tundra' || b === 'temperate-forest' || b === 'temperate-deciduous') {
+        score += 0.3
+      }
       if (e > 200 && e < 1800) score += 0.1
       break
     case 'trade':
       if (river > 8) score += 0.22
       if (coast) score += 0.18
+      if (isOasisSite(world, x, y)) score += 0.2
       if (suit > 0.45) score += 0.1
       break
     case 'pastoral':
@@ -190,6 +206,51 @@ export function inferSettlementRole(
     }
   }
   return best
+}
+
+/** Hinterland rank. Seat of power is always a seat; river + suit makes a town. */
+export function inferSettlementRank(
+  world: World,
+  x: number,
+  y: number,
+  role: SettlementRole,
+): SettlementRank {
+  if (role === 'seat_of_power') return 'seat'
+  const { width: w } = world.meta
+  const i = idx(w, x, y)
+  const suit = world.suitability[i]
+  const river = riverAt(world, x, y)
+  const hinterland = suit * 0.6 + Math.min(1, river / 40) * 0.4
+  return hinterland >= 0.55 ? 'town' : 'village'
+}
+
+/** Sea if the cell sees ocean; river if flux is a real stream; else none. */
+export function inferSettlementPort(world: World, x: number, y: number): SettlementPort {
+  if (nearOcean(world, x, y)) return 'sea'
+  return riverAt(world, x, y) > 8 ? 'river' : 'none'
+}
+
+/** Desert plus local moisture — an oasis, still one of the seven jobs. */
+export function isOasisSite(world: World, x: number, y: number): boolean {
+  const { width: w } = world.meta
+  const i = idx(w, x, y)
+  if (!isLand(world, i)) return false
+  const b = biomeAt(world, i)
+  if (b !== 'hot-desert' && b !== 'boreal-desert') return false
+  return world.moistMean[i] > 0.22 || riverAt(world, x, y) > 4
+}
+
+/** Fill rank and port from geography. Infers role when missing. */
+export function annotateSettlement(
+  world: World,
+  city: City,
+  opts: { allowSeat?: boolean } = {},
+): City {
+  if (!city.role) city.role = inferSettlementRole(world, city.x, city.y, opts)
+  city.rank = inferSettlementRank(world, city.x, city.y, city.role)
+  city.port = inferSettlementPort(world, city.x, city.y)
+  city.oasis = isOasisSite(world, city.x, city.y)
+  return city
 }
 
 /** Largest-remainder mix of non-seat roles for `remaining` slots. */
@@ -310,6 +371,7 @@ export function suggestSettlementsCovering(world: World, coverage = DEFAULT_COVE
       seasonal: c.score,
       role,
     }
+    annotateSettlement(world, city)
     used.add(city.name)
     occupied.add(`${c.x},${c.y}`)
     placed.push(city)
@@ -364,8 +426,12 @@ export function demoteExtraSeats(cities: City[], world: World): void {
       continue
     }
     city.role = inferSettlementRole(view, city.x, city.y, { allowSeat: false })
+    annotateSettlement(view, city)
   }
-  if (!seat && cities[0]) cities[0].role = 'seat_of_power'
+  if (!seat && cities[0]) {
+    cities[0].role = 'seat_of_power'
+    annotateSettlement(view, cities[0])
+  }
 }
 
 /** Found towns if the world has none. Returns how many were added. */

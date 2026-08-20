@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { ALPINE_ELEV_M, classifyBiome, computeBiomes } from './biomes'
+import { ALPINE_ELEV_M, classifyBiome, computeBiomes, refineHydrologicBiomes, WETLAND_FLUX_MIN } from './biomes'
 import type { BiomesResult, CellBiome } from './biomes'
 
 // ---------------------------------------------------------------------------
@@ -58,8 +58,12 @@ describe('classifyBiome — spec table', () => {
     expect(classifyBiome(20, 8, 0.35)).toBe('mediterranean')
   })
 
-  it('mid-latitude wet and seasonal is temperate forest', () => {
-    expect(classifyBiome(15, 20, 0.6)).toBe('temperate-forest')
+  it('mid-latitude wet and seasonal is deciduous forest', () => {
+    expect(classifyBiome(15, 20, 0.6)).toBe('temperate-deciduous')
+  })
+
+  it('mid-latitude wet and mild is evergreen forest', () => {
+    expect(classifyBiome(15, 8, 0.6)).toBe('temperate-forest')
   })
 
   it('cold dry in the boreal range is boreal desert, not taiga', () => {
@@ -317,6 +321,79 @@ describe('classifyBiome — Donald bar invariants', () => {
         expect(classifyBiome(tm, 10, mo, 4000)).toBe('alpine')
       }
     }
+  })
+})
+
+describe('refineHydrologicBiomes', () => {
+  it('marks a flat high-flux cell as wetland', () => {
+    const w = 5
+    const h = 5
+    const n = w * h
+    const biome = Array.from({ length: n }, () => 'temperate-forest' as const)
+    const elev = new Float32Array(n).fill(20)
+    const flux = new Float32Array(n)
+    flux[2 * w + 2] = WETLAND_FLUX_MIN + 4
+    const mask = new Float32Array(n).fill(1)
+    const tempMean = new Float32Array(n).fill(12)
+    const summerMoist = new Float32Array(n).fill(0.5)
+    refineHydrologicBiomes(biome, {
+      elev,
+      flux,
+      mask,
+      width: w,
+      height: h,
+      threshold: 0.5,
+      tempMean,
+      summerMoist,
+    })
+    expect(biome[2 * w + 2]).toBe('wetland')
+    expect(biome[0]).toBe('temperate-forest')
+  })
+
+  it('does not turn ice into wetland', () => {
+    const w = 3
+    const h = 3
+    const n = w * h
+    const biome = Array.from({ length: n }, () => 'ice' as const)
+    const elev = new Float32Array(n).fill(10)
+    const flux = new Float32Array(n).fill(WETLAND_FLUX_MIN + 10)
+    const mask = new Float32Array(n).fill(1)
+    refineHydrologicBiomes(biome, {
+      elev,
+      flux,
+      mask,
+      width: w,
+      height: h,
+      threshold: 0.5,
+      tempMean: new Float32Array(n).fill(-12),
+      summerMoist: new Float32Array(n).fill(0.6),
+    })
+    expect(biome.every((b) => b === 'ice')).toBe(true)
+  })
+
+  it('marks a warm wet coast as mangrove', () => {
+    const w = 8
+    const h = 3
+    const n = w * h
+    const biome = Array.from({ length: n }, () => 'rainforest' as const)
+    const elev = new Float32Array(n).fill(12)
+    const flux = new Float32Array(n)
+    const mask = new Float32Array(n).fill(1)
+    for (let y = 0; y < h; y++) mask[y * w] = 0
+    const tempMean = new Float32Array(n).fill(24)
+    const summerMoist = new Float32Array(n).fill(0.7)
+    refineHydrologicBiomes(biome, {
+      elev,
+      flux,
+      mask,
+      width: w,
+      height: h,
+      threshold: 0.5,
+      tempMean,
+      summerMoist,
+    })
+    expect(biome[1 * w + 1]).toBe('mangrove')
+    expect(biome[1 * w + 4]).toBe('rainforest')
   })
 })
 

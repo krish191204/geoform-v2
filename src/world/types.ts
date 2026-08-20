@@ -85,6 +85,12 @@ export type SettlementRole =
   | 'trade'
   | 'pastoral'
 
+/** Hinterland rank. Orthogonal to `role` — a fishing port can be a village. */
+export type SettlementRank = 'village' | 'town' | 'seat'
+
+/** Port geography. `none` for inland sites without a river. */
+export type SettlementPort = 'none' | 'river' | 'sea'
+
 export interface City {
   x: number
   y: number
@@ -93,13 +99,19 @@ export interface City {
   seasonal: number
   /** What this town does — set when auto-placed or inferred on found. */
   role?: SettlementRole
+  /** Village / town / seat from hinterland, not a new job. */
+  rank?: SettlementRank
+  /** River vs sea from flux vs coast. */
+  port?: SettlementPort
+  /** Desert cell with local moisture — not a new job. */
+  oasis?: boolean
 }
 
 // ---------------------------------------------------------------------------
 // 11. Biome palette
 // ---------------------------------------------------------------------------
 
-/** The twelve land biomes a writer can actually see on the atlas. */
+/** Land biomes the atlas can paint. Climate first, then hydrologic overlays. */
 export type BiomeId =
   | 'ice'
   | 'polar-desert'
@@ -108,11 +120,14 @@ export type BiomeId =
   | 'boreal-desert'
   | 'steppe'
   | 'temperate-forest'
+  | 'temperate-deciduous'
   | 'rainforest'
   | 'savanna'
   | 'hot-desert'
   | 'mediterranean'
   | 'alpine'
+  | 'wetland'
+  | 'mangrove'
 
 /** Per-cell biome value: a land biome, or `ocean` for cells below sea level. */
 export type CellBiome = BiomeId | 'ocean'
@@ -135,8 +150,8 @@ export interface BiomeSpec {
 }
 
 /**
- * The atlas palette. Twelve honest entries keyed off
- * (`tempMean`, `tempRange`, `summerMoist`) — no duplicates, no aliases.
+ * The atlas palette. Climate boxes plus hydrologic overlays (wetland, mangrove).
+ * Not Holdridge — three climate numbers plus flux/coast, grouped in the legend.
  */
 export const BIOME_COLORS: readonly BiomeSpec[] = [
   {
@@ -197,11 +212,19 @@ export const BIOME_COLORS: readonly BiomeSpec[] = [
   },
   {
     id: 'temperate-forest',
-    label: 'Temperate forest',
+    label: 'Evergreen forest',
     meanTempC: [6, 18],
-    tempRangeC: [0, 60],
+    tempRangeC: [0, 16],
     moistIdx: [0.4, 1],
     color: '#3d6b45',
+  },
+  {
+    id: 'temperate-deciduous',
+    label: 'Deciduous forest',
+    meanTempC: [6, 18],
+    tempRangeC: [16, 60],
+    moistIdx: [0.4, 1],
+    color: '#6b8a42',
   },
   {
     id: 'hot-desert',
@@ -228,6 +251,22 @@ export const BIOME_COLORS: readonly BiomeSpec[] = [
     color: '#1f4d38',
   },
   {
+    id: 'wetland',
+    label: 'Wetland',
+    meanTempC: [0, 40],
+    tempRangeC: [0, 60],
+    moistIdx: [0.25, 1],
+    color: '#3d5c48',
+  },
+  {
+    id: 'mangrove',
+    label: 'Mangrove',
+    meanTempC: [18, 40],
+    tempRangeC: [0, 20],
+    moistIdx: [0.35, 1],
+    color: '#2a5c4a',
+  },
+  {
     id: 'alpine',
     label: 'Alpine',
     meanTempC: [-60, 40],
@@ -236,6 +275,49 @@ export const BIOME_COLORS: readonly BiomeSpec[] = [
     color: '#8a8f8c',
   },
 ]
+
+/** Legend groups — four messages, subtypes as swatches, not a chip per class. */
+export const BIOME_GROUPS: readonly {
+  id: 'cold' | 'dry' | 'forest' | 'wet'
+  label: string
+  ids: readonly BiomeId[]
+}[] = [
+  { id: 'cold', label: 'Cold', ids: ['ice', 'polar-desert', 'tundra', 'alpine'] },
+  {
+    id: 'dry',
+    label: 'Dry',
+    ids: ['hot-desert', 'boreal-desert', 'steppe', 'savanna', 'mediterranean'],
+  },
+  {
+    id: 'forest',
+    label: 'Forest',
+    ids: ['taiga', 'temperate-forest', 'temperate-deciduous', 'rainforest'],
+  },
+  { id: 'wet', label: 'Wet', ids: ['wetland', 'mangrove'] },
+]
+
+/** Groups that actually appear on this grid — hide empty buckets. */
+export function groupedBiomeLegend(biome: readonly CellBiome[]): {
+  label: string
+  entries: readonly { id: BiomeId; label: string; color: string }[]
+}[] {
+  const present = new Set<BiomeId>()
+  for (const b of biome) {
+    if (b !== 'ocean') present.add(b)
+  }
+  const out: { label: string; entries: { id: BiomeId; label: string; color: string }[] }[] = []
+  for (const g of BIOME_GROUPS) {
+    const entries = g.ids
+      .filter((id) => present.has(id))
+      .map((id) => ({
+        id,
+        label: BIOME_BY_ID[id].label,
+        color: BIOME_BY_ID[id].color,
+      }))
+    if (entries.length) out.push({ label: g.label, entries })
+  }
+  return out
+}
 
 /** Ocean is not a biome — it falls out of the mask — but it still needs a color. */
 export const OCEAN_COLOR = '#1f5f74'

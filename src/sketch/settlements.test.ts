@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { inferSettlementRole, mixQuotas, seedSettlements, suggestSettlementsCovering, demoteExtraSeats } from './settlements'
+import { inferSettlementRole, mixQuotas, seedSettlements, suggestSettlementsCovering, demoteExtraSeats, isOasisSite } from './settlements'
 import { makeContinentWorld } from '../pipeline/__tests__/fixtures'
 import { makeSenseInline, worldFromMakeSense } from '../pipeline/makeSense'
 
@@ -34,6 +34,13 @@ describe('seedSettlements', () => {
     }
     const names = new Set(world.cities.map((c) => c.name))
     expect(names.size).toBe(world.cities.length)
+    expect(world.cities.every((c) => c.rank === 'village' || c.rank === 'town' || c.rank === 'seat')).toBe(
+      true,
+    )
+    expect(world.cities.every((c) => c.port === 'none' || c.port === 'river' || c.port === 'sea')).toBe(
+      true,
+    )
+    expect(world.cities.filter((c) => c.rank === 'seat')).toHaveLength(1)
 
     expect(seedSettlements(world)).toHaveLength(0)
     expect(world.cities.length).toBe(added.length)
@@ -118,8 +125,8 @@ describe('seedSettlements', () => {
     )
     const ca = suggestSettlementsCovering(a)
     const cb = suggestSettlementsCovering(b)
-    expect(ca.map((c) => `${c.x},${c.y},${c.name},${c.role}`)).toEqual(
-      cb.map((c) => `${c.x},${c.y},${c.name},${c.role}`),
+    expect(ca.map((c) => `${c.x},${c.y},${c.name},${c.role},${c.rank},${c.port}`)).toEqual(
+      cb.map((c) => `${c.x},${c.y},${c.name},${c.role},${c.rank},${c.port}`),
     )
   })
 
@@ -151,5 +158,45 @@ describe('seedSettlements', () => {
     demoteExtraSeats(world.cities, world)
     expect(world.cities.filter((c) => c.role === 'seat_of_power')).toHaveLength(1)
     expect(world.cities.some((c) => c.role && c.role !== 'seat_of_power')).toBe(true)
+  })
+
+  it('treats a moist desert cell as an oasis, still one of the seven jobs', async () => {
+    const tw = makeContinentWorld()
+    const meta = {
+      seed: 42,
+      width: tw.width,
+      height: tw.height,
+      planetRadiusKm: tw.planetRadiusKm,
+      obliquityDeg: tw.obliquityDeg,
+      seaLevel: 0.5,
+      threshold: 0.5,
+    }
+    const world = worldFromMakeSense(
+      await makeSenseInline({ meta, mask: new Float32Array(tw.mask) }, () => {}),
+      meta,
+      tw.mask,
+    )
+    let x = 0
+    let y = 0
+    for (let i = 0; i < world.mask.length; i++) {
+      if (world.mask[i] < world.meta.threshold) continue
+      x = i % world.meta.width
+      y = (i - x) / world.meta.width
+      world.biome[i] = 'hot-desert'
+      world.moistMean[i] = 0.4
+      break
+    }
+    expect(isOasisSite(world, x, y)).toBe(true)
+    const i = y * world.meta.width + x
+    world.moistMean[i] = 0
+    for (let dy = -2; dy <= 2; dy++) {
+      const ny = y + dy
+      if (ny < 0 || ny >= world.meta.height) continue
+      for (let dx = -2; dx <= 2; dx++) {
+        const nx = ((x + dx) % world.meta.width + world.meta.width) % world.meta.width
+        world.flux[ny * world.meta.width + nx] = 0
+      }
+    }
+    expect(isOasisSite(world, x, y)).toBe(false)
   })
 })

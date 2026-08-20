@@ -18,7 +18,7 @@ export type { Season }
 
 export const LAYER_CHIPS: readonly { id: Layer; label: string; title: string }[] = [
   { id: 'relief', label: 'Relief', title: 'Landform, hillshade, and rivers' },
-  { id: 'biome', label: 'Biome', title: 'Holdridge class' },
+  { id: 'biome', label: 'Biome', title: 'Climate class, grouped' },
   { id: 'moisture', label: 'Moisture', title: 'Precipitation, 0–1' },
   { id: 'temperature', label: 'Temperature', title: 'Mean temperature, °C' },
   { id: 'suitability', label: 'Settle', title: 'Where people can live' },
