@@ -98,6 +98,7 @@ describe('pipeline goldens', () => {
       expect(a.provenance.maskDeltaPct).toBe(b.provenance.maskDeltaPct)
       // Every physics array is bitwise identical.
       expect(Array.from(a.elev)).toEqual(Array.from(b.elev))
+      expect(Array.from(a.mask)).toEqual(Array.from(b.mask))
       expect(Array.from(a.summer)).toEqual(Array.from(b.summer))
       expect(Array.from(a.winter)).toEqual(Array.from(b.winter))
       expect(Array.from(a.summerMoist)).toEqual(Array.from(b.summerMoist))

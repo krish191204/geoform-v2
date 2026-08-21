@@ -5,8 +5,9 @@
  *   1. Produce a ~2000 m peak at a single `convergent-cc` boundary.
  *   2. Produce both a trench (ocean side) and an arc (land side) at a
  *      single `convergent-oc` boundary.
- *   3. Give land cells a base elevation of 200 m even with no boundaries.
- *   4. Keep inland craton noise under 100 m.
+ *   3. Give land a ~200 m platform plus rolling hills when there are no
+ *      plate boundaries — not a pancake, not alps, never below sea level.
+ *   4. Keep inland craton coherent (high lag-1 correlation), not salt-and-pepper.
  *   5. Be deterministic for identical inputs.
  */
 
@@ -110,17 +111,16 @@ describe('computeOrogeny', () => {
     }
     const { elev } = computeOrogeny(plates, mask, WIDTH, HEIGHT, THRESHOLD)
 
-    // The boundary cell sits inside the Gaussian's centre, so after
-    // smoothing it should still be very close to 2000 m, well above the
-    // base land elevation of 200 m.
-    expect(elev[bi]).toBeGreaterThan(1500)
-    expect(elev[bi]).toBeLessThan(2500)
+    // The boundary cell sits inside the Gaussian's centre. Ridge texture
+    // and a short erosion pass sit on top of the ~2000 m stamp, so the
+    // peak is still a mountain and still well below Himalaya-cap.
+    expect(elev[bi]).toBeGreaterThan(1400)
+    expect(elev[bi]).toBeLessThan(3200)
 
-    // The peak in the whole field should be at the boundary cell.
     let maxElev = 0
     for (let i = 0; i < elev.length; i++) if (elev[i] > maxElev) maxElev = elev[i]
-    expect(maxElev).toBeGreaterThan(1500)
-    expect(maxElev).toBeLessThan(2500)
+    expect(maxElev).toBeGreaterThan(1400)
+    expect(maxElev).toBeLessThan(3200)
   })
 
   it('produces a trench and an arc at a single convergent-oc boundary', () => {
@@ -145,7 +145,7 @@ describe('computeOrogeny', () => {
     expect(elev[ocean]).toBeLessThan(-200)
   })
 
-  it('still has 200 m base elevation on land with no boundaries', () => {
+  it('still has a low platform on land with no boundaries', () => {
     const { mask } = makeContinentWorld()
     const plates = emptyPlates()
     const { elev } = computeOrogeny(plates, mask, WIDTH, HEIGHT, THRESHOLD)
@@ -162,36 +162,68 @@ describe('computeOrogeny', () => {
       }
     }
 
-    // Base land elev is 200 m; with shelf bumps and craton noise the
-    // minimum is 200 m, the maximum is bounded by 200 + 50 + 100 = 350 m.
-    expect(landMin).toBeGreaterThanOrEqual(200)
-    expect(landMax).toBeLessThanOrEqual(400)
+    // Base land elev is 200 m plus rolling fBm hills (a few hundred
+    // metres) and a 50 m shelf. Erosion may nick the floor; land must
+    // still sit above sea level and must not become alpine without plates.
+    expect(landMin).toBeGreaterThanOrEqual(0)
+    expect(landMax).toBeGreaterThan(250)
+    expect(landMax).toBeLessThan(1200)
 
-    // Ocean stays at sea level (0 m). Even after two box blurs with the
-    // shelf bump leaking slightly, the ocean floor should be very close
-    // to zero.
+    // Ocean stays at sea level (0 m). Mask-aware blur + land-only erosion
+    // must not leak hills into the sea.
     expect(oceanMax).toBeLessThan(5)
   })
 
-  it('keeps inland craton noise below 100 m', () => {
+  it('keeps inland craton as coherent rolling hills, not salt-and-pepper', () => {
     const { mask } = makeContinentWorld()
     const plates = emptyPlates()
     const { elev } = computeOrogeny(plates, mask, WIDTH, HEIGHT, THRESHOLD)
 
-    // Land elev ∈ [200, 350]: 200 m base + up to 50 m shelf + up to 100 m
-    // craton noise. The 350 m cap is the structural upper bound for this
-    // fixture, which holds even after smoothing (smoothing can only
-    // reduce the maximum, not raise it).
+    let landMin = Number.POSITIVE_INFINITY
     let landMax = 0
     for (let i = 0; i < elev.length; i++) {
-      if (isLandInContinent(i, WIDTH, HEIGHT) && elev[i] > landMax) {
-        landMax = elev[i]
-      }
+      if (!isLandInContinent(i, WIDTH, HEIGHT)) continue
+      if (elev[i] < landMin) landMin = elev[i]
+      if (elev[i] > landMax) landMax = elev[i]
     }
-    expect(landMax).toBeLessThanOrEqual(350)
-    // And the noise-driven excess above the 250 m "base + shelf" floor
-    // is well under 100 m.
-    expect(landMax - 250).toBeLessThanOrEqual(100)
+    expect(landMax).toBeLessThan(1200)
+    expect(landMax - landMin).toBeGreaterThan(40)
+
+    // Lag-1 correlation along the continent's equator: neighbouring
+    // cells must agree. White-noise craton failed this visually even
+    // after a 3×3 blur; rolling fBm should sit well above 0.7.
+    const y = 16
+    const samples: number[] = []
+    for (let x = 18; x < 46; x++) {
+      const i = idx(WIDTH, x, y)
+      if (isLandInContinent(i, WIDTH, HEIGHT)) samples.push(elev[i])
+    }
+    expect(samples.length).toBeGreaterThan(10)
+    const mean = samples.reduce((a, b) => a + b, 0) / samples.length
+    let num = 0
+    let denA = 0
+    let denB = 0
+    for (let k = 0; k < samples.length - 1; k++) {
+      const a = samples[k] - mean
+      const b = samples[k + 1] - mean
+      num += a * b
+      denA += a * a
+      denB += b * b
+    }
+    const corr = num / Math.sqrt(denA * denB)
+    expect(corr).toBeGreaterThan(0.7)
+  })
+
+  it('changes craton relief when the world seed changes', () => {
+    const { mask } = makeContinentWorld()
+    const plates = emptyPlates()
+    const a = computeOrogeny(plates, mask, WIDTH, HEIGHT, THRESHOLD, 1)
+    const b = computeOrogeny(plates, mask, WIDTH, HEIGHT, THRESHOLD, 99)
+    let differ = 0
+    for (let i = 0; i < a.elev.length; i++) {
+      if (a.elev[i] !== b.elev[i]) differ++
+    }
+    expect(differ).toBeGreaterThan(100)
   })
 
   it('is deterministic for the same input', () => {

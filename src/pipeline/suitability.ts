@@ -24,20 +24,27 @@ export interface SuitabilityResult {
 
 /** Base suitability per biome. Hostile biomes (desert, ice) start low. */
 const BIOME_BASE: Readonly<Record<string, number>> = {
-  'rainforest': 0.6,
+  rainforest: 0.6,
+  'temperate-forest': 0.85,
   'temperate forest': 0.85,
-  'taiga': 0.5,
-  'tundra': 0.3,
-  'steppe': 0.5,
-  'savanna': 0.7,
-  'mediterranean': 0.85,
+  'temperate-deciduous': 0.88,
+  wetland: 0.45,
+  mangrove: 0.4,
+  taiga: 0.5,
+  tundra: 0.3,
+  steppe: 0.5,
+  savanna: 0.7,
+  mediterranean: 0.85,
+  'boreal-desert': 0.2,
   'boreal desert': 0.2,
+  'polar-desert': 0.1,
   'polar desert': 0.1,
+  'hot-desert': 0.1,
   'temperate desert': 0.2,
   'tropical desert': 0.1,
-  'ice': 0.0,
-  'alpine': 0.4,
-  'ocean': 0.0,
+  ice: 0.0,
+  alpine: 0.4,
+  ocean: 0.0,
 }
 
 /** Fallback base for biome names that aren't in the lookup table. */

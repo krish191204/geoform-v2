@@ -1,8 +1,10 @@
 /**
- * Coach engine — turns provenance events into user-facing copy.
+ * Coach engine — turns provenance events into writer-facing copy.
  *
  * Every message is generated from the event's measurements; the system
  * literally cannot say something that isn't backed by the event payload.
+ * Debug kinds (boot dumps, stage hops, cell telemetry) stay in the union
+ * for provenance but never reach the Coach panel.
  */
 
 import type { Issue, Stage, Tool } from '../world/types'
@@ -15,6 +17,8 @@ export type CoachTone = 'info' | 'warn' | 'success' | 'error'
  * Each member is a closed record; the engine emits no other shapes.
  */
 export type CoachEvent =
+  /** Empty-ocean boot or after Clear sea. */
+  | { kind: 'sketch.ready'; width: number; height: number; landCells: number }
   /** One brush dab on the sketch canvas. */
   | { kind: 'sketch.brushDab'; x: number; y: number; brushSize: number; maskDelta: number }
   /** A committed sketch mask. */
@@ -46,12 +50,32 @@ export type CoachEvent =
   /** Inspector read a single cell. */
   | { kind: 'inspector.cell'; x: number; y: number; elevM: number; plateId: number; tempSummerC: number; tempWinterC: number; tempRangeC: number; moistSummer: number; moistWinter: number; biome: string }
 
+/** Kinds that must never appear in the Coach panel. */
+export const COACH_SILENT_KINDS: ReadonlySet<CoachEvent['kind']> = new Set([
+  'sketch.brushDab',
+  'critique.overlay',
+  'makeSense.step',
+  'app.boot',
+  'app.stage',
+  'tool.changed',
+  'inspector.cell',
+])
+
+export function isCoachSilent(kind: CoachEvent['kind']): boolean {
+  return COACH_SILENT_KINDS.has(kind)
+}
+
 /**
  * Render an event into a (tone, message) pair. Exhaustive — no `default` branch.
  * Each case builds its copy only from the event's own measurements.
  */
-function render(event: CoachEvent): { tone: CoachTone; message: string } {
+export function renderCoach(event: CoachEvent): { tone: CoachTone; message: string } {
   switch (event.kind) {
+    case 'sketch.ready':
+      return {
+        tone: 'info',
+        message: 'Empty ocean. Paint land. Critique when the blob looks like a continent.',
+      }
     case 'sketch.brushDab':
       return {
         tone: 'info',
@@ -60,19 +84,17 @@ function render(event: CoachEvent): { tone: CoachTone; message: string } {
     case 'sketch.commit':
       return {
         tone: 'success',
-        message: `Committed mask: ${event.metaWidth} x ${event.metaHeight}, area ${event.maskArea} pixels, ${event.bigComponents} components >= ${event.threshold}`,
+        message: 'Sketch committed. Read the issues, then Make sense.',
       }
     case 'sketch.clearSea':
       return {
         tone: 'info',
-        message: event.autopilotTriggered
-          ? `Cleared ${event.clearedCells} ocean cells (autopilot)`
-          : `Cleared ${event.clearedCells} ocean cells`,
+        message: 'Empty ocean again. Paint land.',
       }
     case 'critique.grade':
       return {
         tone: 'warn',
-        message: `Score: ${event.score} (${event.criticalCount} critical, ${event.majorCount} major, ${event.minorCount} minor issues)`,
+        message: `Score ${event.score} — ${event.criticalCount} critical, ${event.majorCount} major, ${event.minorCount} minor. This is not a geography grade yet.`,
       }
     case 'critique.overlay':
       return {
@@ -82,7 +104,7 @@ function render(event: CoachEvent): { tone: CoachTone; message: string } {
     case 'makeSense.start':
       return {
         tone: 'info',
-        message: `Make sense starting on ${event.cellCount} cells, plate target ${event.plateTarget}`,
+        message: 'Grounding the doodle…',
       }
     case 'makeSense.step':
       return {
@@ -92,22 +114,24 @@ function render(event: CoachEvent): { tone: CoachTone; message: string } {
     case 'makeSense.complete':
       return {
         tone: 'success',
-        message: `Make sense complete: ${event.provenanceSteps} steps, mask moved ${event.maskDeltaPct.toFixed(2)}%, score ${event.scoreBefore}->${event.scoreAfter}, ${event.riversCount} rivers, mean range ${event.rangeAvgC.toFixed(1)}C`,
+        message: 'Atlas grounded. Switch layers. Hover a cell.',
       }
     case 'makeSense.cancelled':
       return {
         tone: 'warn',
-        message: `Make sense cancelled at step ${event.atStep}`,
+        message: 'Make sense stopped.',
       }
     case 'persist.saved':
       return {
         tone: 'success',
-        message: `Saved ${event.key} (${event.bytes} bytes)`,
+        message: event.key === 'world' ? 'World saved.' : 'Sketch saved.',
       }
     case 'persist.failed':
       return event.reason === 'quota'
         ? { tone: 'warn', message: 'Storage full — Export your mask as JSON.' }
-        : { tone: 'error', message: `Save failed: ${event.reason} (${event.bytes} bytes attempted)` }
+        : event.reason === 'shape'
+          ? { tone: 'warn', message: 'Nothing to save yet. Paint land first.' }
+          : { tone: 'error', message: 'Save failed. Try again, or export the mask as JSON.' }
     case 'app.boot':
       return {
         tone: 'info',
@@ -133,14 +157,15 @@ function render(event: CoachEvent): { tone: CoachTone; message: string } {
 
 /**
  * Dispatch a `coach:message` CustomEvent on `window` for the given event.
- * The message is generated purely from the event's measurements.
+ * Silent kinds are no-ops. Writer-facing copy only.
  *
  * Pure-Node / SSR / Web Worker: no-op. The CustomEvent wire is window-only;
  * tests run under vitest+node, where `window` is undefined, so we early-return.
  */
 export function announce(event: CoachEvent): void {
   if (typeof window === 'undefined') return
-  const { tone, message } = render(event)
+  if (isCoachSilent(event.kind)) return
+  const { tone, message } = renderCoach(event)
   window.dispatchEvent(
     new CustomEvent('coach:message', { detail: { kind: event.kind, message, tone } }),
   )
@@ -149,19 +174,12 @@ export function announce(event: CoachEvent): void {
 /**
  * EXAMPLES
  *
- * announce({ kind: 'sketch.brushDab', x: 120, y: 64, brushSize: 12, maskDelta: 0.04 })
- *   -> { tone: 'info', message: 'Brush dab at (120, 64), size 12, mask changed by 0.04' }
+ * announce({ kind: 'sketch.ready', width: 512, height: 256, landCells: 0 })
+ *   -> { tone: 'info', message: 'Empty ocean. Paint land. Critique when the blob looks like a continent.' }
  *
- * announce({
- *   kind: 'makeSense.complete',
- *   provenanceSteps: 8, maskDeltaPct: 3.21, scoreBefore: 62, scoreAfter: 91,
- *   riversCount: 47, rangeAvgC: 18.4,
- * })
- *   -> { tone: 'success', message: 'Make sense complete: 8 steps, mask moved 3.21%, score 62->91, 47 rivers, mean range 18.4C' }
+ * announce({ kind: 'app.boot', stage: 'sketch', resumedFromMask: false, resumedFromWorld: false })
+ *   -> silent (Coach panel unchanged)
  *
  * announce({ kind: 'persist.failed', key: 'mask', reason: 'quota', bytes: 1048576 })
  *   -> { tone: 'warn', message: 'Storage full — Export your mask as JSON.' }
- *
- * announce({ kind: 'persist.failed', key: 'world', reason: 'shape', bytes: 2048 })
- *   -> { tone: 'error', message: 'Save failed: shape (2048 bytes attempted)' }
  */

@@ -184,6 +184,42 @@ describe('computeHydrology: invariants', () => {
     }
   })
 
+  it('wet runoff accumulates more flux at the outlet than dry runoff', () => {
+    const w = 7
+    const h = 3
+    const elev = Float32Array.from([
+      10, 9, 8, 7, 6, 5, 4,
+      10, 9, 8, 7, 6, 5, 4,
+      10, 9, 8, 7, 6, 5, 4,
+    ])
+    const mask = fill(w * h, 1)
+    const dry = fill(w * h, 0.1)
+    const wet = fill(w * h, 0.9)
+    const dryH = computeHydrology(elev, mask, w, h, THRESHOLD, dry)
+    const wetH = computeHydrology(elev, mask, w, h, THRESHOLD, wet)
+    const colMax = (flux: Float32Array): number =>
+      Math.max(flux[idx(w, 6, 0)], flux[idx(w, 6, 1)], flux[idx(w, 6, 2)])
+    expect(colMax(wetH.flux)).toBeGreaterThan(colMax(dryH.flux))
+  })
+
+  it('desert runoff is less than rainforest runoff on the same slope', () => {
+    const w = 7
+    const h = 3
+    const elev = Float32Array.from([
+      10, 9, 8, 7, 6, 5, 4,
+      10, 9, 8, 7, 6, 5, 4,
+      10, 9, 8, 7, 6, 5, 4,
+    ])
+    const mask = fill(w * h, 1)
+    const desert = fill(w * h, 0.08)
+    const rainforest = fill(w * h, 0.85)
+    const dry = computeHydrology(elev, mask, w, h, THRESHOLD, desert)
+    const wet = computeHydrology(elev, mask, w, h, THRESHOLD, rainforest)
+    const colMax = (flux: Float32Array): number =>
+      Math.max(flux[idx(w, 6, 0)], flux[idx(w, 6, 1)], flux[idx(w, 6, 2)])
+    expect(colMax(wet.flux)).toBeGreaterThan(colMax(dry.flux))
+  })
+
   it('every non-zero flux cell satisfies flux[i] >= 1 + flux[donor]', () => {
     // Flow invariant: at each cell receiving flow, flux = 1 + (sum of its
     // donors' flux contributions). The strict weaker check: flux > 1 means
@@ -363,7 +399,7 @@ describe('computeHydrology: continent fixture', () => {
     }
     // A small cone-shaped continent (radius ~11 cells) is a radial drain:
     // each coastal cell receives a thin wedge of upstream flow. At the
-    // default `RIVER_THRESHOLD = 8` tuned for a 512x256 production world,
+    // default `RIVER_THRESHOLD = 8` tuned for a 768x384 production world,
     // no single land cell on this tiny fixture exceeds the cutoff, so
     // `rivers` is all zero. The relationship still holds: every river
     // cell, if any, must satisfy `flux > RIVER_THRESHOLD`.

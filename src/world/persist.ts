@@ -350,6 +350,134 @@ export function quotaError(): QuotaResult {
 }
 
 // ---------------------------------------------------------------------------
+// Binary blob — Storage object, not jsonb
+// ---------------------------------------------------------------------------
+
+const BLOB_MAGIC = new Uint8Array([0x47, 0x46, 0x57, 0x32]) // GFW2
+
+function copyView(view: ArrayBufferView): Uint8Array {
+  return new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+}
+
+/**
+ * Pack World grids as a binary blob. Catalog metadata stays beside this
+ * object; SQL never stores the arrays.
+ */
+export function serializeWorldBlob(world: World): Uint8Array {
+  const header = JSON.stringify({
+    version: 2,
+    meta: world.meta,
+    seasons: world.seasons,
+    biome: world.biome,
+    cities: world.cities.map((c) => ({ ...c })),
+  })
+  const headerBytes = new TextEncoder().encode(header)
+  const f32: Float32Array[] = [
+    world.mask,
+    world.plateVx,
+    world.plateVy,
+    world.elev,
+    world.summer,
+    world.winter,
+    world.summerMoist,
+    world.winterMoist,
+    world.tempMean,
+    world.tempRange,
+    world.moistMean,
+    world.flux,
+    world.suitability,
+  ]
+  let body = world.plateId.byteLength + world.rivers.byteLength
+  for (const a of f32) body += a.byteLength
+  const out = new Uint8Array(8 + headerBytes.length + body)
+  out.set(BLOB_MAGIC, 0)
+  new DataView(out.buffer).setUint32(4, headerBytes.length, true)
+  out.set(headerBytes, 8)
+  let o = 8 + headerBytes.length
+  const put = (view: ArrayBufferView): void => {
+    const bytes = copyView(view)
+    out.set(bytes, o)
+    o += bytes.byteLength
+  }
+  for (const a of f32) put(a)
+  put(world.plateId)
+  put(world.rivers)
+  return out
+}
+
+/** Rehydrate a blob from `serializeWorldBlob`. Null on any failure. */
+export function deserializeWorldBlob(bytes: Uint8Array): World | null {
+  if (bytes.length < 8) return null
+  for (let i = 0; i < 4; i++) if (bytes[i] !== BLOB_MAGIC[i]) return null
+  const headerLen = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(4, true)
+  const headerStart = 8
+  const headerEnd = headerStart + headerLen
+  if (headerEnd > bytes.length) return null
+  let header: {
+    version?: number
+    meta?: WorldMeta
+    seasons?: 2 | 4
+    biome?: string[]
+    cities?: World['cities']
+  }
+  try {
+    header = JSON.parse(new TextDecoder().decode(bytes.subarray(headerStart, headerEnd))) as typeof header
+  } catch {
+    return null
+  }
+  if (header.version !== 2 || !validMeta(header.meta)) return null
+  if (header.seasons !== 2 && header.seasons !== 4) return null
+  if (!Array.isArray(header.biome) || !header.biome.every((s) => typeof s === 'string')) return null
+  if (!Array.isArray(header.cities)) return null
+  const meta = header.meta
+  const n = meta.width * meta.height
+  const readF32 = (offset: number): Float32Array | null => {
+    const end = offset + n * 4
+    if (end > bytes.length) return null
+    const arr = new Float32Array(n)
+    new Uint8Array(arr.buffer).set(bytes.subarray(offset, end))
+    return arr
+  }
+  let o = headerEnd
+  const f32Fields: Float32Array[] = []
+  for (let k = 0; k < 13; k++) {
+    const arr = readF32(o)
+    if (!arr) return null
+    f32Fields.push(arr)
+    o += n * 4
+  }
+  const plateEnd = o + n * 2
+  if (plateEnd > bytes.length) return null
+  const plateId = new Int16Array(n)
+  new Uint8Array(plateId.buffer).set(bytes.subarray(o, plateEnd))
+  o = plateEnd
+  const riverEnd = o + n
+  if (riverEnd > bytes.length) return null
+  const rivers = Uint8Array.from(bytes.subarray(o, riverEnd))
+  return {
+    meta,
+    mask: f32Fields[0],
+    plateVx: f32Fields[1],
+    plateVy: f32Fields[2],
+    elev: f32Fields[3],
+    summer: f32Fields[4],
+    winter: f32Fields[5],
+    summerMoist: f32Fields[6],
+    winterMoist: f32Fields[7],
+    tempMean: f32Fields[8],
+    tempRange: f32Fields[9],
+    moistMean: f32Fields[10],
+    flux: f32Fields[11],
+    suitability: f32Fields[12],
+    plateId,
+    rivers,
+    seasons: header.seasons,
+    biome: header.biome.slice() as CellBiome[],
+    cities: header.cities.map((c) => ({ ...c })),
+  }
+}
+
+// ---------------------------------------------------------------------------
 // File I/O — download / upload JSON files
 // ---------------------------------------------------------------------------
 

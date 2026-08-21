@@ -8,34 +8,34 @@
  * resolves to a unique biome.
  *
  * The "ocean" pseudo-biome is emitted for cells where `mask[i] < threshold`;
- * every other label comes from `classifyBiome`.
+ * land labels come from `classifyBiome`, then `refineHydrologicBiomes`.
  */
 
-import { meanLand, sumLand } from './helpers'
+import { D8_OFFSETS, idx, meanLand, sumLand, wrapX } from './helpers'
+import { RIVER_THRESHOLD } from './hydrology'
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
+/** Land or ocean label. Kept here so this module does not import `src/world/`. */
 export type CellBiome =
   | 'ocean'
   | 'ice'
-  | 'polar desert'
+  | 'polar-desert'
   | 'tundra'
   | 'taiga'
-  | 'boreal desert'
-  | 'alpine'
-  | 'temperate forest'
+  | 'boreal-desert'
   | 'steppe'
-  | 'temperate desert'
-  | 'savanna'
-  | 'tropical desert'
+  | 'temperate-forest'
+  | 'temperate-deciduous'
   | 'rainforest'
+  | 'savanna'
+  | 'hot-desert'
   | 'mediterranean'
+  | 'alpine'
+  | 'wetland'
+  | 'mangrove'
 
 export interface BiomesResult {
   /** Per-cell biome label; one entry per cell. */
-  biome: string[]
+  biome: CellBiome[]
   /** Annual mean temperature per cell, °C. */
   tempMean: Float32Array
   /** Annual temperature swing (summer − winter) per cell, °C, always ≥ 0. */
@@ -46,6 +46,18 @@ export interface BiomesResult {
 
 /** Elevation (metres) above which climate classification is overridden by `alpine`. */
 export const ALPINE_ELEV_M = 3500
+
+/** Continental swing that drops leaves — milder coasts stay evergreen. */
+export const DECIDUOUS_RANGE_C = 16
+
+/** Max neighbour relief (m) for a floodplain wetland. */
+export const WETLAND_MAX_SLOPE_M = 50
+
+/** Flux that marks standing water on flat land (above a river trickle). */
+export const WETLAND_FLUX_MIN = RIVER_THRESHOLD * 2
+
+/** Warm-coast mangrove ceiling (m). */
+export const MANGROVE_MAX_ELEV_M = 80
 
 // ---------------------------------------------------------------------------
 // classifyBiome — the pure matcher
@@ -72,8 +84,10 @@ export const ALPINE_ELEV_M = 3500
  *  10. temperate desert — mid-latitude very dry.
  *  11. steppe           — mid-latitude dry.
  *  12. mediterranean    — mid-latitude coastal (low tempRange), mid moisture.
- *  13. temperate forest — mid-latitude, low seasonality, wet.
- *  14. fallback         — `steppe` for mid latitudes, `tundra` otherwise.
+ *  13. temperate forest — mid-latitude, mild swing, wet (evergreen).
+ *  14. temperate deciduous — same band, continental swing.
+ *  15. fallback         — `steppe` for mid latitudes, `tundra` otherwise.
+ * Hydrologic overlays (wetland, mangrove) run in `refineHydrologicBiomes`.
  */
 export function classifyBiome(
   tempMean: number,
@@ -114,8 +128,8 @@ export function classifyBiome(
   // 9. Savanna = hot, mid-wet.
   if (tempMean > 20 && summerMoist >= 0.2 && summerMoist <= 0.5) return 'savanna'
 
-  // 10. Temperate desert = mid-latitude very dry.
-  if (tempMean >= 5 && tempMean <= 25 && summerMoist < 0.15) return 'temperate-desert'
+  // 10. Mid-latitude very dry — atlas has no separate temperate desert, so steppe.
+  if (tempMean >= 5 && tempMean <= 25 && summerMoist < 0.15) return 'steppe'
 
   // 11. Steppe = mid-latitude dry.
   if (tempMean >= 5 && tempMean <= 25 && summerMoist < 0.3) return 'steppe'
@@ -131,9 +145,9 @@ export function classifyBiome(
     return 'mediterranean'
   }
 
-  // 13. Temperate forest = mid-latitude, low seasonality, wet.
+  // 13–14. Temperate forest: wet mid-latitudes. Continental swing drops leaves.
   if (tempMean >= 5 && tempMean <= 25 && tempRange < 25 && summerMoist > 0.4) {
-    return 'temperate-forest'
+    return tempRange >= DECIDUOUS_RANGE_C ? 'temperate-deciduous' : 'temperate-forest'
   }
 
   // 14. Catch-all fallback for unusual combinations (e.g. mid-latitude,
@@ -174,7 +188,7 @@ export function computeBiomes(
   const tempMean = new Float32Array(n)
   const tempRange = new Float32Array(n)
   const moistMean = new Float32Array(n)
-  const biome: string[] = new Array(n)
+  const biome: CellBiome[] = new Array(n)
 
   // Pre-pass: combine the seasonal fields. Doing this once up-front keeps
   // the inner loop to a single conditional and lets the matcher read its
@@ -182,10 +196,8 @@ export function computeBiomes(
   for (let i = 0; i < n; i++) {
     const s = summer[i]
     const w = winter[i]
-    // Use the latitude-aware `tempMeanIn` from the climate step when it
-    // is supplied; otherwise fall back to the symmetric summer/winter
-    // average (kept for callers and tests that pass synthetic summer/
-    // winter arrays without a corresponding latitude-aware field).
+    // Use the climate step's annual mean when supplied; otherwise
+    // fall back to (summer + winter) / 2.
     tempMean[i] = tempMeanIn ? tempMeanIn[i] : (s + w) / 2
     // tempRange is always non-negative by construction (summer ≥ winter).
     tempRange[i] = s - w
@@ -213,4 +225,68 @@ export function computeBiomes(
   void sumLand
 
   return { biome, tempMean, tempRange, moistMean }
+}
+
+/** Context for hydrologic biome overlays — flux and coast, not climate. */
+export interface HydrologicBiomeInput {
+  elev: Float32Array
+  flux: Float32Array
+  mask: Float32Array
+  width: number
+  height: number
+  threshold: number
+  tempMean: Float32Array
+  summerMoist: Float32Array
+}
+
+/**
+ * Overlay wetlands and mangroves after climate classification.
+ *
+ * Wetland: high flux on nearly flat land that is already moist enough to
+ * pond. Ice, alpine, and true desert stay dry. Mangrove: warm, wet, low
+ * coasts — climate cannot see tide, so this is the closest neighbour.
+ */
+export function refineHydrologicBiomes(
+  biome: CellBiome[],
+  ctx: HydrologicBiomeInput,
+): void {
+  const { elev, flux, mask, width, height, threshold, tempMean, summerMoist } = ctx
+  const n = biome.length
+  for (let i = 0; i < n; i++) {
+    if (mask[i] < threshold) continue
+    const b = biome[i]
+    if (b === 'ocean' || b === 'ice' || b === 'alpine' || b === 'hot-desert' || b === 'polar-desert') {
+      continue
+    }
+    const x = i % width
+    const y = (i - x) / width
+    let coast = false
+    let slope = 0
+    for (const [dx, dy] of D8_OFFSETS) {
+      const nx = wrapX(x + dx, width)
+      const ny = y + dy
+      if (ny < 0 || ny >= height) continue
+      const j = idx(width, nx, ny)
+      if (mask[j] < threshold) coast = true
+      const drop = Math.abs(elev[j] - elev[i])
+      if (drop > slope) slope = drop
+    }
+    if (
+      tempMean[i] > 18 &&
+      summerMoist[i] > 0.35 &&
+      elev[i] < MANGROVE_MAX_ELEV_M &&
+      coast
+    ) {
+      biome[i] = 'mangrove'
+      continue
+    }
+    if (
+      flux[i] > WETLAND_FLUX_MIN &&
+      slope <= WETLAND_MAX_SLOPE_M &&
+      summerMoist[i] > 0.25 &&
+      tempMean[i] > 0
+    ) {
+      biome[i] = 'wetland'
+    }
+  }
 }

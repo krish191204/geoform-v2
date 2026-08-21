@@ -7,6 +7,8 @@ import {
   deserializeMask,
   serializeWorld,
   deserializeWorld,
+  serializeWorldBlob,
+  deserializeWorldBlob,
   saveMask,
   loadMask,
   clearMask,
@@ -167,6 +169,29 @@ describe('persist: world layer', () => {
     expect(restored!.biome).toEqual(original.biome)
     expect(restored!.cities).toEqual(original.cities)
     expect(restored!.seasons).toBe(4)
+  })
+
+  it('round-trips World through a binary blob, not jsonb grids', () => {
+    const original = makeWorld(21)
+    original.cities.push({
+      x: 1,
+      y: 2,
+      name: 'Oasis',
+      seasonal: 0.4,
+      role: 'trade',
+      rank: 'village',
+      port: 'none',
+      oasis: true,
+    })
+    const blob = serializeWorldBlob(original)
+    expect(blob[0]).toBe(0x47)
+    const restored = deserializeWorldBlob(blob)
+    expect(restored).not.toBeNull()
+    expect(Array.from(restored!.elev)).toEqual(Array.from(original.elev))
+    expect(Array.from(restored!.mask)).toEqual(Array.from(original.mask))
+    expect(restored!.biome).toEqual(original.biome)
+    expect(restored!.cities).toEqual(original.cities)
+    expect(JSON.stringify(blob).includes('"mask":[')).toBe(false)
   })
 
   it('saveWorld / loadWorld round-trip through localStorage', () => {

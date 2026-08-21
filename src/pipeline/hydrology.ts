@@ -4,14 +4,13 @@
  * Algorithm:
  *   1. Sink-fill the elevation so every cell has a downhill path to a coast.
  *   2. Sort cells by elevation descending.
- *   3. D8 flow accumulation: each cell donates `1 + flux[cell]` to its lowest
- *      neighbour. Ocean cells are sinks. Local maxima (no lower neighbour)
- *      stay at `flux = 0`.
+ *   3. D8 flow accumulation: each land cell donates `runoff[cell] + flux[cell]`
+ *      to its lowest neighbour. Default runoff is 1 (unit tests). Make sense
+ *      passes summer moisture so deserts drain less than rainforests.
+ *      Ocean cells are sinks. Local maxima stay at `flux = 0`.
  *   4. Mark rivers where `flux > RIVER_THRESHOLD`.
  *
- * No flux boost, no multiplier. Raw accumulation; the renderer scales on
- * display. The audit explicitly flagged flux boosting as a hack — real rivers
- * fall out of real terrain.
+ * No flux boost. Raw accumulation; the renderer scales on display.
  */
 
 // ---------------------------------------------------------------------------
@@ -20,6 +19,9 @@
 
 /** River cutoff. `flux > RIVER_THRESHOLD` -> river cell. */
 export const RIVER_THRESHOLD = 8
+
+/** Floor so a bone-dry cell still contributes a trickle, never zero donation. */
+export const RUNOFF_EPS = 0.05
 
 /** √2 — D8 diagonal distance. */
 const SQRT2 = Math.SQRT2
@@ -244,6 +246,7 @@ export interface HydrologyResult {
  * @param width grid width
  * @param height grid height
  * @param threshold mask threshold separating land from ocean
+ * @param runoff optional per-cell water donation (0..1 moisture). Omitted → 1.
  */
 export function computeHydrology(
   elev: Float32Array,
@@ -251,6 +254,7 @@ export function computeHydrology(
   width: number,
   height: number,
   threshold: number,
+  runoff?: Float32Array,
 ): HydrologyResult {
   const n = width * height
   // Copy elevation: sink-fill mutates it, and the caller owns the input.
@@ -282,16 +286,10 @@ export function computeHydrology(
       // flow.
       continue
     }
-    flux[j] += 1 + flux[i]
-    // Donald bar: every non-local-max cell has its own flux contribution.
-    // A "non-local-max" cell here = any cell with a strictly lower
-    // neighbour (the algorithm's local-max = lowestNeighbour === -1).
-    // If no upstream donor routed through this cell, flux[i] would still
-    // be 0 even though it IS a donor. EXCEPT for strict (geometric) local
-    // maxima: those are the peaks — every D8 neighbour is strictly less
-    // than self. They're the source of the flow, not a destination, so
-    // flux = 0 is correct there. For every other donor, force the own
-    // contribution of 1.
+    const donate = runoff ? Math.max(RUNOFF_EPS, runoff[i]) : 1
+    flux[j] += donate + flux[i]
+    // Donald bar: every non-local-max donor keeps its own runoff on the
+    // cell. Strict peaks stay at 0 — they are sources, not destinations.
     if (flux[i] === 0) {
       let isStrictMax = true
       for (let k = 0; k < 8; k++) {
@@ -305,7 +303,7 @@ export function computeHydrology(
           break
         }
       }
-      if (!isStrictMax) flux[i] = 1
+      if (!isStrictMax) flux[i] = donate
     }
   }
 

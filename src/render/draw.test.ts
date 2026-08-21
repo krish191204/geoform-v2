@@ -17,7 +17,7 @@ if (typeof (globalThis as { ImageData?: unknown }).ImageData === 'undefined') {
 }
 
 import { describe, it, expect } from 'vitest'
-import { draw, inspectCell, screenToCell } from './draw'
+import { draw, inspectCell, screenToCell, bakeBumpImageData, bakeDisplacementImageData, bakeWorldImageDataSmooth, polePinchFade } from './draw'
 import { biomeColor, type CellBiome, type World, type WorldMeta } from '../world/types'
 
 // ---------------------------------------------------------------------------
@@ -177,9 +177,14 @@ describe('draw', () => {
     expect(img.height).toBe(height)
 
     for (let x = 0; x < width; x++) {
-      const expected = hexToRgb(biomeColor(biome[x]))
-      expect(pixel(img, x, 0)).toEqual(expected)
+      const raw = hexToRgb(biomeColor(biome[x]))
+      const got = pixel(img, x, 0)
+      // Biome is the climate class plus hillshade, not a greener relief mix.
+      expect(Math.abs(got[0] - raw[0])).toBeLessThan(120)
+      expect(Math.abs(got[1] - raw[1])).toBeLessThan(120)
+      expect(Math.abs(got[2] - raw[2])).toBeLessThan(120)
     }
+    expect(pixel(img, 1, 0)).not.toEqual(pixel(img, 2, 0))
   })
 
   it('renders a moisture gradient when layer=moisture and the chosen season has a ramp', () => {
@@ -193,8 +198,12 @@ describe('draw', () => {
     const winterImg = draw(world, 'winter', 'moisture')
 
     expect(pixel(summerImg, 0, 0)).not.toEqual(pixel(summerImg, 7, 0))
-    // Winter is uniform → all cells identical.
-    expect(pixel(winterImg, 0, 0)).toEqual(pixel(winterImg, 7, 0))
+    // Winter moisture is flat; paper grain remains, so the summer ramp must dwarf it.
+    const dist = (a: [number, number, number], b: [number, number, number]) =>
+      Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2])
+    expect(dist(pixel(summerImg, 0, 0), pixel(summerImg, 7, 0))).toBeGreaterThan(
+      dist(pixel(winterImg, 0, 0), pixel(winterImg, 7, 0)) * 3,
+    )
   })
 
   it('renders relief with hillshade and respects showRivers=false', () => {
@@ -222,12 +231,15 @@ describe('draw', () => {
     expect(pixel(img, 0, 0)).toEqual(pixel(img, 2, 0))
   })
 
-  it('respects the elevation-only contract: no hillshade, no rivers', () => {
+  it('keeps the Height layer a raw metre ramp (no hillshade, no rivers)', () => {
     const world = makeWorld({ width: 4, height: 4, elev: () => 1500 })
+    const before = draw(world, 'summer', 'elevation')
     world.rivers[0] = 1
-    const img = draw(world, 'summer', 'elevation')
-    // All cells are at the same elevation → uniform colour.
-    expect(pixel(img, 0, 0)).toEqual(pixel(img, 3, 3))
+    const after = draw(world, 'summer', 'elevation')
+    expect(pixel(before, 0, 0)).toEqual(pixel(after, 0, 0))
+    world.elev[15] = 4000
+    const stepped = draw(world, 'summer', 'elevation')
+    expect(pixel(stepped, 0, 0)).not.toEqual(pixel(stepped, 3, 3))
   })
 })
 
@@ -273,6 +285,21 @@ describe('inspectCell', () => {
     expect(view.display.biome).toBe('—')
   })
 
+  it('classifies sea cells as ice-edge, shelf, or open without a new chip', () => {
+    const world = makeWorld({ width: 24, height: 3 })
+    world.mask.fill(0)
+    world.mask[1 * 24 + 0] = 1
+    world.summer.fill(18)
+    world.summer[1 * 24 + 12] = -3
+    const shelf = inspectCell(world, 1, 1)
+    const ice = inspectCell(world, 12, 1)
+    const open = inspectCell(world, 8, 1)
+    expect(shelf.ocean).toBe('shelf')
+    expect(ice.ocean).toBe('ice-edge')
+    expect(open.ocean).toBe('open')
+    expect(shelf.display.ocean).toBe('Shelf')
+  })
+
   it('formats temperatures as whole degrees Celsius', () => {
     const world = makeWorld({
       width: 4,
@@ -283,9 +310,11 @@ describe('inspectCell', () => {
     const view = inspectCell(world, 0, 0)
     expect(view.display.tempSummer).toBe('28°C')
     expect(view.display.tempWinter).toBe('-4°C')
+    // Range follows the rounded seasonal pair, not a second rounding of the raw delta.
+    expect(view.display.tempRange).toBe('32°C')
   })
 
-  it('formats moisture to two decimals', () => {
+  it('formats moisture as a 0–1 index', () => {
     const world = makeWorld({
       width: 4,
       height: 4,
@@ -293,8 +322,8 @@ describe('inspectCell', () => {
       winterMoist: () => 0.123,
     })
     const view = inspectCell(world, 0, 0)
-    expect(view.display.moistSummer).toBe('0.46')
-    expect(view.display.moistWinter).toBe('0.12')
+    expect(view.display.moistSummer).toBe('0.46 · 0–1')
+    expect(view.display.moistWinter).toBe('0.12 · 0–1')
   })
 })
 
@@ -339,6 +368,105 @@ describe('screenToCell', () => {
       }) as DOMRect
     expect(screenToCell(canvas, -10, 5, world)).toBeNull()
     expect(screenToCell(canvas, 500, 500, world)).toBeNull()
+  })
+})
+
+describe('globe bakes', () => {
+  it('produce opaque textures matching the requested size', () => {
+    const world = makeWorld({ width: 8, height: 4 })
+    const bump = bakeBumpImageData(world, 2)
+    expect(bump.width).toBe(16)
+    expect(bump.height).toBe(8)
+    expect(bump.data[3]).toBe(255)
+    const color = bakeWorldImageDataSmooth(world, 'summer', 'relief', 16, { bakeCities: false })
+    expect(color.width).toBe(16)
+    expect(color.height).toBe(8)
+    expect(color.data[3]).toBe(255)
+  })
+
+  it('bilinear-samples bump so neighbouring cells blend instead of voxel blocks', () => {
+    const world = makeWorld({
+      width: 4,
+      height: 2,
+      elev: (x) => (x < 2 ? 200 : 4000),
+    })
+    const bump = bakeBumpImageData(world, 4)
+    const at = (px: number, py: number) => bump.data[(py * bump.width + px) * 4]
+    const low = at(2, 2)
+    const high = at(10, 2)
+    const mid = at(7, 2)
+    expect(low).toBeLessThan(high)
+    expect(mid).toBeGreaterThan(low)
+    expect(mid).toBeLessThan(high)
+  })
+
+  it('bilinear-samples relief so a height step is a ramp, not a cell wall', () => {
+    const world = makeWorld({
+      width: 4,
+      height: 2,
+      elev: (x) => (x < 2 ? 200 : 4000),
+    })
+    const img = bakeWorldImageDataSmooth(world, 'summer', 'elevation', 16, { bakeCities: false })
+    const at = (px: number, py: number) => pixel(img, px, py)
+    const low = at(2, 4)
+    const high = at(10, 4)
+    const mid = at(7, 4)
+    expect(low).not.toEqual(high)
+    expect(mid).not.toEqual(low)
+    expect(mid).not.toEqual(high)
+  })
+
+  it('fades displacement at the poles without flattening World elev', () => {
+    expect(polePinchFade(0)).toBe(0)
+    expect(polePinchFade(1)).toBe(0)
+    expect(polePinchFade(0.5)).toBe(1)
+    expect(polePinchFade(0.03)).toBeLessThan(polePinchFade(0.2))
+
+    const world = makeWorld({
+      width: 8,
+      height: 16,
+      elev: (x) => 200 + x * 500,
+    })
+    const before = world.elev.slice()
+    const disp = bakeDisplacementImageData(world, 2)
+    expect(world.elev).toEqual(before)
+
+    const at = (px: number, py: number) => disp.data[(py * disp.width + px) * 4]
+    const poleVals = Array.from({ length: disp.width }, (_, x) => at(x, 0))
+    const eqVals = Array.from({ length: disp.width }, (_, x) => at(x, disp.height >> 1))
+    const poleSpread = Math.max(...poleVals) - Math.min(...poleVals)
+    const eqSpread = Math.max(...eqVals) - Math.min(...eqVals)
+    expect(poleSpread).toBeLessThan(eqSpread / 3)
+  })
+
+  it('does not burn a 2D vignette into the globe color bake', () => {
+    const world = makeWorld({ width: 8, height: 4, elev: () => 400 })
+    const atlas = bakeWorldImageDataSmooth(world, 'summer', 'elevation', 32, {
+      bakeCities: false,
+      vignette: true,
+    })
+    const globe = bakeWorldImageDataSmooth(world, 'summer', 'elevation', 32, {
+      bakeCities: false,
+      vignette: false,
+    })
+    const luma = (img: ImageData, x: number, y: number) => {
+      const o = (y * img.width + x) * 4
+      return img.data[o] + img.data[o + 1] + img.data[o + 2]
+    }
+    const midX = atlas.width >> 1
+    const midY = atlas.height >> 1
+    expect(luma(atlas, 0, 0)).toBeLessThan(luma(atlas, midX, midY))
+    const atlasRatio = luma(atlas, 0, 0) / Math.max(1, luma(atlas, midX, midY))
+    const globeRatio = luma(globe, 0, 0) / Math.max(1, luma(globe, midX, midY))
+    expect(atlasRatio).toBeLessThan(globeRatio)
+  })
+
+  it('paints empty ocean as deep water, not a lagoon shelf', () => {
+    const world = makeWorld({ width: 4, height: 4, elev: () => 0 })
+    world.mask.fill(0)
+    const img = draw(world, 'summer', 'relief')
+    const [r, g, b] = pixel(img, 2, 2)
+    expect(r + g + b).toBeLessThan(220)
   })
 })
 
