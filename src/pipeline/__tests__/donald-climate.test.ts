@@ -34,6 +34,7 @@ import {
   scoreFromIssues,
 } from '../../critique/analyzeWorld'
 import type { World, WorldMeta } from '../../world/types'
+import { emptyPolityState } from '../../world/types'
 import {
   makeContinentWorld,
   makeTwinContinentWorld,
@@ -177,6 +178,7 @@ function toWorld(
     rivers: result.rivers,
     biome: result.biome as World['biome'],
     cities: [],
+    ...emptyPolityState(result.mask.length),
   } as World
 }
 

@@ -2,16 +2,16 @@
  * DOM scaffolding for the 4-stage shell — Geoform 1 chrome, v2 state.
  *
  * Persistent regions (mounted once by the shell):
- *   chrome (brand + Clear sea + stage rail)
- *   map shell (atlas canvas + layer chips)
- *   inspector (coach + stage work + cell readout)
+ *   chrome overlays the atlas
+ *   map shell fills the page
+ *   inspector and tools float on the sheet
  *
  * Per-stage regions swap in the left tools column and the inspector
  * work block. Buttons dispatch `app:*` events; the shell owns state.
  */
 
 import type { City, Layer, Stage, Tool } from '../world/types'
-import { groupedBiomeLegend } from '../world/types'
+import { DEFAULT_META, groupedBiomeLegend } from '../world/types'
 import {
   APP_EVENTS,
   MAKE_SENSE_STEPS,
@@ -20,19 +20,24 @@ import {
   STAGE_ORDER,
   STAGES,
   type BrushChangeDetail,
-  type LandformStampDetail,
+  type LandformDragDetail,
   type LayerChangeDetail,
   type MetaChangeDetail,
   type SeasonChangeDetail,
   type ShellStateView,
   type StageTransitionDetail,
   type ToolChangeDetail,
+  type LayoutChangeDetail,
+  type OverlayChangeDetail,
+  type PolityCountDetail,
   type ViewChangeDetail,
 } from './stages'
 import { LAYER_CHIPS } from './atlas'
 import { SETTLEMENT_PORT_LABEL, SETTLEMENT_RANK_LABEL, SETTLEMENT_ROLE_LABEL } from '../sketch/settlements'
-import { LANDFORM_OPTIONS } from '../sketch/landforms'
+import { economyLine, meltingPotLabel } from '../sketch/polities'
+import { LANDFORM_OPTIONS, stampLandformAt, type LandformKind } from '../sketch/landforms'
 import { hasAnyLand } from './canvas_paint'
+import { gradeCaption, gradeFromScore } from '../critique/main'
 
 // ---------------------------------------------------------------------------
 // DOM helpers
@@ -61,6 +66,66 @@ function el<K extends keyof HTMLElementTagNameMap>(
 
 function fire<T>(type: string, detail?: T): void {
   window.dispatchEvent(new CustomEvent(type, { detail }))
+}
+
+/** Transparent 1×1 PNG used when the canvas cannot encode. */
+const TRANSPARENT_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+
+/** Transparent PNG silhouette — no names, no navy plate. */
+export function landformThumbPng(kind: LandformKind, scale = 1): string {
+  const tw = 64
+  const th = 32
+  const mask = new Float32Array(tw * th)
+  stampLandformAt(
+    mask,
+    { ...DEFAULT_META, width: tw, height: th, seed: 11 },
+    kind,
+    11,
+    tw / 2,
+    th / 2,
+    scale,
+  )
+  const canvas = document.createElement('canvas')
+  canvas.width = 160
+  canvas.height = 80
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return TRANSPARENT_PNG
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  const cellW = canvas.width / tw
+  const cellH = canvas.height / th
+  ctx.fillStyle = '#7eae62'
+  for (let y = 0; y < th; y++) {
+    for (let x = 0; x < tw; x++) {
+      if (mask[y * tw + x] < 0.5) continue
+      ctx.fillRect(x * cellW, y * cellH, cellW + 0.4, cellH + 0.4)
+    }
+  }
+  try {
+    const png = canvas.toDataURL('image/png')
+    if (png.startsWith('data:image/png')) return png
+  } catch {
+    /* happy-dom and some test canvases cannot encode PNG */
+  }
+  return TRANSPARENT_PNG
+}
+
+export function paintLandformThumb(
+  target: HTMLCanvasElement | HTMLImageElement,
+  kind: LandformKind,
+  scale = 1,
+): void {
+  const png = landformThumbPng(kind, scale)
+  if (target instanceof HTMLImageElement) {
+    target.src = png
+    return
+  }
+  const ctx = target.getContext('2d')
+  if (!ctx) return
+  ctx.clearRect(0, 0, target.width, target.height)
+  const img = new Image()
+  img.onload = () => ctx.drawImage(img, 0, 0, target.width, target.height)
+  img.src = png
 }
 
 // ---------------------------------------------------------------------------
@@ -154,6 +219,10 @@ export interface MapShellRefs {
   readonly seasonBar: HTMLElement
   readonly viewAtlas: HTMLButtonElement
   readonly viewPlanet: HTMLButtonElement
+  readonly layoutBtn: HTMLButtonElement
+  readonly viewEsc: HTMLElement
+  readonly stampCursor: HTMLImageElement
+  readonly stampHint: HTMLElement
   readonly loading: HTMLElement
   readonly hint: HTMLElement
 }
@@ -182,11 +251,35 @@ export function mountMapShell(): MapShellRefs {
     fire(APP_EVENTS.VIEW_CHANGE, detail)
   })
   const hud = el('div', { class: 'map-hud' }, viewAtlas, viewPlanet)
+  const layoutBtn = el(
+    'button',
+    {
+      type: 'button',
+      class: 'layout-toggle',
+      'data-layout': 'chrome',
+      title: 'Ground the doodle first',
+      disabled: true,
+    },
+    'View map',
+  )
+  layoutBtn.addEventListener('click', () => {
+    if (layoutBtn.disabled) return
+    const detail: LayoutChangeDetail = { layout: 'view-map' }
+    fire(APP_EVENTS.LAYOUT_CHANGE, detail)
+  })
+  const viewEsc = el('div', { class: 'map-view-esc', hidden: true }, 'Esc to return')
+  const stampCursor = el('img', {
+    class: 'stamp-cursor',
+    hidden: true,
+    alt: '',
+    draggable: 'false',
+  }) as HTMLImageElement
+  const stampHint = el('div', { class: 'stamp-hint', hidden: true }, 'Drop to place · click to shrink · Esc to cancel')
   const loading = el('div', { class: 'loading', id: 'loading', hidden: true }, 'Grounding the doodle…')
   const hint = el(
     'div',
     { class: 'map-hint', id: 'mapHint' },
-    'Pick continents or islands, or paint land',
+    'Drag a picture onto the map. Click it to make it smaller.',
   )
 
   const root = el(
@@ -197,6 +290,10 @@ export function mountMapShell(): MapShellRefs {
     overlay,
     seasonBar,
     hud,
+    layoutBtn,
+    viewEsc,
+    stampCursor,
+    stampHint,
     loading,
     hint,
   )
@@ -208,6 +305,10 @@ export function mountMapShell(): MapShellRefs {
     seasonBar,
     viewAtlas,
     viewPlanet,
+    layoutBtn,
+    viewEsc,
+    stampCursor,
+    stampHint,
     loading,
     hint,
   }
@@ -284,6 +385,16 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
   refs.viewAtlas.classList.toggle('active', state.viewMode === 'atlas')
   refs.viewPlanet.classList.toggle('active', state.viewMode === 'planet')
   refs.viewPlanet.disabled = !derived
+  const viewing = state.layoutMode === 'view-map'
+  const canViewMap = state.makeSenseComplete && !state.isProcessing
+  refs.layoutBtn.setAttribute('data-layout', state.layoutMode)
+  refs.layoutBtn.textContent = 'View map'
+  refs.layoutBtn.hidden = viewing
+  refs.layoutBtn.disabled = !canViewMap
+  refs.layoutBtn.title = canViewMap
+    ? 'Full-screen map. Press Escape to return.'
+    : 'Ground the doodle first'
+  refs.viewEsc.hidden = !viewing
   refs.canvas.hidden = derived && state.viewMode === 'planet'
   refs.globe.hidden = !(derived && state.viewMode === 'planet')
   refs.loading.hidden = !state.isProcessing
@@ -309,7 +420,7 @@ export function mountInspector(): InspectorRefs {
     el(
       'p',
       { class: 'coach-empty' },
-      'Empty ocean. Stamp a landform or paint. Critique when the blob looks like a continent.',
+      'Empty ocean. Drag a picture onto the map, or paint land.',
     ),
   )
   const workHost = el('div', { id: 'stageWork', class: 'stage-work' })
@@ -351,7 +462,7 @@ export function updateInspector(refs: InspectorRefs, state: ShellStateView): voi
   const total = state.meta.width * state.meta.height
   const pct = total > 0 ? Math.round((land / total) * 100) : 0
   if (derived) {
-    refs.status.textContent = `Grounded world · ${pct}% land · score ${Math.round(state.score)}`
+    refs.status.textContent = `Grounded world · ${pct}% land · ${gradeFromScore(state.score)}`
   } else if (land > 0) {
     refs.status.textContent = `Sketch · ${land} land cells (${pct}%) · not geography yet`
   } else {
@@ -379,6 +490,7 @@ const SKETCH_TOOLS: readonly { id: Tool; label: string; desc: string }[] = [
 const WORLDBUILD_TOOLS: readonly { id: Tool; label: string; desc: string }[] = [
   { id: 'place-city', label: 'Place city', desc: 'Found a settlement on suitable land' },
   { id: 'remove-city', label: 'Remove city', desc: 'Remove nearest settlement' },
+  { id: 'claim-land', label: 'Paint border', desc: 'Claim land for the nearest country' },
   { id: 'inspect', label: 'Inspect', desc: 'Read the cell under the cursor' },
 ]
 
@@ -436,6 +548,7 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
   const radiusVal = el('span', { id: 'planetRadiusVal' }, String(state.meta.planetRadiusKm))
   const radiusSlider = el('input', {
     type: 'range',
+    id: 'planetRadius',
     min: 2000,
     max: 50000,
     step: 1,
@@ -447,22 +560,54 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
     radiusVal.textContent = String(radiusSlider.value)
   })
 
-  const landformGrid = el('div', { class: 'style-grid', 'aria-label': 'Landform doodles' })
+  const landformGrid = el('div', { class: 'style-grid', 'aria-label': 'Landform pictures. Drag onto the map.' })
   for (const opt of LANDFORM_OPTIONS) {
+    const thumb = el('img', {
+      class: 'landform-thumb',
+      alt: '',
+      draggable: 'false',
+      src: landformThumbPng(opt.id),
+    }) as HTMLImageElement
     const btn = el(
       'button',
       {
         type: 'button',
         class: 'style-chip',
         'data-landform': opt.id,
+        'aria-label': `Drag this shape onto the map`,
+        title: 'Drag onto the map. Click the land to shrink it.',
       },
-      opt.label,
-      el('small', {}, opt.desc),
+      thumb,
     )
-    btn.addEventListener('click', () => {
-      const detail: LandformStampDetail = { kind: opt.id }
-      fire(APP_EVENTS.STAMP_LANDFORM, detail)
+    let dragging = false
+    const drag = (phase: LandformDragDetail['phase'], e: PointerEvent) => {
+      const detail: LandformDragDetail = {
+        kind: opt.id,
+        phase,
+        clientX: e.clientX,
+        clientY: e.clientY,
+      }
+      fire(APP_EVENTS.LANDFORM_DRAG, detail)
+    }
+    btn.addEventListener('pointerdown', (e) => {
+      e.preventDefault()
+      dragging = true
+      btn.setPointerCapture?.(e.pointerId)
+      btn.classList.add('is-dragging')
+      drag('start', e)
     })
+    btn.addEventListener('pointermove', (e) => {
+      if (!dragging) return
+      drag('move', e)
+    })
+    const endDrag = (e: PointerEvent) => {
+      if (!dragging) return
+      dragging = false
+      btn.classList.remove('is-dragging')
+      drag('end', e)
+    }
+    btn.addEventListener('pointerup', endDrag)
+    btn.addEventListener('pointercancel', endDrag)
     landformGrid.append(btn)
   }
 
@@ -476,6 +621,7 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
     el('h2', {}, 'Draw'),
     toolGrid,
     el('h3', {}, 'Landforms'),
+    el('p', { class: 'hint' }, 'Drag a picture onto the map. Click the land to make it smaller.'),
     landformGrid,
     el('div', { class: 'slider-row' }, el('label', {}, 'Brush · ', brushVal), brushSlider),
     el(
@@ -487,7 +633,7 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
     el(
       'p',
       { class: 'hint' },
-      'Stamp a doodle, then paint or erase. Do not paint mountains — Make sense derives those.',
+      'Make sense derives mountains — do not paint them.',
     ),
     critiqueBtn,
   )
@@ -540,17 +686,59 @@ function mountWorldbuildTools(state: ShellStateView): HTMLElement {
     })
     toolGrid.append(btn)
   }
+
+  const countVal = el('span', { id: 'polityCountVal' }, String(state.polityCount))
+  const countSlider = el('input', {
+    type: 'range',
+    id: 'polityCount',
+    min: 1,
+    max: 12,
+    step: 1,
+    value: state.polityCount,
+  }) as HTMLInputElement
+  countSlider.addEventListener('input', () => {
+    const detail: PolityCountDetail = { count: Number(countSlider.value) }
+    fire(APP_EVENTS.POLITY_COUNT_CHANGE, detail)
+    countVal.textContent = String(countSlider.value)
+  })
+
+  const overlays: readonly { id: ShellStateView['worldOverlay']; label: string; title: string }[] = [
+    { id: 'countries', label: 'Countries', title: 'Borders grown from seats of power' },
+    { id: 'caravans', label: 'Caravans', title: 'Overland trade, width is volume' },
+    { id: 'sea-lanes', label: 'Sea lanes', title: 'Port-to-port sea trade' },
+  ]
+  const overlayRow = el('div', { class: 'overlay-row', 'aria-label': 'Worldbuild overlay' })
+  for (const o of overlays) {
+    const btn = el(
+      'button',
+      {
+        type: 'button',
+        class: 'chip' + (state.worldOverlay === o.id ? ' active' : ''),
+        'data-overlay': o.id,
+        title: o.title,
+      },
+      o.label,
+    )
+    btn.addEventListener('click', () => {
+      const detail: OverlayChangeDetail = { overlay: o.id }
+      fire(APP_EVENTS.WORLD_OVERLAY_CHANGE, detail)
+    })
+    overlayRow.append(btn)
+  }
+
   const backBtn = el('button', { type: 'button' }, 'Back to Sketch')
   backBtn.addEventListener('click', () => fire(APP_EVENTS.BACK_TO_SKETCH))
   return el(
     'div',
     { class: 'tools-inner' },
-    el('h2', {}, 'Settlements'),
+    el('h2', {}, 'Worldbuild'),
     toolGrid,
+    el('div', { class: 'slider-row' }, el('label', {}, 'Countries · ', countVal), countSlider),
+    overlayRow,
     el(
       'p',
       { class: 'hint' },
-      'Cities sit on the derived world. Towns were founded where the land can feed them — place or raze to edit.',
+      'Drag the slider to split the land. Overlay is one message: countries, caravans, or sea lanes. Trade ink is surplus and path cost, not GDP. Paint a border to claim. Click a capital to read if it is a melting pot.',
     ),
     backBtn,
   )
@@ -569,6 +757,13 @@ export function updateStageTools(refs: ToolsRefs, state: ShellStateView): void {
   if (critiqueBtn) {
     critiqueBtn.disabled = state.isProcessing || !hasAnyLand(state.mask, state.meta.threshold)
   }
+  const polityVal = refs.root.querySelector('#polityCountVal')
+  if (polityVal) polityVal.textContent = String(state.polityCount)
+  const politySlider = refs.root.querySelector('#polityCount') as HTMLInputElement | null
+  if (politySlider) politySlider.value = String(state.polityCount)
+  for (const btn of Array.from(refs.root.querySelectorAll<HTMLButtonElement>('[data-overlay]'))) {
+    btn.classList.toggle('active', btn.dataset.overlay === state.worldOverlay)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -581,7 +776,7 @@ export function mountStageWork(state: ShellStateView): HTMLElement {
       return el(
         'div',
         {},
-        el('p', { class: 'hint' }, 'Stamp a landform or paint. Critique when the blob looks like a continent.'),
+        el('p', { class: 'hint' }, 'Drag a picture onto the map. Click the land to shrink it. Critique when the coast looks right.'),
       )
     case 'critique':
       return mountCritiqueWork(state)
@@ -593,7 +788,9 @@ export function mountStageWork(state: ShellStateView): HTMLElement {
 }
 
 function mountCritiqueWork(state: ShellStateView): HTMLElement {
-  const scoreEl = el('div', { class: 'score' }, formatScore(state.score))
+  const grade = gradeFromScore(state.score)
+  const scoreEl = el('div', { class: 'score' }, grade)
+  const caption = el('p', { class: 'score-caption' }, gradeCaption(grade))
   const issueList = el('ul', { class: 'issue-list' })
   renderIssues(issueList, state.issues)
   const makeSenseBtn = el('button', { type: 'button', class: 'primary' }, 'Make sense')
@@ -602,8 +799,9 @@ function mountCritiqueWork(state: ShellStateView): HTMLElement {
   return el(
     'div',
     {},
-    el('h3', {}, 'Score'),
+    el('h3', {}, 'Grade'),
     scoreEl,
+    caption,
     el('h3', {}, 'Issues'),
     issueList,
     makeSenseBtn,
@@ -619,7 +817,7 @@ function mountMakeSenseWork(state: ShellStateView): HTMLElement {
   return el('div', {}, el('h3', {}, 'Pipeline'), progressList, worldbuildBtn)
 }
 
-function cityListBlurb(city: City): string {
+function cityListBlurb(city: City, state: ShellStateView): string {
   const bits: string[] = []
   if (city.role) bits.push(SETTLEMENT_ROLE_LABEL[city.role])
   if (city.port && city.port !== 'none') {
@@ -629,6 +827,11 @@ function cityListBlurb(city: City): string {
   }
   if (city.rank && city.rank !== 'seat') bits.push(SETTLEMENT_RANK_LABEL[city.rank].toLowerCase())
   if (city.oasis) bits.push('oasis')
+  if (city.role === 'seat_of_power' && city.meltingPot !== undefined) {
+    bits.push(city.meltingPot >= 0.55 ? 'melting pot' : 'provincial')
+  }
+  const polity = state.world?.polities.find((p) => p.id === city.polityId)
+  if (polity) bits.push(polity.analog.label)
   bits.push(`${city.x}, ${city.y}`)
   return bits.join(' · ')
 }
@@ -637,23 +840,36 @@ function mountWorldbuildWork(state: ShellStateView): HTMLElement {
   const n = state.world ? state.world.cities.length : 0
   const list = el('ul', { class: 'city-list' })
   if (state.world) {
+    for (const p of state.world.polities) {
+      list.append(
+        el(
+          'li',
+          {},
+          el('span', {}, p.name),
+          el('span', {}, `${p.analog.label}. ${economyLine(p)} ${meltingPotLabel(p.meltingPot)}`),
+        ),
+      )
+    }
     for (const city of state.world.cities) {
+      if (city.role === 'seat_of_power') continue
       list.append(
         el(
           'li',
           {},
           el('span', {}, city.name),
-          el('span', {}, cityListBlurb(city)),
+          el('span', {}, cityListBlurb(city, state)),
         ),
       )
     }
   }
   if (n === 0) list.append(el('li', {}, 'No cities yet — land may be too harsh to settle.'))
-  return el('div', {}, el('p', { class: 'cities-count' }, `Cities: ${n}`), list)
-}
-
-function formatScore(score: number): string {
-  return `${Math.round(score)}%`
+  const countries = state.world?.polities.length ?? 0
+  return el(
+    'div',
+    {},
+    el('p', { class: 'cities-count' }, `Countries: ${countries} · Towns: ${n}`),
+    list,
+  )
 }
 
 function renderIssues(
@@ -717,22 +933,43 @@ export function sketchInspectHtml(
   `
 }
 
-export function worldInspectHtml(display: {
-  elev: string
-  plateId: string
-  tempSummer: string
-  tempWinter: string
-  tempRange: string
-  moistSummer: string
-  moistWinter: string
-  biome: string
-  ocean?: string
-}, x: number, y: number, land: boolean): string {
+export function worldInspectHtml(
+  display: {
+    elev: string
+    plateId: string
+    tempSummer: string
+    tempWinter: string
+    tempRange: string
+    moistSummer: string
+    moistWinter: string
+    biome: string
+    ocean?: string
+  },
+  x: number,
+  y: number,
+  land: boolean,
+  lore?: {
+    polity?: string
+    analog?: string
+    because?: string
+    tradition?: string
+    economy?: string
+    mix?: string
+  },
+): string {
   const oceanRow =
     !land && display.ocean && display.ocean !== '—'
       ? `
       <dt>Ocean</dt><dd>${display.ocean}</dd>`
       : ''
+  const loreRows = lore
+    ? `${lore.polity ? `<dt>Country</dt><dd>${lore.polity}</dd>` : ''}
+      ${lore.analog ? `<dt>Feels like</dt><dd>${lore.analog}</dd>` : ''}
+      ${lore.because ? `<dt>Why</dt><dd>${lore.because}</dd>` : ''}
+      ${lore.tradition ? `<dt>People</dt><dd>${lore.tradition}</dd>` : ''}
+      ${lore.economy ? `<dt>Trade</dt><dd>${lore.economy}</dd>` : ''}
+      ${lore.mix ? `<dt>Capital</dt><dd>${lore.mix}</dd>` : ''}`
+    : ''
   return `
     <div class="inspect-head">
       <strong>${x}, ${y}</strong>
@@ -746,7 +983,7 @@ export function worldInspectHtml(display: {
       <dt>Range</dt><dd>${display.tempRange}</dd>
       <dt>Summer moisture</dt><dd>${display.moistSummer}</dd>
       <dt>Winter moisture</dt><dd>${display.moistWinter}</dd>
-      <dt>Biome</dt><dd>${display.biome}</dd>${oceanRow}
+      <dt>Biome</dt><dd>${display.biome}</dd>${oceanRow}${loreRows}
     </dl>
   `
 }

@@ -8,6 +8,7 @@
  */
 
 import type { Issue, Stage, Tool } from '../world/types'
+import { gradeCaption, gradeFromScore } from '../critique/main'
 
 /** Tone carried alongside the message in the CustomEvent detail. */
 export type CoachTone = 'info' | 'warn' | 'success' | 'error'
@@ -74,7 +75,7 @@ export function renderCoach(event: CoachEvent): { tone: CoachTone; message: stri
     case 'sketch.ready':
       return {
         tone: 'info',
-        message: 'Empty ocean. Paint land. Critique when the blob looks like a continent.',
+        message: 'Empty ocean. Drag a picture onto the map, or paint land.',
       }
     case 'sketch.brushDab':
       return {
@@ -91,11 +92,13 @@ export function renderCoach(event: CoachEvent): { tone: CoachTone; message: stri
         tone: 'info',
         message: 'Empty ocean again. Paint land.',
       }
-    case 'critique.grade':
+    case 'critique.grade': {
+      const grade = gradeFromScore(event.score)
       return {
         tone: 'warn',
-        message: `Score ${event.score} — ${event.criticalCount} critical, ${event.majorCount} major, ${event.minorCount} minor. This is not a geography grade yet.`,
+        message: `${grade} — ${gradeCaption(grade)}. ${event.criticalCount} critical, ${event.majorCount} major, ${event.minorCount} minor.`,
       }
+    }
     case 'critique.overlay':
       return {
         tone: 'warn',
@@ -111,11 +114,13 @@ export function renderCoach(event: CoachEvent): { tone: CoachTone; message: stri
         tone: 'info',
         message: `Make sense step ${event.stepIndex}/${event.totalSteps}: ${event.stepName} (${event.elapsedMs}ms)`,
       }
-    case 'makeSense.complete':
+    case 'makeSense.complete': {
+      const grade = gradeFromScore(event.scoreAfter)
       return {
         tone: 'success',
-        message: 'Atlas grounded. Switch layers. Hover a cell.',
+        message: `${grade} — ${gradeCaption(grade)}. Atlas grounded. Switch layers.`,
       }
+    }
     case 'makeSense.cancelled':
       return {
         tone: 'warn',
@@ -175,7 +180,7 @@ export function announce(event: CoachEvent): void {
  * EXAMPLES
  *
  * announce({ kind: 'sketch.ready', width: 512, height: 256, landCells: 0 })
- *   -> { tone: 'info', message: 'Empty ocean. Paint land. Critique when the blob looks like a continent.' }
+ *   -> { tone: 'info', message: 'Empty ocean. Drag a picture onto the map, or paint land.' }
  *
  * announce({ kind: 'app.boot', stage: 'sketch', resumedFromMask: false, resumedFromWorld: false })
  *   -> silent (Coach panel unchanged)

@@ -13,7 +13,6 @@
 
 import type { World, Issue } from '../world/types'
 import { idx } from '../world/types'
-import { countBigComponents } from '../sketch/countBigComponents'
 
 // ---------------------------------------------------------------------------
 // 1. Severity weights and score aggregation.
@@ -382,13 +381,10 @@ export function checkFluxOnMaxima(world: World): Issue[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a "current land" mask from elevation vs sea level, run the
- * same big-component counter on it, and compare to the saved pre-count.
- *
- * The rule: the count must not move by more than 5% (relative). If it does,
- * Make-sense rewrote the coastline more than the eye should be able to see.
- *
- * If `priorMask` is empty (length 0) the check is skipped — no prior data.
+ * Land area after Make sense should still be the same planet, not a
+ * new set of continents. Shoreline meander and hole-fill are allowed.
+ * Inventing land from empty ocean, or growing/shrinking area by more
+ * than a quarter, is a rewrite.
  */
 export function checkMaskLock(
   priorMask: Float32Array,
@@ -397,36 +393,35 @@ export function checkMaskLock(
 ): Issue[] {
   const issues: Issue[] = []
   if (priorMask.length === 0) return issues
-  const w = world.meta.width
-  const h = world.meta.height
-  const n = w * h
+  const n = world.meta.width * world.meta.height
   if (priorMask.length !== n) return issues
 
-  const preCount = countBigComponents(priorMask, w, h, threshold, 100)
-
-  // Reconstruct land from elevation vs sea level.
-  const post = new Float32Array(n)
-  const sea = world.meta.seaLevel
+  let preLand = 0
+  let postLand = 0
   for (let i = 0; i < n; i++) {
-    post[i] = world.elev[i] >= sea ? 1 : 0
+    if (priorMask[i] >= threshold) preLand++
+    if (world.mask[i] >= threshold) postLand++
   }
-  const postCount = countBigComponents(post, w, h, 0.5, 100)
+  if (postLand === 0) {
+    for (let i = 0; i < n; i++) {
+      if (world.elev[i] >= 1) postLand++
+    }
+  }
 
-  const denom = Math.max(1, preCount + postCount)
-  const drift = Math.abs(preCount - postCount) / denom
-  if (drift > 0.05) {
-    issues.push({
-      id: 'mask-drift',
-      severity: 'critical',
-      title: 'World rewrote the coastline',
-      critique: `Pre-Make-sense mask had ${preCount} big land ` +
-        `components (>=100 cells); the derived World has ${postCount}. ` +
-        `That's a ${(drift * 100).toFixed(1)}% shift — Make-sense is ` +
-        `supposed to add coast noise, not geography.`,
-      fix: 'Re-paint the mask, or rerun Make-sense with conservative step limits.',
-      evidence: [],
-    })
-  }
+  const invented = preLand === 0 && postLand >= 100
+  const areaShift = preLand > 0 && Math.abs(postLand - preLand) / preLand > 0.25
+  if (!invented && !areaShift) return issues
+
+  issues.push({
+    id: 'mask-drift',
+    severity: 'critical',
+    title: 'World rewrote the coastline',
+    critique:
+      `Pre-Make-sense land was ${preLand} cells; the derived World has ${postLand}. ` +
+      `Make sense may reshape the shore. It may not invent or erase the continent.`,
+    fix: 'Re-paint the mask, or rerun Make sense.',
+    evidence: [],
+  })
   return issues
 }
 
@@ -539,14 +534,15 @@ export function checkUniformBiome(world: World): Issue[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Auto-founding should mix roles. More than one seat among five or more
- * towns is a placement bug, not a civilisation of thrones.
+ * Auto-founding should mix roles. A handful of countries is fine.
+ * A map where most towns are thrones is a placement bug.
  */
 export function checkAllCapitals(world: World): Issue[] {
   const cities = world.cities
   if (cities.length < 5) return []
   const seats = cities.filter((c) => (c.role ?? 'seat_of_power') === 'seat_of_power').length
-  if (seats <= 1) return []
+  const cap = Math.max(1, Math.min(12, Math.floor(cities.length * 0.4)))
+  if (seats <= cap && seats < cities.length) return []
   return [
     {
       id: 'all-capitals',
@@ -554,8 +550,8 @@ export function checkAllCapitals(world: World): Issue[] {
       title: 'Too many seats of power',
       critique:
         `${seats} of ${cities.length} towns are seats of power. ` +
-        `A continent has one capital, then farms, ports, and mines — not a dozen thrones.`,
-      fix: 'Quota mix: one seat, then farmland, fishing, mining, trade, pastoral.',
+        `Countries need a mix of farms, ports, and mines — not a map of only thrones.`,
+      fix: 'Keep one seat per country, then farmland, fishing, mining, trade, pastoral.',
       evidence: cities
         .filter((c) => (c.role ?? 'seat_of_power') === 'seat_of_power')
         .slice(0, 8)

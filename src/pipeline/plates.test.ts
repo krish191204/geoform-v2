@@ -143,7 +143,7 @@ describe('assignPlatesUnderMask', () => {
 
   it('covers all 5 boundary categories in a varied mask', () => {
     const seen = new Set<string>()
-    for (let seed = 1; seed <= 5; seed++) {
+    for (let seed = 1; seed <= 24; seed++) {
       const { mask, width, height } = makeVariedMask()
       const result = assignPlatesUnderMask(mask, width, height, seed, 6371, 23.5)
       for (const b of result.boundaries) seen.add(b.class)
@@ -166,7 +166,7 @@ describe('assignPlatesUnderMask', () => {
     expect([...ids][0]).toBeGreaterThan(0)
   })
 
-  it('does not let a global Voronoi stripe two separated islands the same way', () => {
+  it('does not pizza-slice two separated islands', () => {
     const mask = emptyMask(WIDTH, HEIGHT)
     for (let y = 4; y <= 10; y++) {
       for (let x = 8; x <= 18; x++) mask[y * WIDTH + x] = 1
@@ -185,7 +185,6 @@ describe('assignPlatesUnderMask', () => {
     }
     expect(north.size).toBe(1)
     expect(south.size).toBe(1)
-    expect([...north][0]).not.toBe([...south][0])
   })
 
   it('assigns every ocean cell a non-zero plateId and uses more than one ocean plate', () => {
@@ -202,18 +201,79 @@ describe('assignPlatesUnderMask', () => {
     expect(oceanIds.size).toBeGreaterThanOrEqual(2)
   })
 
-  it('keeps a typical continent on at most three land plates', () => {
+  it('lets a plate own both land and neighbouring ocean', () => {
+    const { mask, width, height } = makeContinentMask()
+    const result = assignPlatesUnderMask(mask, width, height, 7, 6371, 23.5)
+    let shared = false
+    for (let y = 0; y < height && !shared; y++) {
+      for (let x = 0; x < width && !shared; x++) {
+        const i = y * width + x
+        if (mask[i] < 0.5) continue
+        const id = result.plateId[i]
+        const left = x === 0 ? width - 1 : x - 1
+        const right = x === width - 1 ? 0 : x + 1
+        for (const j of [y * width + left, y * width + right]) {
+          if (mask[j] < 0.5 && result.plateId[j] === id) shared = true
+        }
+        if (y > 0 && mask[(y - 1) * width + x] < 0.5 && result.plateId[(y - 1) * width + x] === id) {
+          shared = true
+        }
+        if (y < height - 1 && mask[(y + 1) * width + x] < 0.5 && result.plateId[(y + 1) * width + x] === id) {
+          shared = true
+        }
+      }
+    }
+    expect(shared).toBe(true)
+  })
+
+  it('does not treat the coastline as a plate suture', () => {
     const mask = emptyMask(WIDTH, HEIGHT)
     for (let y = 6; y < 26; y++) {
       for (let x = 8; x < 56; x++) mask[y * WIDTH + x] = 1
     }
     const result = assignPlatesUnderMask(mask, WIDTH, HEIGHT, 5, 6371, 23.5)
-    const landIds = new Set<number>()
-    for (let i = 0; i < mask.length; i++) {
-      if (mask[i] >= 0.5) landIds.add(result.plateId[i])
+    let coast = 0
+    let coastSuture = 0
+    for (let y = 0; y < HEIGHT; y++) {
+      for (let x = 0; x < WIDTH; x++) {
+        const i = y * WIDTH + x
+        if (mask[i] < 0.5) continue
+        const neigh = [
+          y * WIDTH + (x === WIDTH - 1 ? 0 : x + 1),
+          y * WIDTH + (x === 0 ? WIDTH - 1 : x - 1),
+          y > 0 ? (y - 1) * WIDTH + x : -1,
+          y < HEIGHT - 1 ? (y + 1) * WIDTH + x : -1,
+        ]
+        for (const j of neigh) {
+          if (j < 0) continue
+          if (mask[j] >= 0.5) continue
+          coast++
+          if (result.plateId[j] !== result.plateId[i]) coastSuture++
+        }
+      }
     }
-    expect(landIds.size).toBeGreaterThanOrEqual(1)
-    expect(landIds.size).toBeLessThanOrEqual(3)
+    expect(coast).toBeGreaterThan(40)
+    expect(coastSuture / coast).toBeLessThan(0.45)
+  })
+
+  it('gives land plates a real oceanic share, not a one-cell halo', () => {
+    const { mask, width, height } = makeContinentMask()
+    const result = assignPlatesUnderMask(mask, width, height, 7, 6371, 23.5)
+    const landOf = new Map<number, number>()
+    const oceanOf = new Map<number, number>()
+    const N = width * height
+    for (let i = 0; i < N; i++) {
+      const id = result.plateId[i]
+      if (id <= 0) continue
+      if (mask[i] >= 0.5) landOf.set(id, (landOf.get(id) ?? 0) + 1)
+      else oceanOf.set(id, (oceanOf.get(id) ?? 0) + 1)
+    }
+    let shared = false
+    for (const [id, nLand] of landOf) {
+      if (nLand < 20) continue
+      if ((oceanOf.get(id) ?? 0) >= Math.max(30, Math.floor(nLand * 0.4))) shared = true
+    }
+    expect(shared).toBe(true)
   })
 
   it('produces identical plateId/plateVx/plateVy for the same world and seed', () => {

@@ -17,8 +17,8 @@ if (typeof (globalThis as { ImageData?: unknown }).ImageData === 'undefined') {
 }
 
 import { describe, it, expect } from 'vitest'
-import { draw, inspectCell, screenToCell, bakeBumpImageData, bakeDisplacementImageData, bakeWorldImageDataSmooth, polePinchFade } from './draw'
-import { biomeColor, type CellBiome, type World, type WorldMeta } from '../world/types'
+import { draw, inspectCell, screenToCell, bakeBumpImageData, bakeDisplacementImageData, bakeWorldImageDataSmooth, bakeSketchMaskImageData, polePinchFade } from './draw'
+import { biomeColor, emptyPolityState, type CellBiome, type World, type WorldMeta } from '../world/types'
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -124,6 +124,7 @@ function makeWorld(opts: TestWorldOpts = {}): World {
     biome,
     suitability: Float32Array.from({ length: n }, () => 0.5),
     cities: [],
+    ...emptyPolityState(n),
   }
 }
 
@@ -240,6 +241,43 @@ describe('draw', () => {
     world.elev[15] = 4000
     const stepped = draw(world, 'summer', 'elevation')
     expect(pixel(stepped, 0, 0)).not.toEqual(pixel(stepped, 3, 3))
+  })
+
+  it('paints the same plate colour on land and neighbouring ocean', () => {
+    const world = makeWorld({ width: 8, height: 2, elev: () => 200 })
+    world.plateId.fill(3)
+    world.mask.fill(0)
+    for (let x = 0; x < 8; x++) world.mask[8 + x] = 1
+    const img = draw(world, 'summer', 'plates')
+    const dist = (a: [number, number, number], b: [number, number, number]) =>
+      Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2])
+    const land = pixel(img, 3, 1)
+    const sea = pixel(img, 3, 0)
+    const leftoverNavy: [number, number, number] = [16, 38, 52]
+    expect(dist(sea, land)).toBeLessThan(dist(sea, leftoverNavy))
+  })
+
+  it('veils wet relief cells more than dry ones', () => {
+    const dry = makeWorld({
+      width: 8,
+      height: 2,
+      summerMoist: () => 0.1,
+      summer: () => 10,
+      elev: () => 200,
+    })
+    const wet = makeWorld({
+      width: 8,
+      height: 2,
+      summerMoist: () => 0.95,
+      summer: () => 28,
+      elev: () => 200,
+    })
+    const dist = (a: [number, number, number], b: [number, number, number]) =>
+      Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2])
+    const dryPx = pixel(draw(dry, 'summer', 'relief'), 3, 1)
+    const wetPx = pixel(draw(wet, 'summer', 'relief'), 3, 1)
+    const paper: [number, number, number] = [232, 234, 230]
+    expect(dist(wetPx, paper)).toBeLessThan(dist(dryPx, paper))
   })
 })
 
@@ -467,6 +505,47 @@ describe('globe bakes', () => {
     const img = draw(world, 'summer', 'relief')
     const [r, g, b] = pixel(img, 2, 2)
     expect(r + g + b).toBeLessThan(220)
+  })
+})
+
+describe('bakeSketchMaskImageData', () => {
+  it('gives land more than one tan so the doodle is not a flat stamp', () => {
+    const w = 24
+    const h = 12
+    const mask = new Float32Array(w * h)
+    for (let y = 3; y < 9; y++) {
+      for (let x = 6; x < 18; x++) mask[y * w + x] = 1
+    }
+    const img = bakeSketchMaskImageData(mask, w, h, 0.5, 48, 24, 7)
+    const colors = new Set<string>()
+    for (let y = 8; y < 16; y++) {
+      for (let x = 16; x < 32; x++) {
+        const o = (y * img.width + x) * 4
+        colors.add(`${img.data[o]},${img.data[o + 1]},${img.data[o + 2]}`)
+      }
+    }
+    expect(colors.size).toBeGreaterThan(8)
+  })
+
+  it('does not rewrite the mask while painting paper grain', () => {
+    const mask = new Float32Array(16)
+    mask[5] = 0.91
+    const before = mask[5]
+    bakeSketchMaskImageData(mask, 4, 4, 0.5, 8, 8, 3)
+    expect(mask[5]).toBe(before)
+  })
+
+  it('paints inland doodle as grass, not khaki sludge', () => {
+    const w = 16
+    const h = 8
+    const mask = new Float32Array(w * h)
+    for (let y = 1; y < 7; y++) {
+      for (let x = 3; x < 13; x++) mask[y * w + x] = 1
+    }
+    const img = bakeSketchMaskImageData(mask, w, h, 0.5, 32, 16, 4)
+    const o = (8 * img.width + 16) * 4
+    expect(img.data[o + 1]).toBeGreaterThan(img.data[o])
+    expect(img.data[o + 1]).toBeGreaterThan(img.data[o + 2])
   })
 })
 

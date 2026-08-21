@@ -195,18 +195,16 @@ describe('computeSeasonalClimate', () => {
   })
 
   it('cools a 5000 m cell more than a sea-level cell at the same latitude', () => {
-    // Two 8x4 strips at low latitude, identical mask, opposite elevation.
-    const w = 8
-    const h = 4
+    // Tall enough that the equator is not mixing with the polar clamp.
+    const w = 16
+    const h = 24
     const low = flatWorld(w, h, (_x, _y) => true)
     const high = withElev(low, () => 5000)
     const rLow = run(low)
     const rHigh = run(high)
-    // Pick a mid-latitude cell.
     const i = (h >> 1) * w + (w >> 1)
     expect(rHigh.summer[i]).toBeLessThan(rLow.summer[i])
     expect(rHigh.winter[i]).toBeLessThan(rLow.winter[i])
-    // And the delta is at least 5x the 1000 m lapse rate, ≈ 32 °C.
     expect(rLow.summer[i] - rHigh.summer[i]).toBeGreaterThanOrEqual(32)
     expect(rLow.winter[i] - rHigh.winter[i]).toBeGreaterThanOrEqual(32)
   })

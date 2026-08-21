@@ -6,20 +6,24 @@
  * Worldbuild places cities on that planet.
  */
 
-import type { EditorState, Layer } from '../world/types'
+import type { EditorState, Layer, WorldOverlay } from '../world/types'
 import { DEFAULT_META } from '../world/types'
 import {
   APP_EVENTS,
   MAKE_SENSE_STEP_INDEX,
   STAGES,
   type BrushChangeDetail,
-  type LandformStampDetail,
+  type LandformDragDetail,
   type LayerChangeDetail,
   type MetaChangeDetail,
   type SeasonChangeDetail,
   type ShellStateView,
   type StageTransitionDetail,
   type ToolChangeDetail,
+  type ContinentCountDetail,
+  type OverlayChangeDetail,
+  type PolityCountDetail,
+  type LayoutChangeDetail,
   type ViewChangeDetail,
 } from './stages'
 import {
@@ -29,6 +33,7 @@ import {
   mountMapShell,
   mountStageTools,
   mountStageWork,
+  paintLandformThumb,
   showingDerivedWorld,
   sketchInspectHtml,
   updateChrome,
@@ -41,9 +46,21 @@ import {
 import { cellFromPointer, paintAtlas } from './atlas'
 import { inspectCell } from '../render/draw'
 import { createMaskBrushes, fireCommitHook } from '../sketch/maskBrushes'
-import { landformStampCopy, stampLandform } from '../sketch/landforms'
+import { landformStampCopy, stampLandformAt, clampContinentCount, isLandformKind, shrinkLandBlob } from '../sketch/landforms'
 import { placeCity, removeNearestCity } from '../sketch/worldbuild'
 import { inferSettlementRole, seedSettlements, annotateSettlement } from '../sketch/settlements'
+import {
+  analogAt,
+  economyLine,
+  ensureWorldbuild,
+  meltingPotLabel,
+  nearestPolityId,
+  paintClaim,
+  polityAt,
+  refreshWorldbuildAfterPaint,
+  defaultPolityCount,
+  clampPolityCount,
+} from '../sketch/polities'
 import {
   makeSenseInline,
   provenanceFromResult,
@@ -70,6 +87,10 @@ interface ShellFlags {
   pipelineStep: number
   inspectHtml: string
   viewMode: 'atlas' | 'planet'
+  layoutMode: 'chrome' | 'view-map'
+  continentCount: number
+  polityCount: number
+  worldOverlay: WorldOverlay
 }
 
 interface ShellBundle {
@@ -99,6 +120,10 @@ function makeInitialBundle(): ShellBundle {
     pipelineStep: 0,
     inspectHtml: emptyInspectHint(),
     viewMode: 'atlas',
+    layoutMode: 'chrome',
+    continentCount: 4,
+    polityCount: 4,
+    worldOverlay: 'countries',
   }
   return { state, flags }
 }
@@ -122,7 +147,7 @@ export function mountApp(root: HTMLElement): void {
   const { state, flags } = bundle
   const { brushes, bindMask } = createMaskBrushes()
 
-  root.classList.add('app')
+  root.classList.add('app', 'is-layout-chrome')
 
   const chrome = mountChrome()
   const map = mountMapShell()
@@ -131,16 +156,77 @@ export function mountApp(root: HTMLElement): void {
   toolsHost.className = 'panel tools-panel'
   const layout = document.createElement('div')
   layout.className = 'layout'
-  layout.append(toolsHost, map.root, inspector.root)
+  layout.append(map.root, toolsHost, inspector.root)
   root.append(chrome.root, layout)
 
   let toolsRefs: ToolsRefs | null = null
   let painting = false
+  let stampDrag: {
+    kind: import('../sketch/landforms').LandformKind
+    snapshot: Float32Array
+    ghost: Float32Array
+    scale: number
+    originX: number
+    originY: number
+    lastCell: { x: number; y: number } | null
+  } | null = null
+  let dragOrigin: { x: number; y: number } | null = null
   let paintRaf = 0
+  const DRAG_HIDE_PX = 10
+
+  function beginPointerStroke(clientX: number, clientY: number): void {
+    painting = true
+    dragOrigin = { x: clientX, y: clientY }
+  }
+
+  function hideChromeIfDragging(clientX: number, clientY: number): void {
+    if (stampDrag || flags.layoutMode === 'view-map' || flags.makeSenseComplete) return
+    if (state.stage !== 'sketch') return
+    if (state.tool !== 'draw-land' && state.tool !== 'erase-land') return
+    if (!painting || !dragOrigin) return
+    const dx = clientX - dragOrigin.x
+    const dy = clientY - dragOrigin.y
+    if (dx * dx + dy * dy < DRAG_HIDE_PX * DRAG_HIDE_PX) return
+    root.classList.add('is-doodling')
+  }
+
+  function setStampCursor(clientX: number, clientY: number, onMap: boolean): void {
+    map.stampCursor.hidden = !stampDrag
+    map.stampHint.hidden = !stampDrag
+    root.classList.toggle('is-stamping', Boolean(stampDrag && onMap))
+    if (!stampDrag) return
+    map.stampCursor.style.left = `${clientX + 14}px`
+    map.stampCursor.style.top = `${clientY + 14}px`
+  }
+
+  function clearStampDrag(): void {
+    stampDrag = null
+    map.stampCursor.hidden = true
+    map.stampHint.hidden = true
+    root.classList.remove('is-stamping')
+  }
+
+  function endPointerStroke(): void {
+    painting = false
+    dragOrigin = null
+    root.classList.remove('is-doodling')
+  }
   let planet: import('../render/globe').PlanetView | null = null
   let planetLoad: Promise<import('../render/globe').PlanetView | null> | null = null
   let planetLayout = { w: 0, h: 0 }
   let planetPaintGen = 0
+
+  function syncLayoutClasses(): void {
+    root.classList.toggle('is-view-map', flags.layoutMode === 'view-map')
+    root.classList.toggle('is-layout-chrome', flags.layoutMode === 'chrome')
+  }
+
+  function exitViewMap(): void {
+    if (flags.layoutMode !== 'view-map') return
+    flags.layoutMode = 'chrome'
+    syncLayoutClasses()
+    updateMapShell(map, buildView(bundle))
+  }
 
   async function ensurePlanet(): Promise<import('../render/globe').PlanetView | null> {
     if (planet) return planet
@@ -165,6 +251,7 @@ export function mountApp(root: HTMLElement): void {
 
   function render(opts: { remount?: boolean } = {}): void {
     const view = buildView(bundle)
+    syncLayoutClasses()
     updateChrome(chrome, view)
     updateMapShell(map, view)
     updateInspector(inspector, view)
@@ -207,13 +294,15 @@ export function mountApp(root: HTMLElement): void {
     }
     paintAtlas(map.canvas, {
       world: showWorld ? state.world : null,
-      mask: flags.mask,
+      mask: stampDrag ? stampDrag.snapshot : flags.mask,
       meta: state.meta,
       layer: flags.layer,
       season: flags.season,
       issues: state.stage === 'critique' ? state.issues : [],
       showCities: Boolean(showWorld && state.world && state.world.cities.length > 0),
-      preview: painting && !showWorld,
+      preview: (painting || Boolean(stampDrag)) && !showWorld,
+      ghostMask: stampDrag?.ghost ?? null,
+      worldOverlay: state.stage === 'worldbuild' ? flags.worldOverlay : null,
     })
   }
 
@@ -242,7 +331,19 @@ export function mountApp(root: HTMLElement): void {
     if (showingDerivedWorld(state) && state.world) {
       const cell = inspectCell(state.world, x, y)
       const land = state.world.mask[i] >= state.world.meta.threshold
-      flags.inspectHtml = worldInspectHtml(cell.display, x, y, land)
+      const p = polityAt(state.world, x, y)
+      const analog = land ? analogAt(state.world, x, y) : null
+      const capital = p
+        ? state.world.cities.find((c) => c.x === p.capitalX && c.y === p.capitalY)
+        : undefined
+      flags.inspectHtml = worldInspectHtml(cell.display, x, y, land, {
+        polity: p?.name,
+        analog: analog?.label,
+        because: analog?.because,
+        tradition: p?.tradition ?? analog?.tradition,
+        economy: p ? economyLine(p) : undefined,
+        mix: capital && p ? meltingPotLabel(p.meltingPot) : undefined,
+      })
     } else {
       const land = Boolean(flags.mask && flags.mask[i] >= state.meta.threshold)
       flags.inspectHtml = sketchInspectHtml(x, y, land)
@@ -266,8 +367,11 @@ export function mountApp(root: HTMLElement): void {
     const canvas = map.canvas
 
     let lastPaintCell: { x: number; y: number } | null = null
+    let downCell: { x: number; y: number } | null = null
+    let strokeMoved = false
 
-    const onPoint = (clientX: number, clientY: number, isDown: boolean) => {
+    const onPoint = (clientX: number, clientY: number, isDown: boolean, paintStroke: boolean) => {
+      if (stampDrag) return
       const cell = cellFromPointer(
         canvas,
         clientX,
@@ -300,18 +404,36 @@ export function mountApp(root: HTMLElement): void {
               'No city placed — need land, suitability ≥ 0.4, no neighbour within 5 cells.',
             )
           } else if (result.city) {
-            result.city.role = inferSettlementRole(state.world, x, y)
-            annotateSettlement(state.world, result.city)
+            const seats = state.world.cities.filter((c) => c.role === 'seat_of_power').length
+            result.city.role = inferSettlementRole(state.world, x, y, {
+              allowSeat: seats < flags.polityCount,
+            })
+            annotateSettlement(state.world, result.city, {
+              allowSeat: seats < flags.polityCount,
+            })
+            ensureWorldbuild(state.world, flags.polityCount)
             announce('success', `${result.city.name} founded.`)
           }
         } else {
           const result = removeNearestCity(state.world, x, y)
           if (!result.matched) announce('warn', 'No city within range.')
+          else ensureWorldbuild(state.world, flags.polityCount)
         }
         render()
         return
       }
 
+      if (state.tool === 'claim-land') {
+        if (!state.world || state.stage !== 'worldbuild') return
+        if (!isDown && !paintStroke) return
+        const pid = nearestPolityId(state.world, x, y)
+        paintClaim(state.world, x, y, Math.max(2, Math.round(state.brushSize / 6)), pid)
+        lastPaintCell = { x, y }
+        requestPaint()
+        return
+      }
+
+      if (!paintStroke) return
       if (state.stage !== 'sketch') return
       if (state.tool !== 'draw-land' && state.tool !== 'erase-land') return
 
@@ -332,20 +454,76 @@ export function mountApp(root: HTMLElement): void {
     }
 
     canvas.addEventListener('pointerdown', (e) => {
-      painting = true
+      if (stampDrag) {
+        e.preventDefault()
+        return
+      }
+      beginPointerStroke(e.clientX, e.clientY)
+      strokeMoved = false
+      downCell = cellFromPointer(canvas, e.clientX, e.clientY, state.meta.width, state.meta.height)
+      lastPaintCell = downCell
       canvas.setPointerCapture?.(e.pointerId)
-      onPoint(e.clientX, e.clientY, true)
+      onPoint(e.clientX, e.clientY, true, false)
     })
     canvas.addEventListener('pointermove', (e) => {
-      onPoint(e.clientX, e.clientY, false)
+      hideChromeIfDragging(e.clientX, e.clientY)
+      if (stampDrag) return
+      if (painting && dragOrigin) {
+        const dx = e.clientX - dragOrigin.x
+        const dy = e.clientY - dragOrigin.y
+        if (dx * dx + dy * dy >= DRAG_HIDE_PX * DRAG_HIDE_PX) {
+          if (
+            !strokeMoved &&
+            downCell &&
+            (state.tool === 'draw-land' || state.tool === 'erase-land' || state.tool === 'claim-land')
+          ) {
+            strokeMoved = true
+            onPoint(dragOrigin.x, dragOrigin.y, true, true)
+          }
+          if (strokeMoved) onPoint(e.clientX, e.clientY, true, true)
+          return
+        }
+      }
+      onPoint(e.clientX, e.clientY, false, false)
     })
     canvas.addEventListener('pointerup', () => {
-      painting = false
+      if (
+        !stampDrag &&
+        !strokeMoved &&
+        downCell &&
+        state.stage === 'sketch' &&
+        state.tool === 'draw-land' &&
+        !state.isProcessing
+      ) {
+        const mask = ensureMask()
+        if (
+          shrinkLandBlob(
+            mask,
+            state.meta.width,
+            state.meta.height,
+            state.meta.threshold,
+            downCell.x,
+            downCell.y,
+          )
+        ) {
+          if (state.world) invalidateDerivedWorld()
+          bindMask(mask)
+          announce('success', 'Smaller. Click again to shrink more.')
+        }
+      }
+      if (state.tool === 'claim-land' && state.world && state.stage === 'worldbuild') {
+        refreshWorldbuildAfterPaint(state.world)
+      }
+      endPointerStroke()
+      downCell = null
+      strokeMoved = false
       if (lastPaintCell) inspectAt(lastPaintCell.x, lastPaintCell.y)
       render()
     })
     canvas.addEventListener('pointercancel', () => {
-      painting = false
+      endPointerStroke()
+      downCell = null
+      strokeMoved = false
       render()
     })
   }
@@ -357,10 +535,12 @@ export function mountApp(root: HTMLElement): void {
       if (!planet) return
       globe.setPointerCapture?.(e.pointerId)
       moved = false
+      beginPointerStroke(e.clientX, e.clientY)
       planet.onPointerDown(e.clientX, e.clientY)
     })
     globe.addEventListener('pointermove', (e) => {
       if (!planet) return
+      hideChromeIfDragging(e.clientX, e.clientY)
       if (planet.onPointerMove(e.clientX, e.clientY)) {
         moved = true
         planet.render()
@@ -370,6 +550,7 @@ export function mountApp(root: HTMLElement): void {
       }
     })
     globe.addEventListener('pointerup', (e) => {
+      endPointerStroke()
       if (!planet || !state.world) {
         planet?.onPointerUp()
         return
@@ -389,13 +570,20 @@ export function mountApp(root: HTMLElement): void {
                   'No city placed — need land, suitability ≥ 0.4, no neighbour within 5 cells.',
                 )
               } else if (result.city) {
-                result.city.role = inferSettlementRole(state.world, x, y)
-                annotateSettlement(state.world, result.city)
+                const seats = state.world.cities.filter((c) => c.role === 'seat_of_power').length
+                result.city.role = inferSettlementRole(state.world, x, y, {
+                  allowSeat: seats < flags.polityCount,
+                })
+                annotateSettlement(state.world, result.city, {
+                  allowSeat: seats < flags.polityCount,
+                })
+                ensureWorldbuild(state.world, flags.polityCount)
                 announce('success', `${result.city.name} founded.`)
               }
             } else {
               const result = removeNearestCity(state.world, x, y)
               if (!result.matched) announce('warn', 'No city within range.')
+              else ensureWorldbuild(state.world, flags.polityCount)
             }
             render()
           }
@@ -403,7 +591,10 @@ export function mountApp(root: HTMLElement): void {
       }
       planet.onPointerUp()
     })
-    globe.addEventListener('pointercancel', () => planet?.onPointerUp())
+    globe.addEventListener('pointercancel', () => {
+      endPointerStroke()
+      planet?.onPointerUp()
+    })
     globe.addEventListener('wheel', (e) => {
       if (!planet || flags.viewMode !== 'planet') return
       e.preventDefault()
@@ -475,16 +666,118 @@ export function mountApp(root: HTMLElement): void {
     }
   })
 
-  window.addEventListener(APP_EVENTS.STAMP_LANDFORM, (ev) => {
-    if (state.stage !== 'sketch' || state.isProcessing) return
-    const kind = (ev as CustomEvent<LandformStampDetail>).detail?.kind
-    if (kind !== 'continents' && kind !== 'mixed' && kind !== 'islands') return
+  const STAMP_CLICK_PX = 12
+  const STAMP_SHRINK = 0.78
+  const STAMP_MIN_SCALE = 0.32
+  let stampEndLock = false
+
+  function pointerOverChrome(clientX: number, clientY: number): boolean {
+    for (const sel of ['.tools-panel', '.inspector', '.topnav', '.ux-stage-rail']) {
+      const node = root.querySelector(sel)
+      if (!node) continue
+      const r = node.getBoundingClientRect()
+      if (r.width < 8 || r.height < 8) continue
+      if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) {
+        return true
+      }
+    }
+    return false
+  }
+
+  function applyStampPointer(clientX: number, clientY: number, ended: boolean): void {
+    if (!stampDrag || state.stage !== 'sketch' || state.isProcessing) return
+    const { kind, scale } = stampDrag
+    const cell = cellFromPointer(map.canvas, clientX, clientY, state.meta.width, state.meta.height)
+    if (cell) stampDrag.lastCell = cell
+    setStampCursor(clientX, clientY, Boolean(cell))
+    if (!ended) {
+      if (!cell) {
+        stampDrag.ghost.fill(0)
+        requestPaint()
+        return
+      }
+      stampDrag.ghost.set(stampDrag.snapshot)
+      stampLandformAt(stampDrag.ghost, state.meta, kind, state.meta.seed, cell.x, cell.y, scale)
+      requestPaint()
+      return
+    }
+    if (stampEndLock) return
+    stampEndLock = true
+    queueMicrotask(() => {
+      stampEndLock = false
+    })
+    const overChrome = pointerOverChrome(clientX, clientY)
+    if (overChrome || !cell) {
+      const dx = clientX - stampDrag.originX
+      const dy = clientY - stampDrag.originY
+      if (dx * dx + dy * dy < STAMP_CLICK_PX * STAMP_CLICK_PX) {
+        stampDrag.scale = Math.max(STAMP_MIN_SCALE, stampDrag.scale * STAMP_SHRINK)
+        paintLandformThumb(map.stampCursor, kind, stampDrag.scale)
+        if (stampDrag.lastCell) {
+          stampDrag.ghost.set(stampDrag.snapshot)
+          stampLandformAt(
+            stampDrag.ghost,
+            state.meta,
+            kind,
+            state.meta.seed,
+            stampDrag.lastCell.x,
+            stampDrag.lastCell.y,
+            stampDrag.scale,
+          )
+        }
+        announce('info', 'Smaller. Drop it on the map, or click again.')
+        requestPaint()
+        return
+      }
+      flags.mask!.set(stampDrag.snapshot)
+      clearStampDrag()
+      requestPaint()
+      return
+    }
     if (state.world) invalidateDerivedWorld()
     const mask = ensureMask()
-    stampLandform(mask, state.meta, kind, state.meta.seed)
+    mask.set(stampDrag.snapshot)
+    stampLandformAt(mask, state.meta, kind, state.meta.seed, cell.x, cell.y, scale)
     bindMask(mask)
+    clearStampDrag()
     announce('success', landformStampCopy(kind))
     render()
+  }
+
+  window.addEventListener(APP_EVENTS.LANDFORM_DRAG, (ev) => {
+    if (state.stage !== 'sketch' || state.isProcessing) return
+    const detail = (ev as CustomEvent<LandformDragDetail>).detail
+    if (!detail || !isLandformKind(detail.kind)) return
+    const { kind, phase, clientX, clientY } = detail
+    if (phase === 'start') {
+      const mask = ensureMask()
+      stampDrag = {
+        kind,
+        snapshot: new Float32Array(mask),
+        ghost: new Float32Array(mask.length),
+        scale: 1,
+        originX: clientX,
+        originY: clientY,
+        lastCell: null,
+      }
+      paintLandformThumb(map.stampCursor, kind, 1)
+      setStampCursor(clientX, clientY, false)
+      return
+    }
+    applyStampPointer(clientX, clientY, phase === 'end')
+  })
+
+  window.addEventListener('pointermove', (e) => {
+    if (stampDrag) applyStampPointer(e.clientX, e.clientY, false)
+  })
+  window.addEventListener('pointerup', (e) => {
+    if (stampDrag) applyStampPointer(e.clientX, e.clientY, true)
+  })
+  window.addEventListener('pointercancel', () => {
+    if (!stampDrag) return
+    flags.mask?.set(stampDrag.snapshot)
+    clearStampDrag()
+    requestPaint()
   })
 
   window.addEventListener(APP_EVENTS.CLEAR_SEA, () => {
@@ -557,7 +850,9 @@ export function mountApp(root: HTMLElement): void {
         inspector.workHost.replaceChildren(mountStageWork(buildView(bundle)))
       })
       const world = worldFromMakeSense(result, state.meta, mask)
-      const added = seedSettlements(world)
+      flags.polityCount = defaultPolityCount(world)
+      const added = seedSettlements(world, 0.35, flags.polityCount)
+      ensureWorldbuild(world, flags.polityCount)
       const provenance = provenanceFromResult(result)
       state.world = world
       const c = critiqueWorld(world)
@@ -567,6 +862,7 @@ export function mountApp(root: HTMLElement): void {
       state.issues = c.issues
       flags.score = c.score
       flags.makeSenseComplete = true
+      flags.layoutMode = 'chrome'
       flags.pipelineStep = 7
       flags.layer = 'relief'
       flags.inspectHtml = emptyInspectHint(true)
@@ -618,6 +914,8 @@ export function mountApp(root: HTMLElement): void {
     STAGES[state.stage].leave(view)
     state.stage = 'worldbuild'
     state.tool = 'place-city'
+    flags.worldOverlay = 'countries'
+    if (state.world) ensureWorldbuild(state.world, flags.polityCount)
     render({ remount: true })
     STAGES[state.stage].enter(view)
     announceCoach({ kind: 'app.stage', from: 'make-sense', to: 'worldbuild', trigger: 'user' })
@@ -664,6 +962,54 @@ export function mountApp(root: HTMLElement): void {
     flags.layer = detail.layer
     updateMapShell(map, buildView(bundle))
     requestPaint()
+  })
+
+  window.addEventListener(APP_EVENTS.CONTINENT_COUNT_CHANGE, (ev) => {
+    const detail = (ev as CustomEvent).detail as ContinentCountDetail | undefined
+    if (!detail) return
+    flags.continentCount = clampContinentCount(detail.count)
+    if (toolsRefs) updateStageTools(toolsRefs, buildView(bundle))
+  })
+
+  window.addEventListener(APP_EVENTS.POLITY_COUNT_CHANGE, (ev) => {
+    const detail = (ev as CustomEvent).detail as PolityCountDetail | undefined
+    if (!detail) return
+    flags.polityCount = clampPolityCount(detail.count)
+    if (state.world) {
+      ensureWorldbuild(state.world, flags.polityCount)
+      announce('info', `${flags.polityCount} ${flags.polityCount === 1 ? 'country' : 'countries'} on the grounded land.`)
+    }
+    render({ remount: true })
+  })
+
+  window.addEventListener(APP_EVENTS.WORLD_OVERLAY_CHANGE, (ev) => {
+    const detail = (ev as CustomEvent).detail as OverlayChangeDetail | undefined
+    if (!detail) return
+    flags.worldOverlay = detail.overlay
+    if (toolsRefs) updateStageTools(toolsRefs, buildView(bundle))
+    requestPaint()
+  })
+
+  window.addEventListener(APP_EVENTS.LAYOUT_CHANGE, (ev) => {
+    const detail = (ev as CustomEvent).detail as LayoutChangeDetail | undefined
+    if (!detail) return
+    flags.layoutMode = detail.layout
+    syncLayoutClasses()
+    updateMapShell(map, buildView(bundle))
+  })
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return
+    if (stampDrag) {
+      e.preventDefault()
+      flags.mask?.set(stampDrag.snapshot)
+      clearStampDrag()
+      requestPaint()
+      return
+    }
+    if (flags.layoutMode !== 'view-map') return
+    e.preventDefault()
+    exitViewMap()
   })
 
   window.addEventListener(APP_EVENTS.VIEW_CHANGE, (ev) => {

@@ -23,6 +23,7 @@ import {
   scoreFromIssues,
 } from '../../critique/analyzeWorld'
 import type { World, WorldMeta } from '../../world/types'
+import { emptyPolityState } from '../../world/types'
 import { makeContinentWorld } from './fixtures'
 
 // ---------------------------------------------------------------------------
@@ -77,6 +78,7 @@ function toWorld(result: Awaited<ReturnType<typeof makeSenseInline>>, meta: Worl
     biome: result.biome as World['biome'],
     suitability: result.suitability,
     cities: [],
+    ...emptyPolityState(result.mask.length),
   } as World
 }
 

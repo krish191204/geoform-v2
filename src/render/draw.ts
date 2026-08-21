@@ -443,13 +443,9 @@ function layerFill(
     case 'elevation':
       return elevBandColor(e, ocean)
     case 'plates': {
+      // One message: plate membership. Same colour on land and ocean so
+      // sutures stay visible at sea instead of leftover navy fill.
       let rgb = plateColor(world.plateId[i])
-      if (ocean) {
-        rgb = mix(rgb, [20, 50, 70], 0.55)
-      } else {
-        const above = Math.max(0, e / 8000)
-        if (above > 0.08) rgb = mix(rgb, [232, 220, 200], Math.min(0.72, above * 0.95))
-      }
       const { edge, approach } = plateBoundaryCue(world, x, y)
       if (edge) {
         rgb = mix(rgb, [18, 22, 28], 0.42)
@@ -495,13 +491,13 @@ function applyPaperLook(
   const ocean = sampleMask(world, x, y) < threshold
 
   // Hillshade on terrain-ish layers. Height stays a raw metre ramp.
-  if (layer === 'relief' || layer === 'biome' || layer === 'plates') {
+  if (layer === 'relief' || layer === 'biome') {
     const er = sampleElev(world, x + 1, y)
     const ed = sampleElev(world, x, y + 1)
     const dx = (e - er) / SHADE_M
     const dy = (e - ed) / SHADE_M
     const shade = 0.72 + dx * 4.2 + dy * 3.0
-    const ambient = layer === 'biome' ? 0.55 : layer === 'plates' ? 0.48 : 0.35
+    const ambient = layer === 'biome' ? 0.55 : 0.35
     const lit = ambient + ((1 - ambient) * clamp(shade, 0.45, 1.35)) / 1.15
     rgb = [clamp(rgb[0] * lit), clamp(rgb[1] * lit), clamp(rgb[2] * lit)]
   }
@@ -517,6 +513,32 @@ function applyPaperLook(
       clamp(rgb[1] + shimmer * 70),
       clamp(rgb[2] + shimmer * 90),
     ]
+  }
+
+  // Ocean aspects live on Relief: shelf and ice edge.
+  // Biome keeps one ocean colour so the classifier stays one message.
+  if (ocean && layer === 'relief') {
+    const { width: w, height: h, threshold } = world.meta
+    const ix = wrapX(Math.floor(x), w)
+    const iy = Math.max(0, Math.min(h - 1, Math.floor(y)))
+    const kind = classifyOcean(world.mask, world.summer, w, h, threshold, ix, iy)
+    if (kind === 'ice-edge') rgb = mix(rgb, [198, 214, 222], 0.38)
+    else if (kind === 'shelf') rgb = mix(rgb, [36, 110, 128], 0.32)
+  }
+
+  // Weather veil on Relief only — view overlay from moisture + SST, not a GCM.
+  if (layer === 'relief') {
+    const moist = sampleScalar(world.summerMoist, world, x, y)
+    const sst = sampleScalar(world.summer, world, x, y)
+    const band = fbm2(x * 0.045, y * 0.07, world.meta.seed + 77)
+    const swirl = fbm2(x * 0.11 + 9, y * 0.09, world.meta.seed + 91)
+    let cloud = 0
+    if (moist > 0.42) cloud += (moist - 0.42) * 0.85
+    if (sst > 22) cloud += Math.min(0.28, (sst - 22) / 50)
+    cloud *= 0.28 + 0.72 * band
+    if (swirl > 0.6) cloud += (swirl - 0.6) * 0.95
+    cloud = Math.max(0, Math.min(0.55, cloud))
+    if (cloud > 0.04) rgb = mix(rgb, [232, 234, 230], cloud)
   }
 
   // Coastal ink/foam — skip plates so sutures stay readable.
@@ -659,6 +681,128 @@ function sampleBilinear(
   const c11 = layerFill(world, season, layer, x1, y1)
   const mixed = mix(mix(c00, c10, fx), mix(c01, c11, fx), fy)
   return applyPaperLook(mixed, world, layer, xf, yf, showRivers)
+}
+
+function hash01(x: number, y: number, seed: number): number {
+  let n = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + seed
+  n = (n ^ (n >>> 13)) >>> 0
+  n = Math.imul(n, 1274126177)
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296
+}
+
+function valueNoise2(x: number, y: number, seed: number): number {
+  const x0 = Math.floor(x)
+  const y0 = Math.floor(y)
+  const fx = x - x0
+  const fy = y - y0
+  const u = fx * fx * (3 - 2 * fx)
+  const v = fy * fy * (3 - 2 * fy)
+  const n00 = hash01(x0, y0, seed)
+  const n10 = hash01(x0 + 1, y0, seed)
+  const n01 = hash01(x0, y0 + 1, seed)
+  const n11 = hash01(x0 + 1, y0 + 1, seed)
+  return n00 + u * (n10 - n00) + v * (n01 + u * (n11 - n01) - (n00 + u * (n10 - n00)))
+}
+
+function fbm2(x: number, y: number, seed: number): number {
+  return (
+    valueNoise2(x, y, seed) * 0.58 +
+    valueNoise2(x * 2.17, y * 2.17, seed + 19) * 0.28 +
+    valueNoise2(x * 4.91, y * 4.91, seed + 41) * 0.14
+  )
+}
+
+/**
+ * Sketch-only paper look. Grass and soil from the mask, ragged inked shores —
+ * never writes World. Geoform 1 greens, not a khaki sticker on the sea.
+ */
+export function bakeSketchMaskImageData(
+  mask: Float32Array | null,
+  width: number,
+  height: number,
+  threshold: number,
+  outW: number,
+  outH: number,
+  seed: number,
+): ImageData {
+  const w = width
+  const h = height
+  const cw = Math.max(1, outW)
+  const ch = Math.max(1, outH)
+  const image = new ImageData(cw, ch)
+  const data = image.data
+  const wrap = (x: number) => ((x % w) + w) % w
+  const sample = (xf: number, yf: number): number => {
+    if (!mask) return 0
+    const x0 = wrap(Math.floor(xf))
+    const y0 = Math.max(0, Math.min(h - 1, Math.floor(yf)))
+    const x1 = wrap(x0 + 1)
+    const y1 = Math.max(0, Math.min(h - 1, y0 + 1))
+    const fx = xf - Math.floor(xf)
+    const fy = yf - Math.floor(yf)
+    const v00 = mask[y0 * w + x0]
+    const v10 = mask[y0 * w + x1]
+    const v01 = mask[y1 * w + x0]
+    const v11 = mask[y1 * w + x1]
+    return (v00 * (1 - fx) + v10 * fx) * (1 - fy) + (v01 * (1 - fx) + v11 * fx) * fy
+  }
+  const sand: [number, number, number] = [168, 176, 122]
+  const grass: [number, number, number] = [92, 138, 72]
+  const meadow: [number, number, number] = [58, 112, 58]
+  const soil: [number, number, number] = [110, 118, 72]
+  for (let py = 0; py < ch; py++) {
+    const y0 = ((py + 0.5) * h) / ch
+    for (let px = 0; px < cw; px++) {
+      const x0 = ((px + 0.5) * w) / cw
+      const ragged = (fbm2(x0 * 0.55, y0 * 0.55, seed + 3) - 0.5) * 0.9
+      const xf = x0 + ragged
+      const yf = Math.max(0, Math.min(h - 1, y0 + ragged * 0.55))
+      const t = sample(xf, yf)
+      const k = Math.max(0, Math.min(1, (t - threshold + 0.035) / 0.07))
+      const grain = (hash01(px, py, seed) - 0.5) * 0.07
+      const wave =
+        0.5 + 0.5 * Math.sin(x0 * 0.35 + Math.cos(y0 * 0.22) * 2) * Math.sin(y0 * 0.4)
+      const shimmer = wave * 0.55 * 0.14
+      let r = 8 + (18 - 8) * 0.38 + shimmer * 40
+      let g = 28 + (62 - 28) * 0.38 + shimmer * 70
+      let b = 48 + (92 - 48) * 0.38 + shimmer * 90
+      if (k > 0.02) {
+        const inland = Math.max(0, Math.min(1, (t - threshold) / 0.35))
+        const n = fbm2(xf * 0.16, yf * 0.16, seed + 7)
+        const z = inland * (0.35 + n * 0.28)
+        const zR = Math.max(0, Math.min(1, (sample(xf + 0.55, yf) - threshold) / 0.35))
+        const zD = Math.max(0, Math.min(1, (sample(xf, yf + 0.55) - threshold) / 0.35))
+        const shade = clamp(0.78 + (z - zR) * 2.1 + (z - zD) * 1.6, 0.55, 1.18)
+        let land = mix(sand, grass, Math.min(1, inland * 3.2))
+        land = mix(land, meadow, inland * 0.85)
+        land = mix(land, soil, Math.max(0, n - 0.62) * inland)
+        r = land[0] * shade
+        g = land[1] * shade
+        b = land[2] * shade
+        r = r + (8 + shimmer * 40 - r) * (1 - k)
+        g = g + (28 + shimmer * 70 - g) * (1 - k)
+        b = b + (48 + shimmer * 90 - b) * (1 - k)
+      }
+      if (k > 0.12 && k < 0.88) {
+        const foam = 1 - Math.abs(k - 0.5) * 3.4
+        const edge = k < 0.5 ? [210, 230, 230] : [30, 42, 36]
+        const et = Math.max(0, foam) * (k < 0.5 ? 0.34 : 0.28)
+        r = r + (edge[0] - r) * et
+        g = g + (edge[1] - g) * et
+        b = b + (edge[2] - b) * et
+      }
+      r = Math.max(0, Math.min(255, r * (1 + grain)))
+      g = Math.max(0, Math.min(255, g * (1 + grain)))
+      b = Math.max(0, Math.min(255, b * (1 + grain)))
+      const o = (py * cw + px) * 4
+      data[o] = Math.round(r)
+      data[o + 1] = Math.round(g)
+      data[o + 2] = Math.round(b)
+      data[o + 3] = 255
+    }
+  }
+  applyVignette(image)
+  return image
 }
 
 /** Soft polar/limb darkening so the atlas doesn't read as a flat stamp. */
@@ -840,7 +984,7 @@ export function bakeDisplacementImageData(world: World, scale = 2): ImageData {
       const e = sampleElev(world, xf, yf)
       const ocean = sampleMask(world, xf, yf) < threshold
       let v = ocean
-        ? Math.round(40 + (e < 0 ? clamp(1 + e / 4000, 0, 1) * 30 : 20))
+        ? 48
         : Math.round(110 + clamp(e / 8000, 0, 1) * 145)
       v = Math.round(POLE_DISP_REST + (v - POLE_DISP_REST) * fade)
       const o = (py * cw + px) * 4

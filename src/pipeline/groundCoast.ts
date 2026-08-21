@@ -2,15 +2,18 @@
  * Closest geographically plausible shoreline to a sketch mask.
  *
  * Writers paint blobs. Continents have capes, inlets, and noisy shores —
- * not pixel stairs. This copies `input` (never mutates it), meanders the
- * coast with fBm, and keeps land area inside the mask-lock budget so the
- * continent stays where it was drawn.
+ * not pixel stairs. This copies `input` (never mutates it), fills enclosed
+ * brush-seas, drops spray specks, meanders the coast with fBm, and keeps
+ * land area inside the mask-lock budget. The atlas is allowed to look
+ * different from the doodle.
  */
 import { fbmSigned } from './terrainDetail'
 import { idx, wrapX } from './helpers'
 
-/** Stay inside the 5% lock with a little headroom. */
-const AREA_BUDGET = 0.04
+/** Headroom under the pipeline lock so meander + hole-fill can diverge. */
+const AREA_BUDGET = 0.10
+/** Land scraps smaller than this are spray, not islands. */
+const SPECKLE_CELLS = 48
 
 function isLand(mask: Float32Array, w: number, h: number, threshold: number, x: number, y: number): boolean {
   if (y < 0 || y >= h) return false
@@ -101,6 +104,109 @@ function enforceArea(
 }
 
 /**
+ * Ocean that is not the world ocean — inland brush gaps that never
+ * join the main sea. Fill them as land. Does not write `src`.
+ */
+function fillEnclosedSeas(
+  src: Float32Array,
+  w: number,
+  h: number,
+  threshold: number,
+): Float32Array {
+  const n = src.length
+  const label = new Int32Array(n)
+  const area = new Int32Array(n)
+  let nextId = 1
+  const queue = new Int32Array(n)
+  for (let seed = 0; seed < n; seed++) {
+    if (label[seed] !== 0) continue
+    if (src[seed] >= threshold) continue
+    const id = nextId++
+    let head = 0
+    let tail = 0
+    queue[tail++] = seed
+    label[seed] = id
+    let cells = 0
+    while (head < tail) {
+      const i = queue[head++]
+      cells++
+      const x = i % w
+      const y = (i - x) / w
+      const nbrs = [
+        y * w + wrapX(x - 1, w),
+        y * w + wrapX(x + 1, w),
+        y > 0 ? (y - 1) * w + x : -1,
+        y < h - 1 ? (y + 1) * w + x : -1,
+      ]
+      for (const j of nbrs) {
+        if (j < 0 || label[j] !== 0 || src[j] >= threshold) continue
+        label[j] = id
+        queue[tail++] = j
+      }
+    }
+    area[id] = cells
+  }
+  let keepId = 0
+  let keepArea = 0
+  for (let id = 1; id < nextId; id++) {
+    if (area[id] > keepArea) {
+      keepArea = area[id]
+      keepId = id
+    }
+  }
+  if (keepId === 0) return src
+  const out = new Float32Array(src)
+  for (let i = 0; i < n; i++) {
+    const id = label[i]
+    if (id !== 0 && id !== keepId) out[i] = threshold + 0.22
+  }
+  return out
+}
+
+/**
+ * Drop land components too small to be islands. Does not write `src`.
+ */
+function dropSpeckles(
+  src: Float32Array,
+  w: number,
+  h: number,
+  threshold: number,
+): Float32Array {
+  const n = src.length
+  const seen = new Uint8Array(n)
+  const queue = new Int32Array(n)
+  const out = new Float32Array(src)
+  for (let seed = 0; seed < n; seed++) {
+    if (seen[seed] || src[seed] < threshold) continue
+    let head = 0
+    let tail = 0
+    queue[tail++] = seed
+    seen[seed] = 1
+    const cells: number[] = [seed]
+    while (head < tail) {
+      const i = queue[head++]
+      const x = i % w
+      const y = (i - x) / w
+      const nbrs = [
+        y * w + wrapX(x - 1, w),
+        y * w + wrapX(x + 1, w),
+        y > 0 ? (y - 1) * w + x : -1,
+        y < h - 1 ? (y + 1) * w + x : -1,
+      ]
+      for (const j of nbrs) {
+        if (j < 0 || seen[j] || src[j] < threshold) continue
+        seen[j] = 1
+        queue[tail++] = j
+        cells.push(j)
+      }
+    }
+    if (cells.length >= SPECKLE_CELLS) continue
+    for (const i of cells) out[i] = Math.min(src[i], threshold - 0.2)
+  }
+  return out
+}
+
+/**
  * Ground a sketch mask into a plausible shoreline. Pure: same inputs →
  * same output. Does not write `input`.
  */
@@ -112,7 +218,11 @@ export function groundCoast(
   seed: number,
 ): Float32Array {
   let mask = new Float32Array(input)
+  mask = fillEnclosedSeas(mask, width, height, threshold)
+  mask = dropSpeckles(mask, width, height, threshold)
+  const cleaned = new Float32Array(mask)
   mask = meanderPass(mask, width, height, threshold, seed + 44, 18, 14)
   mask = meanderPass(mask, width, height, threshold, seed + 71, 11, 9)
-  return enforceArea(input, mask, threshold)
+  mask = meanderPass(mask, width, height, threshold, seed + 103, 7, 6)
+  return enforceArea(cleaned, mask, threshold)
 }

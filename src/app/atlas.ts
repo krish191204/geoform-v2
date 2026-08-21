@@ -5,9 +5,9 @@
  * critique overlays stay on the map, not the teal bars.
  */
 
-import type { Issue, Layer, World, WorldMeta } from '../world/types'
+import type { Issue, Layer, World, WorldMeta, WorldOverlay } from '../world/types'
 import {
-  applyVignette,
+  bakeSketchMaskImageData,
   bakeWorldImageDataSmooth,
   clientToContainedBitmap,
   type Season,
@@ -26,7 +26,6 @@ export const LAYER_CHIPS: readonly { id: Layer; label: string; title: string }[]
   { id: 'elevation', label: 'Height', title: 'Elevation in metres' },
 ]
 
-const LAND_RGB: readonly [number, number, number] = [0x8a, 0x7a, 0x5a]
 const SEA_FILL = '#163a44'
 
 /** Geoform 1 HD raster: at least 4 pixels per cell locally, then CSS-downsample. */
@@ -83,6 +82,10 @@ export interface AtlasPaintOpts {
   showCities?: boolean
   /** Stroke preview: native grid scale, no 4× oversample. */
   preview?: boolean
+  /** Ghost stamp the writer is dragging; not committed land. */
+  ghostMask?: Float32Array | null
+  /** Worldbuild ink overlay. One message. */
+  worldOverlay?: WorldOverlay | null
 }
 
 /**
@@ -173,7 +176,15 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
 
   const image = opts.world
     ? cachedWorldBake(opts.world, opts.season, opts.layer, bakeW)
-    : upsampleMask(opts.mask, meta, bakeW, bakeH, opts.preview === true)
+    : bakeSketchMaskImageData(
+        opts.mask,
+        meta.width,
+        meta.height,
+        meta.threshold,
+        bakeW,
+        bakeH,
+        meta.seed,
+      )
 
   const tctx = blitScratch(image.width, image.height)
   if (!tctx) return
@@ -181,6 +192,10 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = opts.preview ? 'low' : 'high'
   ctx.drawImage(tctx.canvas, box.x, box.y, box.w, box.h)
+
+  if (opts.ghostMask && !opts.world) {
+    paintGhostStamp(ctx, opts.ghostMask, opts.mask, meta, box)
+  }
 
   if (opts.issues && opts.issues.length > 0) {
     ctx.save()
@@ -191,6 +206,9 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
 
   if (opts.showCities && opts.world) {
     paintCities(ctx, opts.world, box)
+  }
+  if (opts.world && opts.worldOverlay) {
+    paintWorldOverlay(ctx, opts.world, box, opts.worldOverlay)
   }
 }
 
@@ -219,102 +237,35 @@ function letterbox(cw: number, ch: number, aspect: number): BlitBox {
   }
 }
 
-function upsampleMaskPreview(
-  mask: Float32Array | null,
+function paintGhostStamp(
+  ctx: CanvasRenderingContext2D,
+  ghost: Float32Array,
+  committed: Float32Array | null,
   meta: WorldMeta,
-  outW: number,
-  outH: number,
-): ImageData {
+  box: BlitBox,
+): void {
   const w = meta.width
   const h = meta.height
-  const cw = Math.max(1, outW)
-  const ch = Math.max(1, outH)
-  const image = new ImageData(cw, ch)
-  const data = image.data
-  const threshold = meta.threshold
-  const wrap = (x: number) => ((x % w) + w) % w
-  for (let py = 0; py < ch; py++) {
-    const y = Math.max(0, Math.min(h - 1, Math.floor(((py + 0.5) * h) / ch)))
-    for (let px = 0; px < cw; px++) {
-      const x = wrap(Math.floor(((px + 0.5) * w) / cw))
-      const land = Boolean(mask && mask[y * w + x] >= threshold)
-      const o = (py * cw + px) * 4
-      data[o] = land ? LAND_RGB[0] : 12
-      data[o + 1] = land ? LAND_RGB[1] : 41
-      data[o + 2] = land ? LAND_RGB[2] : 63
-      data[o + 3] = 255
+  const n = w * h
+  if (ghost.length !== n) return
+  const cellW = box.w / w
+  const cellH = box.h / h
+  ctx.save()
+  ctx.globalAlpha = 0.72
+  ctx.fillStyle = 'rgba(186, 210, 140, 0.82)'
+  ctx.strokeStyle = 'rgba(243, 238, 220, 0.9)'
+  ctx.lineWidth = Math.max(1, Math.min(cellW, cellH) * 0.18)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      if (ghost[i] < meta.threshold) continue
+      if (committed && committed[i] >= meta.threshold) continue
+      const px = box.x + x * cellW
+      const py = box.y + y * cellH
+      ctx.fillRect(px, py, cellW + 0.4, cellH + 0.4)
     }
   }
-  return image
-}
-
-function upsampleMask(
-  mask: Float32Array | null,
-  meta: WorldMeta,
-  outW: number,
-  outH: number,
-  preview = false,
-): ImageData {
-  if (preview) return upsampleMaskPreview(mask, meta, outW, outH)
-  const w = meta.width
-  const h = meta.height
-  const cw = Math.max(1, outW)
-  const ch = Math.max(1, outH)
-  const image = new ImageData(cw, ch)
-  const data = image.data
-  const threshold = meta.threshold
-  const wrap = (x: number) => ((x % w) + w) % w
-  const sample = (xf: number, yf: number): number => {
-    if (!mask) return 0
-    const x0 = wrap(Math.floor(xf))
-    const y0 = Math.max(0, Math.min(h - 1, Math.floor(yf)))
-    const x1 = wrap(x0 + 1)
-    const y1 = Math.max(0, Math.min(h - 1, y0 + 1))
-    const fx = xf - Math.floor(xf)
-    const fy = yf - Math.floor(yf)
-    const v00 = mask[y0 * w + x0]
-    const v10 = mask[y0 * w + x1]
-    const v01 = mask[y1 * w + x0]
-    const v11 = mask[y1 * w + x1]
-    return (v00 * (1 - fx) + v10 * fx) * (1 - fy) + (v01 * (1 - fx) + v11 * fx) * fy
-  }
-  for (let py = 0; py < ch; py++) {
-    const yf = ((py + 0.5) * h) / ch
-    for (let px = 0; px < cw; px++) {
-      const xf = ((px + 0.5) * w) / cw
-      const t = sample(xf, yf)
-      const k = Math.max(0, Math.min(1, (t - threshold + 0.15) / 0.3))
-      const grain = ((Math.sin(xf * 12.9898 + yf * 78.233) * 43758.5453) % 1) * 0.1 - 0.05
-      // Geoform 1 empty ocean: deep navy + still-water caustic, not a flat teal fill.
-      const wave =
-        0.5 + 0.5 * Math.sin(xf * 0.35 + Math.cos(yf * 0.22) * 2) * Math.sin(yf * 0.4)
-      const shimmer = wave * 0.55 * 0.14
-      let r = 8 + (18 - 8) * 0.38 + shimmer * 40
-      let g = 28 + (62 - 28) * 0.38 + shimmer * 70
-      let b = 48 + (92 - 48) * 0.38 + shimmer * 90
-      r = r + (LAND_RGB[0] - r) * k
-      g = g + (LAND_RGB[1] - g) * k
-      b = b + (LAND_RGB[2] - b) * k
-      if (k > 0.22 && k < 0.78) {
-        const foam = 1 - Math.abs(k - 0.5) * 4
-        const edge = k < 0.5 ? [210, 230, 230] : [30, 42, 36]
-        const et = Math.max(0, foam) * (k < 0.5 ? 0.28 : 0.22)
-        r = r + (edge[0] - r) * et
-        g = g + (edge[1] - g) * et
-        b = b + (edge[2] - b) * et
-      }
-      r = Math.max(0, Math.min(255, r * (1 + grain)))
-      g = Math.max(0, Math.min(255, g * (1 + grain)))
-      b = Math.max(0, Math.min(255, b * (1 + grain)))
-      const o = (py * cw + px) * 4
-      data[o] = Math.round(r)
-      data[o + 1] = Math.round(g)
-      data[o + 2] = Math.round(b)
-      data[o + 3] = 255
-    }
-  }
-  applyVignette(image)
-  return image
+  ctx.restore()
 }
 
 function paintCities(
@@ -329,13 +280,131 @@ function paintCities(
   for (const city of world.cities) {
     const cx = box.x + (city.x + 0.5) * cellW
     const cy = box.y + (city.y + 0.5) * cellH
-    const r = Math.max(3, Math.min(cellW, cellH) * 0.7)
+    const r =
+      city.role === 'seat_of_power'
+        ? Math.max(4.5, Math.min(cellW, cellH) * 0.95)
+        : Math.max(3, Math.min(cellW, cellH) * 0.7)
     ctx.beginPath()
-    ctx.fillStyle = '#f3eee3'
+    ctx.fillStyle = city.role === 'seat_of_power' ? '#f7e7c4' : '#f3eee3'
     ctx.strokeStyle = '#1c221c'
-    ctx.lineWidth = 1.5
-    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    ctx.lineWidth = city.role === 'seat_of_power' ? 2 : 1.5
+    if (city.role === 'seat_of_power') {
+      ctx.rect(cx - r, cy - r, r * 2, r * 2)
+    } else {
+      ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    }
     ctx.fill()
     ctx.stroke()
   }
+}
+
+const POLITY_WASH: readonly [number, number, number][] = [
+  [186, 92, 64],
+  [64, 118, 138],
+  [168, 148, 72],
+  [92, 96, 158],
+  [140, 108, 88],
+  [72, 132, 112],
+  [158, 86, 110],
+  [96, 124, 84],
+]
+
+function wrapX(x: number, w: number): number {
+  return ((x % w) + w) % w
+}
+
+function paintWorldOverlay(
+  ctx: CanvasRenderingContext2D,
+  world: World,
+  box: BlitBox,
+  overlay: WorldOverlay,
+): void {
+  if (overlay === 'countries') paintCountryInk(ctx, world, box)
+  else paintTradeInk(ctx, world, box, overlay === 'sea-lanes' ? 'sea' : 'land')
+}
+
+function paintCountryInk(ctx: CanvasRenderingContext2D, world: World, box: BlitBox): void {
+  const { width: w, height: h, threshold } = world.meta
+  if (!world.polityId || world.polityId.length !== w * h) return
+  const cellW = box.w / w
+  const cellH = box.h / h
+  ctx.save()
+  ctx.globalAlpha = 0.16
+  const step = Math.max(1, Math.round(Math.min(w, h) > 200 ? 2 : 1))
+  for (let y = 0; y < h; y += step) {
+    for (let x = 0; x < w; x += step) {
+      const pid = world.polityId[y * w + x]
+      if (pid < 0 || world.mask[y * w + x] < threshold) continue
+      const rgb = POLITY_WASH[pid % POLITY_WASH.length]
+      ctx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`
+      ctx.fillRect(box.x + x * cellW, box.y + y * cellH, cellW * step + 0.4, cellH * step + 0.4)
+    }
+  }
+  ctx.globalAlpha = 0.92
+  ctx.strokeStyle = '#1c221c'
+  ctx.lineWidth = Math.max(1, Math.min(cellW, cellH) * 0.22)
+  ctx.beginPath()
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      const pid = world.polityId[i]
+      if (pid < 0 || world.mask[i] < threshold) continue
+      const right = world.polityId[y * w + wrapX(x + 1, w)]
+      const down = y + 1 < h ? world.polityId[(y + 1) * w + x] : pid
+      const px = box.x + (x + 1) * cellW
+      const py = box.y + (y + 1) * cellH
+      if (right !== pid) {
+        ctx.moveTo(px, box.y + y * cellH)
+        ctx.lineTo(px, py)
+      }
+      if (down !== pid) {
+        ctx.moveTo(box.x + x * cellW, py)
+        ctx.lineTo(px, py)
+      }
+    }
+  }
+  ctx.stroke()
+  ctx.restore()
+}
+
+function paintTradeInk(
+  ctx: CanvasRenderingContext2D,
+  world: World,
+  box: BlitBox,
+  kind: 'land' | 'sea',
+): void {
+  const { width: w, height: h } = world.meta
+  const cellW = box.w / w
+  const cellH = box.h / h
+  ctx.save()
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  ctx.strokeStyle = kind === 'sea' ? 'rgba(36, 92, 128, 0.88)' : 'rgba(92, 58, 32, 0.82)'
+  for (const route of world.routes) {
+    if (route.kind !== kind || route.path.length < 2) continue
+    ctx.lineWidth = Math.max(1.2, Math.min(cellW, cellH) * (0.18 + route.volume * 0.7))
+    ctx.beginPath()
+    let pen = false
+    for (let i = 0; i < route.path.length; i++) {
+      const p = route.path[i]
+      const px = box.x + (p.x + 0.5) * cellW
+      const py = box.y + (p.y + 0.5) * cellH
+      if (!pen) {
+        ctx.moveTo(px, py)
+        pen = true
+        continue
+      }
+      const prev = route.path[i - 1]
+      const jump = Math.abs(p.x - prev.x) > w / 2
+      if (jump) {
+        ctx.stroke()
+        ctx.beginPath()
+        ctx.moveTo(px, py)
+        continue
+      }
+      ctx.lineTo(px, py)
+    }
+    ctx.stroke()
+  }
+  ctx.restore()
 }

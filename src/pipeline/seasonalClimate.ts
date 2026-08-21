@@ -172,9 +172,13 @@ export function computeSeasonalClimate(
 
       summer[i] = s
       winter[i] = w
-      tempMean[i] = (s + w) / 2
     }
   }
+
+  // Air mixes. A one-cell 8000 m spike is not a climate boundary.
+  mixTemperature(summer, width, height, 2)
+  mixTemperature(winter, width, height, 2)
+  for (let i = 0; i < n; i++) tempMean[i] = (summer[i] + winter[i]) / 2
 
   marchPrecipitation(orogeny.elev, mask, threshold, width, height, summerMoist, 1.0)
   marchPrecipitation(orogeny.elev, mask, threshold, width, height, winterMoist, WINTER_PRECIP_SCALE)
@@ -219,6 +223,28 @@ function clampNum(v: number, lo: number, hi: number): number {
   if (v < lo) return lo
   if (v > hi) return hi
   return v
+}
+
+/**
+ * Diffuse temperature so neighbouring cells cannot jump from ice to
+ * hot desert. Broad ice caps stay cold; one-cell orogeny spikes do not
+ * invent a climate front.
+ */
+function mixTemperature(field: Float32Array, w: number, h: number, passes: number): void {
+  const next = new Float32Array(field.length)
+  for (let p = 0; p < passes; p++) {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x
+        const west = field[y * w + wrapX(x - 1, w)]
+        const east = field[y * w + wrapX(x + 1, w)]
+        const north = y > 0 ? field[(y - 1) * w + x] : field[i]
+        const south = y < h - 1 ? field[(y + 1) * w + x] : field[i]
+        next[i] = field[i] * 0.45 + (west + east + north + south) * 0.1375
+      }
+    }
+    field.set(next)
+  }
 }
 
 /**

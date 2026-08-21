@@ -8,6 +8,8 @@ import {
   SEVERITY_WEIGHTS,
   scoreFromIssues,
   sortIssuesBySeverity,
+  gradeFromScore,
+  gradeCaption,
 } from './main'
 import {
   checkIceDesertDualism,
@@ -16,6 +18,7 @@ import {
   computeCoastDistance,
 } from './analyzeWorld'
 import type { World, WorldMeta, Issue, CellBiome } from '../world/types'
+import { emptyPolityState } from '../world/types'
 import { DEFAULT_META, idx } from '../world/types'
 
 // ---------------------------------------------------------------------------
@@ -73,12 +76,25 @@ function makeWorld(overrides: Partial<World> = {}): World {
     biome: overrides.biome ?? biome,
     suitability: overrides.suitability ?? new Float32Array(n),
     cities: overrides.cities ?? [],
+    ...emptyPolityState(n),
   }
 }
 
 // ---------------------------------------------------------------------------
 // Score: direct unit tests on scoreFromIssues / sortIssuesBySeverity.
 // ---------------------------------------------------------------------------
+
+describe('gradeFromScore', () => {
+  it('maps the 0–100 issue tally onto A–F, not a percentage', () => {
+    expect(gradeFromScore(92)).toBe('A')
+    expect(gradeFromScore(74)).toBe('B')
+    expect(gradeFromScore(55)).toBe('C')
+    expect(gradeFromScore(32)).toBe('D')
+    expect(gradeFromScore(18)).toBe('F')
+    expect(gradeCaption('F')).toMatch(/completely/i)
+    expect(gradeCaption('A')).toMatch(/accurate/i)
+  })
+})
 
 describe('scoreFromIssues', () => {
   it('returns 100 for zero issues (no flattery floor)', () => {
@@ -418,7 +434,7 @@ describe('critiqueWorld', () => {
     expect(shadow?.severity).toBe('minor')
   })
 
-  it('flags mask drift (post bigComponents > 5% off pre) as critical', () => {
+  it('flags invented continents from an empty prior mask as critical', () => {
     setPriorMask(makeMask(64, 32, 0), makeMeta({ width: 64, height: 32 }))
     // Build a derived world with 6 distinct, ≥100-cell land blobs.
     const w = makeWorld({ meta: makeMeta({ width: 64, height: 32 }) })
@@ -568,6 +584,7 @@ describe('check helpers', () => {
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const k = y * w + x
+        world.mask[k] = prior[k]
         world.elev[k] = prior[k] >= 0.5 ? 200 : -50
       }
     }
