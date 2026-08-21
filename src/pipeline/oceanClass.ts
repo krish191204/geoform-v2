@@ -1,9 +1,7 @@
 /**
- * Inspector-only ocean classes from SST and coast distance.
+ * Inspector-first ocean classes from SST and coast distance.
  *
- * Not a new atlas chip. The Biome layer stays land classification; sea
- * cells stay one ocean colour. Hovering a cell can say ice-edge / shelf /
- * open from fields Make sense already owns.
+ * Biome keeps one ocean colour. Relief may tint shelf, ice-edge, and storms.
  */
 
 import { idx, wrapX } from './helpers'

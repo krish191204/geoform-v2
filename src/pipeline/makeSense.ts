@@ -13,7 +13,7 @@
  *   - `worldFromMakeSense(...)`     — stitch result + mask into a World.
  *   - `MakeSenseWorker`             — long-lived worker wrapper.
  *   - `TOTAL_STEPS`                 — the seven-step step count.
- *   - `MASK_LOCK_AREA_FRACTION`     — 5% drift budget.
+ *   - `MASK_LOCK_AREA_FRACTION`     — land-area drift budget.
  *   - `MASK_LOCK_MIN_COMPONENT`     — 100-cell per-component epsilon.
  */
 
@@ -96,6 +96,9 @@ export function worldFromMakeSense(
     biome: result.biome as CellBiome[],
     suitability: result.suitability,
     cities: [],
+    polityId: new Int16Array(meta.width * meta.height).fill(-1),
+    polities: [],
+    routes: [],
   }
 }
 

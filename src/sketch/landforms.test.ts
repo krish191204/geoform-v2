@@ -3,7 +3,9 @@ import { DEFAULT_META } from '../world/types'
 import {
   LANDFORM_OPTIONS,
   landformStats,
+  shrinkLandBlob,
   stampLandform,
+  stampLandformAt,
   type LandformKind,
 } from './landforms'
 
@@ -26,7 +28,14 @@ function polarLand(mask: Float32Array, w: number, h: number, threshold: number):
 
 describe('LANDFORM_OPTIONS', () => {
   it('offers continents, mixed, and islands', () => {
-    expect(LANDFORM_OPTIONS.map((o) => o.id)).toEqual(['continents', 'mixed', 'islands'])
+    expect(LANDFORM_OPTIONS.map((o) => o.id)).toEqual([
+      'continents',
+      'elongated',
+      'peninsula',
+      'gulf',
+      'mixed',
+      'islands',
+    ])
   })
 })
 
@@ -79,7 +88,7 @@ describe('stampLandform', () => {
   })
 
   it('keeps polar rows almost empty', () => {
-    const kinds: LandformKind[] = ['continents', 'mixed', 'islands']
+    const kinds: LandformKind[] = ['continents', 'elongated', 'peninsula', 'gulf', 'mixed', 'islands']
     for (const kind of kinds) {
       const { meta, mask } = empty()
       stampLandform(mask, meta, kind, 5)
@@ -88,5 +97,93 @@ describe('stampLandform', () => {
       expect(land).toBeGreaterThan(0)
       expect(polar / Math.max(1, land)).toBeLessThan(0.02)
     }
+  })
+
+  it('puts land at the drop cell instead of scattering it', () => {
+    const { meta, mask } = empty(96, 48)
+    stampLandformAt(mask, meta, 'continents', 5, 12, 24)
+    const w = meta.width
+    let near = 0
+    let far = 0
+    for (let y = 0; y < meta.height; y++) {
+      for (let x = 0; x < w; x++) {
+        if (mask[y * w + x] < meta.threshold) continue
+        const dx = Math.min(Math.abs(x - 12), w - Math.abs(x - 12))
+        if (dx < w * 0.28) near++
+        else far++
+      }
+    }
+    expect(near).toBeGreaterThan(0)
+    expect(near).toBeGreaterThan(far)
+  })
+
+  it('two drops at different longitudes stay on their own sides', () => {
+    const { meta, mask } = empty(96, 48)
+    stampLandformAt(mask, meta, 'continents', 5, 16, 24)
+    stampLandformAt(mask, meta, 'continents', 5, 80, 24)
+    const w = meta.width
+    let west = 0
+    let east = 0
+    for (let y = 0; y < meta.height; y++) {
+      for (let x = 0; x < w; x++) {
+        if (mask[y * w + x] < meta.threshold) continue
+        if (x < w / 2) west++
+        else east++
+      }
+    }
+    expect(west).toBeGreaterThan(40)
+    expect(east).toBeGreaterThan(40)
+  })
+
+  it('compact, long coast, peninsula, and gulf are different silhouettes', () => {
+    const compact = empty(96, 48)
+    const long = empty(96, 48)
+    const arm = empty(96, 48)
+    const bay = empty(96, 48)
+    stampLandformAt(compact.mask, compact.meta, 'continents', 5, 48, 24)
+    stampLandformAt(long.mask, long.meta, 'elongated', 5, 48, 24)
+    stampLandformAt(arm.mask, arm.meta, 'peninsula', 5, 48, 24)
+    stampLandformAt(bay.mask, bay.meta, 'gulf', 5, 48, 24)
+    expect(Array.from(compact.mask)).not.toEqual(Array.from(long.mask))
+    expect(Array.from(compact.mask)).not.toEqual(Array.from(arm.mask))
+    expect(Array.from(compact.mask)).not.toEqual(Array.from(bay.mask))
+
+    const box = (mask: Float32Array) => {
+      let minX = 96
+      let maxX = 0
+      let minY = 48
+      let maxY = 0
+      for (let y = 0; y < 48; y++) {
+        for (let x = 0; x < 96; x++) {
+          if (mask[y * 96 + x] < 0.5) continue
+          if (x < minX) minX = x
+          if (x > maxX) maxX = x
+          if (y < minY) minY = y
+          if (y > maxY) maxY = y
+        }
+      }
+      return { w: maxX - minX, h: maxY - minY }
+    }
+    const longBox = box(long.mask)
+    const compactBox = box(compact.mask)
+    expect(longBox.w / Math.max(1, longBox.h)).toBeGreaterThan(compactBox.w / Math.max(1, compactBox.h))
+  })
+
+  it('a smaller scale stamps fewer land cells', () => {
+    const full = empty(96, 48)
+    const small = empty(96, 48)
+    stampLandformAt(full.mask, full.meta, 'continents', 5, 48, 24, 1)
+    stampLandformAt(small.mask, small.meta, 'continents', 5, 48, 24, 0.5)
+    expect(landformStats(small.mask, small.meta).landCells).toBeLessThan(
+      landformStats(full.mask, full.meta).landCells,
+    )
+  })
+
+  it('clicking a blob trims the outer cells', () => {
+    const { meta, mask } = empty(96, 48)
+    stampLandformAt(mask, meta, 'continents', 5, 48, 24)
+    const before = landformStats(mask, meta).landCells
+    expect(shrinkLandBlob(mask, meta.width, meta.height, meta.threshold, 48, 24)).toBe(true)
+    expect(landformStats(mask, meta).landCells).toBeLessThan(before)
   })
 })

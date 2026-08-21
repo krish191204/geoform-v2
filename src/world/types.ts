@@ -9,7 +9,7 @@
 // 1. Brush palette — the visible six
 // ---------------------------------------------------------------------------
 
-/** What the mouse does when you click the map. Six tools, no more. */
+/** What the mouse does when you click the map. */
 export type Tool =
   /** Sketch: stamp soft mask value at brush center. */
   | 'draw-land'
@@ -19,10 +19,15 @@ export type Tool =
   | 'place-city'
   /** Worldbuild: remove nearest city. */
   | 'remove-city'
+  /** Worldbuild: paint a country onto land. */
+  | 'claim-land'
   /** All stages: read the inspector. */
   | 'inspect'
   /** Default cursor. */
   | 'none'
+
+/** One Worldbuild overlay — one message at a time, ink on the atlas. */
+export type WorldOverlay = 'countries' | 'caravans' | 'sea-lanes'
 
 // ---------------------------------------------------------------------------
 // 2. Stage gating
@@ -105,6 +110,65 @@ export interface City {
   port?: SettlementPort
   /** Desert cell with local moisture — not a new job. */
   oasis?: boolean
+  /** Country this town sits in after Worldbuild. */
+  polityId?: number
+  /** 0..1 mix at the docks — seats in a dead-end valley stay low. */
+  meltingPot?: number
+}
+
+/** Staple goods inferred from biome and town jobs — not GDP. */
+export type TradeGood = 'grain' | 'livestock' | 'fish' | 'timber' | 'metals' | 'caravan' | 'forest'
+
+/** Earth landscape analog. Place, not people. */
+export type PlaceAnalogId =
+  | 'mediterranean-coast'
+  | 'monsoon-delta'
+  | 'fog-desert-coast'
+  | 'interior-steppe'
+  | 'highland-plateau'
+  | 'boreal-forest'
+  | 'tropical-forest'
+  | 'savanna-belt'
+  | 'tundra-edge'
+  | 'oasis-corridor'
+  | 'island-arc'
+  | 'temperate-farmland'
+
+export interface PlaceAnalog {
+  id: PlaceAnalogId
+  /** What this land is like. */
+  label: string
+  /** Climate reason, one line. */
+  because: string
+  /** Living-tradition prompt the writer can rename. */
+  tradition: string
+}
+
+export interface TradeRoute {
+  kind: 'land' | 'sea'
+  ax: number
+  ay: number
+  bx: number
+  by: number
+  /** 0..1 relative volume. */
+  volume: number
+  good: TradeGood
+  path: { x: number; y: number }[]
+}
+
+export interface Polity {
+  id: number
+  name: string
+  capitalX: number
+  capitalY: number
+  analog: PlaceAnalog
+  tradition: string
+  exports: TradeGood[]
+  imports: TradeGood[]
+  /** 0..1 cosmopolitan score at the capital. */
+  meltingPot: number
+  /** Hinterland surplus mass for gravity trade. Not GDP. */
+  mass: number
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +446,20 @@ export interface World {
   suitability: Float32Array
 
   cities: City[]
+
+  /** Country id per cell, −1 = ocean or unclaimed. Length W*H. */
+  polityId: Int16Array
+  polities: Polity[]
+  routes: TradeRoute[]
+}
+
+/** Empty country layer for a new World or a test stub. */
+export function emptyPolityState(cellCount: number): Pick<World, 'polityId' | 'polities' | 'routes'> {
+  return {
+    polityId: new Int16Array(cellCount).fill(-1),
+    polities: [],
+    routes: [],
+  }
 }
 
 // ---------------------------------------------------------------------------

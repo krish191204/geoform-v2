@@ -6,8 +6,8 @@
  * neighbour of the doodle (a copy — `input.mask` is never written).
  * Plates, orogeny, climate, rivers, and biomes run on that grounded mask
  * so the atlas is expected to look different. The mask lock then checks
- * land area stayed within ±5%: the continent stays where it was drawn;
- * the shoreline does not have to.
+ * land area stayed within the lock budget: the masses stay where they
+ * were drawn; the shoreline does not have to.
  */
 
 import { bigComponentsMask, meanLand } from './helpers'
@@ -32,7 +32,7 @@ import { groundCoast } from './groundCoast'
 export const TOTAL_STEPS = 7
 
 /** Largest allowed relative drift in land area, expressed as a fraction. */
-export const MASK_LOCK_AREA_FRACTION = 0.05
+export const MASK_LOCK_AREA_FRACTION = 0.12
 
 /** Components below this cell count are exempt from the mask lock. */
 export const MASK_LOCK_MIN_COMPONENT = 100

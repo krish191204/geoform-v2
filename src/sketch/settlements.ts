@@ -333,13 +333,18 @@ function collectSites(world: World): { x: number; y: number; score: number }[] {
 
 /**
  * Place a mix of towns covering `coverage` of inhabitable land.
- * One seat of power, then farmland / fishing / mining / trade / pastoral / hunting.
+ * `seatCount` thrones first (one per country), then farmland / fishing / mining / trade / pastoral / hunting.
  * Does not mutate `world.cities` — the caller appends.
  */
-export function suggestSettlementsCovering(world: World, coverage = DEFAULT_COVERAGE): City[] {
+export function suggestSettlementsCovering(
+  world: World,
+  coverage = DEFAULT_COVERAGE,
+  seatCount = 1,
+): City[] {
   const packed = capacity(world)
+  const thrones = Math.max(1, Math.min(12, Math.round(seatCount)))
   const target = Math.max(
-    Math.min(MIX_FLOOR, packed),
+    Math.min(MIX_FLOOR + thrones - 1, packed),
     Math.round(Math.max(0, Math.min(1, coverage)) * packed),
   )
   if (target <= 0 || countInhabitable(world) === 0) return []
@@ -348,6 +353,7 @@ export function suggestSettlementsCovering(world: World, coverage = DEFAULT_COVE
     MIN_SPACING,
     Math.min(MAX_SPACING, Math.round(0.9 * Math.sqrt(inhabitable / target))),
   )
+  const seatSpacing = Math.max(spacing + 2, Math.round(spacing * 1.7))
   const gen = cityNameGenerator(world.meta.seed + 91)
   const placed: City[] = []
   const scratch = [...world.cities]
@@ -371,24 +377,32 @@ export function suggestSettlementsCovering(world: World, coverage = DEFAULT_COVE
       seasonal: c.score,
       role,
     }
-    annotateSettlement(world, city)
+    annotateSettlement(world, city, { allowSeat: role === 'seat_of_power' })
+    city.role = role
+    if (role === 'seat_of_power') city.rank = 'seat'
     used.add(city.name)
     occupied.add(`${c.x},${c.y}`)
     placed.push(city)
     scratch.push(city)
   }
 
-  const tryPlace = (c: { x: number; y: number; score: number }, role: SettlementRole): boolean => {
+  const tryPlace = (
+    c: { x: number; y: number; score: number },
+    role: SettlementRole,
+    gap = spacing,
+  ): boolean => {
     if (placed.length >= target) return false
     if (occupied.has(`${c.x},${c.y}`)) return false
-    if (tooClose(scratch, c.x, c.y, w, spacing)) return false
+    if (tooClose(scratch, c.x, c.y, w, gap)) return false
     take(c, role)
     return true
   }
 
-  if (!worldHasSeat({ ...world, cities: scratch })) {
+  let seatsPlaced = scratch.filter((c) => c.role === 'seat_of_power').length
+  if (seatsPlaced < thrones) {
     for (const c of collectCandidates(world, 'seat_of_power')) {
-      if (tryPlace(c, 'seat_of_power')) break
+      if (seatsPlaced >= thrones) break
+      if (tryPlace(c, 'seat_of_power', seatSpacing)) seatsPlaced++
     }
   }
 
@@ -409,35 +423,102 @@ export function suggestSettlementsCovering(world: World, coverage = DEFAULT_COVE
       fillWorld.cities = scratch
     }
   }
-  demoteExtraSeats(placed, world)
+  capSeats(placed, world, thrones)
   return placed
 }
 
 /**
- * One throne. Anything else labelled seat of power is a scoring accident.
+ * Keep at most `maxSeats` thrones. Extra seats become ordinary towns.
  */
-export function demoteExtraSeats(cities: City[], world: World): void {
-  let seat: City | undefined
+export function capSeats(cities: City[], world: World, maxSeats = 1): void {
+  const want = Math.max(1, Math.min(12, Math.round(maxSeats)))
   const view = { ...world, cities }
-  for (const city of cities) {
-    if (city.role !== 'seat_of_power') continue
-    if (!seat) {
-      seat = city
-      continue
+  const seats = cities.filter((c) => c.role === 'seat_of_power')
+  if (seats.length > want) {
+    const w = world.meta.width
+    const keep: City[] = []
+    const ranked = [...seats].sort(
+      (a, b) => scoreSettlementRole(world, b.x, b.y, 'seat_of_power') - scoreSettlementRole(world, a.x, a.y, 'seat_of_power'),
+    )
+    for (const city of ranked) {
+      if (keep.length >= want) {
+        city.role = inferSettlementRole(view, city.x, city.y, { allowSeat: false })
+        annotateSettlement(view, city, { allowSeat: false })
+        continue
+      }
+      if (keep.some((k) => wrapDist(k.x, k.y, city.x, city.y, w) < 6)) {
+        city.role = inferSettlementRole(view, city.x, city.y, { allowSeat: false })
+        annotateSettlement(view, city, { allowSeat: false })
+        continue
+      }
+      keep.push(city)
     }
-    city.role = inferSettlementRole(view, city.x, city.y, { allowSeat: false })
-    annotateSettlement(view, city)
   }
-  if (!seat && cities[0]) {
+  if (!cities.some((c) => c.role === 'seat_of_power') && cities[0]) {
     cities[0].role = 'seat_of_power'
-    annotateSettlement(view, cities[0])
+    annotateSettlement(view, cities[0], { allowSeat: true })
+    cities[0].role = 'seat_of_power'
+    cities[0].rank = 'seat'
   }
 }
 
+/** @deprecated alias — one throne unless `maxSeats` is passed. */
+export function demoteExtraSeats(cities: City[], world: World, maxSeats = 1): void {
+  capSeats(cities, world, maxSeats)
+}
+
+/**
+ * Promote or found seats until `want` thrones exist; demote extras.
+ */
+export function ensureSeatCount(world: World, want: number): void {
+  const n = Math.max(1, Math.min(12, Math.round(want)))
+  capSeats(world.cities, world, n)
+  let seats = world.cities.filter((c) => c.role === 'seat_of_power')
+  const w = world.meta.width
+  const farEnough = (x: number, y: number): boolean =>
+    seats.every((s) => wrapDist(s.x, s.y, x, y, w) >= 6)
+
+  if (seats.length < n) {
+    const ranked = [...world.cities]
+      .filter((c) => c.role !== 'seat_of_power')
+      .sort(
+        (a, b) =>
+          scoreSettlementRole(world, b.x, b.y, 'seat_of_power') -
+          scoreSettlementRole(world, a.x, a.y, 'seat_of_power'),
+      )
+    for (const city of ranked) {
+      if (seats.length >= n) break
+      if (!farEnough(city.x, city.y)) continue
+      city.role = 'seat_of_power'
+      city.rank = 'seat'
+      seats.push(city)
+    }
+  }
+  if (seats.length < n) {
+    const gen = cityNameGenerator(world.meta.seed + 311)
+    const used = new Set(world.cities.map((c) => c.name))
+    for (const c of collectCandidates(world, 'seat_of_power')) {
+      if (seats.length >= n) break
+      if (world.cities.some((t) => t.x === c.x && t.y === c.y)) continue
+      if (!farEnough(c.x, c.y)) continue
+      let name = gen()
+      while (used.has(name)) name = gen()
+      const city: City = { x: c.x, y: c.y, name, seasonal: c.score, role: 'seat_of_power', rank: 'seat' }
+      annotateSettlement(world, city, { allowSeat: true })
+      city.role = 'seat_of_power'
+      city.rank = 'seat'
+      used.add(city.name)
+      world.cities.push(city)
+      seats.push(city)
+    }
+  }
+  capSeats(world.cities, world, n)
+}
+
 /** Found towns if the world has none. Returns how many were added. */
-export function seedSettlements(world: World, coverage = DEFAULT_COVERAGE): City[] {
+export function seedSettlements(world: World, coverage = DEFAULT_COVERAGE, seatCount = 1): City[] {
   if (world.cities.length > 0) return []
-  const added = suggestSettlementsCovering(world, coverage)
+  const added = suggestSettlementsCovering(world, coverage, seatCount)
   world.cities.push(...added)
   return added
 }

@@ -49,6 +49,34 @@ export interface CritiqueResult {
 export type { Issue }
 export { SEVERITY_WEIGHTS, scoreFromIssues, sortIssuesBySeverity }
 
+/** Letter grade for a critique score. The number stays internal. */
+export type GeoGrade = 'A' | 'B' | 'C' | 'D' | 'F'
+
+/** Map a 0–100 issue score onto the writer's A–F geographic grade. */
+export function gradeFromScore(score: number): GeoGrade {
+  if (score >= 88) return 'A'
+  if (score >= 70) return 'B'
+  if (score >= 50) return 'C'
+  if (score >= 25) return 'D'
+  return 'F'
+}
+
+/** One-line meaning for the letter. Not a percentage. */
+export function gradeCaption(grade: GeoGrade): string {
+  switch (grade) {
+    case 'A':
+      return 'Geographically accurate'
+    case 'B':
+      return 'Mostly geographically accurate and believable'
+    case 'C':
+      return 'Flawed and mixed'
+    case 'D':
+      return 'Barely accurate — Make sense can ground this without rebuilding it'
+    case 'F':
+      return 'Not renderable — the map would have to change completely'
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 2. Pre-Make-sense helpers (mask only).
 // ---------------------------------------------------------------------------
@@ -288,7 +316,7 @@ function applyScoreFloor(score: number, issues: Issue[]): number {
   if (issues.length >= 5) out = Math.min(out, 50)
   if (notAPlanet) out = Math.min(out, 40)
   if (doodleHits >= 1) out = Math.min(out, 28)
-  if (doodleHits >= 2) out = Math.min(out, 18)
+  if (doodleHits >= 2) out = Math.min(out, 26)
   if (landShareFail) out = Math.min(out, 20)
   return out
 }

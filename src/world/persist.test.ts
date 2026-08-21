@@ -21,6 +21,7 @@ import {
   readWorldFile,
 } from './persist'
 import type { World, WorldMeta } from './types'
+import { emptyPolityState } from './types'
 
 function makeMeta(seed = 42): WorldMeta {
   return {
@@ -61,6 +62,7 @@ function makeWorld(seed = 42): World {
     biome: ['ocean', 'temperate-forest', 'hot-desert', 'tundra'],
     suitability: Float32Array.from({ length: n }, () => 0.5),
     cities: [{ x: 2, y: 3, name: 'Testopolis', seasonal: 0.8 }],
+    ...emptyPolityState(n),
   }
 }
 
@@ -169,6 +171,70 @@ describe('persist: world layer', () => {
     expect(restored!.biome).toEqual(original.biome)
     expect(restored!.cities).toEqual(original.cities)
     expect(restored!.seasons).toBe(4)
+    expect(restored!.polityId).toBeInstanceOf(Int16Array)
+    expect(Array.from(restored!.polityId)).toEqual(Array.from(original.polityId))
+    expect(restored!.polities).toEqual(original.polities)
+    expect(restored!.routes).toEqual(original.routes)
+  })
+
+  it('round-trips countries and trade routes', () => {
+    const original = makeWorld(5)
+    original.polityId[0] = 0
+    original.polities = [
+      {
+        id: 0,
+        name: 'Testland',
+        capitalX: 2,
+        capitalY: 3,
+        analog: {
+          id: 'temperate-farmland',
+          label: 'Temperate farmland',
+          because: 'Mild woods and fields.',
+          tradition: 'Mixed farmers of a mild forest climate.',
+        },
+        tradition: 'Mixed farmers of a mild forest climate.',
+        exports: ['grain'],
+        imports: ['metals'],
+        meltingPot: 0.2,
+        mass: 2.4,
+      },
+    ]
+    original.routes = [
+      {
+        kind: 'land',
+        ax: 2,
+        ay: 3,
+        bx: 4,
+        by: 3,
+        volume: 0.4,
+        good: 'grain',
+        path: [
+          { x: 2, y: 3 },
+          { x: 4, y: 3 },
+        ],
+      },
+    ]
+    const restored = deserializeWorld(serializeWorld(original))
+    expect(restored).not.toBeNull()
+    expect(restored!.polityId[0]).toBe(0)
+    expect(restored!.polities).toEqual(original.polities)
+    expect(restored!.routes).toEqual(original.routes)
+  })
+
+  it('old saves without countries still load as unclaimed land', () => {
+    const original = makeWorld(3)
+    const parsed = JSON.parse(serializeWorld(original)) as {
+      world: { polityId?: number[]; polities?: unknown; routes?: unknown }
+    }
+    delete parsed.world.polityId
+    delete parsed.world.polities
+    delete parsed.world.routes
+    const restored = deserializeWorld(JSON.stringify(parsed))
+    expect(restored).not.toBeNull()
+    expect(restored!.polityId).toBeInstanceOf(Int16Array)
+    expect(restored!.polityId.every((id) => id === -1)).toBe(true)
+    expect(restored!.polities).toEqual([])
+    expect(restored!.routes).toEqual([])
   })
 
   it('round-trips World through a binary blob, not jsonb grids', () => {
@@ -191,6 +257,7 @@ describe('persist: world layer', () => {
     expect(Array.from(restored!.mask)).toEqual(Array.from(original.mask))
     expect(restored!.biome).toEqual(original.biome)
     expect(restored!.cities).toEqual(original.cities)
+    expect(Array.from(restored!.polityId)).toEqual(Array.from(original.polityId))
     expect(JSON.stringify(blob).includes('"mask":[')).toBe(false)
   })
 

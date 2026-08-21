@@ -22,6 +22,7 @@ import {
 } from '../../sketch/worldbuild'
 import type { World, City, WorldMeta } from '../../world/types'
 import type { CellBiome } from '../../world/types'
+import { emptyPolityState } from '../../world/types'
 import { makeContinentWorld } from './fixtures'
 import type { TestWorld } from './fixtures'
 
@@ -81,6 +82,7 @@ function makeWorld(tw: TestWorld, seed: number, threshold: number): World {
     biome: new Array<CellBiome>(n).fill('ocean'),
     cities: [],
     suitability,
+    ...emptyPolityState(n),
   }
 }
 

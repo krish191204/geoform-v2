@@ -35,6 +35,12 @@ export interface ShellStateView extends EditorState {
   readonly makeSenseComplete: boolean
   /** Latest Critique score; 0 if Critique has not run. */
   readonly score: number
+  /** How many continent blobs a Full-continents stamp should drop, 1–7. */
+  readonly continentCount: number
+  /** How many countries Worldbuild should grow, 1–12. */
+  readonly polityCount: number
+  /** Worldbuild ink overlay. */
+  readonly worldOverlay: import('../world/types').WorldOverlay
   /** Atlas layer after Make sense. */
   readonly layer: Layer
   /** Seasonal sample the atlas is showing. */
@@ -45,6 +51,8 @@ export interface ShellStateView extends EditorState {
   readonly inspectHtml: string
   /** Atlas sheet vs 3D globe. */
   readonly viewMode: 'atlas' | 'planet'
+  /** Working chrome vs full-page map. */
+  readonly layoutMode: 'chrome' | 'view-map'
 }
 
 export interface StageGate {
@@ -181,6 +189,8 @@ export const APP_EVENTS = {
   LAYER_CHANGE: 'app:layer-change',
   /** Atlas vs planet globe. Detail: `{ view: 'atlas' | 'planet' }`. */
   VIEW_CHANGE: 'app:view-change',
+  /** Working chrome vs full-page map. Detail: `{ layout: 'chrome' | 'view-map' }`. */
+  LAYOUT_CHANGE: 'app:layout-change',
   /** Summer / winter chip. Detail: `{ season: 'summer' | 'winter' }`. */
   SEASON_CHANGE: 'app:season-change',
   /** Critique button click — commits the Sketch mask. No detail. */
@@ -201,8 +211,14 @@ export const APP_EVENTS = {
   BRUSH_CHANGE: 'app:brush-change',
   /** Brush strength slider change. Detail: `{ strength: number }`. */
   STRENGTH_CHANGE: 'app:strength-change',
-  /** Sketch landform chip. Detail: `{ kind: LandformKind }`. */
-  STAMP_LANDFORM: 'app:stamp-landform',
+  /** Sketch landform drag. Detail: `LandformDragDetail`. */
+  LANDFORM_DRAG: 'app:landform-drag',
+  /** How many continent doodles to stamp. Detail: `{ count: number }`. */
+  CONTINENT_COUNT_CHANGE: 'app:continent-count-change',
+  /** How many countries to grow. Detail: `{ count: number }`. */
+  POLITY_COUNT_CHANGE: 'app:polity-count-change',
+  /** Worldbuild overlay. Detail: `{ overlay: WorldOverlay }`. */
+  WORLD_OVERLAY_CHANGE: 'app:world-overlay-change',
 } as const
 
 /** Type-safe detail for `app:stage-transition`. */
@@ -245,9 +261,34 @@ export interface ViewChangeDetail {
   readonly view: 'atlas' | 'planet'
 }
 
-/** Type-safe detail for `app:stamp-landform`. */
-export interface LandformStampDetail {
-  readonly kind: 'continents' | 'mixed' | 'islands'
+/** Type-safe detail for `app:layout-change`. */
+export interface LayoutChangeDetail {
+  readonly layout: 'chrome' | 'view-map'
+}
+
+import type { LandformKind } from '../sketch/landforms'
+
+/** Type-safe detail for `app:landform-drag`. */
+export interface LandformDragDetail {
+  readonly kind: LandformKind
+  readonly phase: 'start' | 'move' | 'end'
+  readonly clientX: number
+  readonly clientY: number
+}
+
+/** Type-safe detail for `app:continent-count-change`. */
+export interface ContinentCountDetail {
+  readonly count: number
+}
+
+/** Type-safe detail for `app:polity-count-change`. */
+export interface PolityCountDetail {
+  readonly count: number
+}
+
+/** Type-safe detail for `app:world-overlay-change`. */
+export interface OverlayChangeDetail {
+  readonly overlay: import('../world/types').WorldOverlay
 }
 
 /** Coach message shape — the `coach:message` event detail. */

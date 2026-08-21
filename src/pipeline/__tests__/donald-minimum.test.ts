@@ -28,6 +28,7 @@ import { computeHydrology } from '../hydrology'
 import { computeBiomes } from '../biomes'
 import { serializeWorld, deserializeWorld } from '../../world/persist'
 import type { CellBiome } from '../../world/types'
+import { emptyPolityState } from '../../world/types'
 import { makeContinentWorld } from './fixtures'
 
 describe('Donald minimum', () => {
@@ -287,6 +288,7 @@ describe('Donald minimum', () => {
       rivers: result.rivers,
       biome: result.biome as CellBiome[],
       cities: [],
+      ...emptyPolityState(result.mask.length),
       suitability: result.suitability,
     }
     const json = serializeWorld(world)

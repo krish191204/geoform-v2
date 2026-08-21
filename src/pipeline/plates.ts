@@ -1,10 +1,11 @@
 /**
  * Pipeline step: plate assignment.
  *
- * Landmasses get 1–3 plates (islands stay one; a continent is not pizza).
- * Ocean is Voronoi-split into several oceanic plates — never a residual
- * `id = 0` sea. Distances are noise-warped so boundaries wiggle instead
- * of tracing a stained-glass mesh. Velocities come from `seed + 1`.
+ * Plates are a global Voronoi on land and ocean together. Sutures may cut a
+ * continent and continue into the sea — they must not hug the doodle coast.
+ * Small islands inherit the surrounding oceanic plate instead of being
+ * pizza-sliced. Distances are noise-warped so boundaries wiggle. Velocities
+ * come from `seed + 1`.
  *
  * Deterministic: same mask + same seed → identical `plateId` / `plateVx` /
  * `plateVy`. Driven by Mulberry32 from `helpers.ts`; never touches `Math.random`.
@@ -61,62 +62,36 @@ export function assignPlatesUnderMask(
   const N = width * height
   const plateId = new Int16Array(N)
   const rngCenter = createRng(seed)
-  const components = collectLandComponents(mask, width, height, threshold)
   const warpAmp = Math.max(3, width / 28)
   const warpSeed = (seed * 1103515245 + 12345) >>> 0
 
-  // Plate ids are 1-indexed and unique across the whole map. Each
-  // landmass is partitioned on its own so a global Voronoi does not
-  // stripe every island with the same geodesic cuts.
-  let nextPlateId = 1
-  const centersByPlate: { x: number; y: number }[] = [ { x: 0, y: 0 } ]
+  const allCells = new Array<number>(N)
+  for (let i = 0; i < N; i++) allCells[i] = i
 
-  for (const cells of components) {
-    const want = platesForComponent(cells.length)
-    const centers = pickCenters(
-      cells,
-      want,
-      rngCenter,
+  const want = globalPlateCount(N)
+  const centers = pickCenters(allCells, want, rngCenter, width, height, planetRadiusKm)
+  const centersByPlate: { x: number; y: number }[] = [{ x: 0, y: 0 }]
+  const localIds: number[] = []
+  for (let c = 0; c < centers.length; c++) {
+    const id = c + 1
+    localIds.push(id)
+    centersByPlate[id] = centers[c]
+  }
+  if (centers.length > 0) {
+    paintVoronoi(
+      plateId,
+      allCells,
+      centers,
+      localIds,
       width,
       height,
       planetRadiusKm,
+      warpAmp,
+      warpSeed,
     )
-    if (centers.length === 0) continue
-    const localIds: number[] = []
-    for (let c = 0; c < centers.length; c++) {
-      localIds.push(nextPlateId)
-      centersByPlate[nextPlateId] = centers[c]
-      nextPlateId++
-    }
-    paintVoronoi(plateId, cells, centers, localIds, width, height, planetRadiusKm, warpAmp, warpSeed)
   }
 
-  const oceanCells: number[] = []
-  for (let i = 0; i < N; i++) {
-    if (mask[i] < threshold) oceanCells.push(i)
-  }
-  const oceanWant = oceanPlateCount(oceanCells.length)
-  if (oceanCells.length > 0 && oceanWant > 0) {
-    const centers = pickCenters(
-      oceanCells,
-      oceanWant,
-      rngCenter,
-      width,
-      height,
-      planetRadiusKm,
-    )
-    if (centers.length > 0) {
-      const localIds: number[] = []
-      for (let c = 0; c < centers.length; c++) {
-        localIds.push(nextPlateId)
-        centersByPlate[nextPlateId] = centers[c]
-        nextPlateId++
-      }
-      paintVoronoi(plateId, oceanCells, centers, localIds, width, height, planetRadiusKm, warpAmp, warpSeed ^ 0x9e3779b9)
-    }
-  }
-
-  const finalPlateCount = nextPlateId - 1
+  const finalPlateCount = centers.length
   if (finalPlateCount === 0) {
     return {
       plateId,
@@ -127,7 +102,9 @@ export function assignPlatesUnderMask(
     }
   }
 
-  cleanupPlateSpeckle(plateId, mask, width, height, threshold, 2)
+  cleanupPlateSpeckle(plateId, width, height, 2)
+  mergeTinyPlates(plateId, width, height, 5)
+  snapSmallIslandsToOnePlate(plateId, mask, width, height, threshold)
 
   const centroidX = new Float64Array(finalPlateCount + 1)
   const centroidY = new Float64Array(finalPlateCount + 1)
@@ -263,20 +240,14 @@ export function assignPlatesUnderMask(
   }
 }
 
-/** Islands this small stay one plate instead of being pizza-sliced. */
+/** Islands this small inherit one plate instead of being pizza-sliced. */
 const SMALL_LANDMASS_CELLS = 400
 
-function platesForComponent(area: number): number {
-  if (area < SMALL_LANDMASS_CELLS) return 1
-  if (area < 8000) return 2
-  return 3
-}
-
-function oceanPlateCount(area: number): number {
-  if (area < 80) return 1
-  if (area < 2000) return 3
-  if (area < 20000) return 4
-  return 5
+function globalPlateCount(cellCount: number): number {
+  if (cellCount < 400) return 4
+  if (cellCount < 2500) return 5
+  if (cellCount < 50000) return 8
+  return 10
 }
 
 function paintVoronoi(
@@ -473,15 +444,13 @@ function pickCenters(
 }
 
 /**
- * Majority-filter 1-cell plate speckles so a continent is a few
- * contiguous plates, not confetti.
+ * Majority-filter 1-cell plate speckles. Neighbours are plates, not
+ * land vs sea — otherwise sutures hug the doodle coastline.
  */
 function cleanupPlateSpeckle(
   plateId: Int16Array,
-  mask: Float32Array,
   width: number,
   height: number,
-  threshold: number,
   passes: number,
 ): void {
   const n = width * height
@@ -490,7 +459,6 @@ function cleanupPlateSpeckle(
     next.set(plateId)
     for (let i = 0; i < n; i++) {
       if (plateId[i] <= 0) continue
-      const land = mask[i] >= threshold
       const x = i % width
       const y = (i - x) / width
       const counts = new Map<number, number>()
@@ -500,7 +468,6 @@ function cleanupPlateSpeckle(
         const ny = y + dy
         if (ny < 0 || ny >= height) continue
         const j = idx(width, nx, ny)
-        if ((mask[j] >= threshold) !== land) continue
         if (plateId[j] <= 0) continue
         counts.set(plateId[j], (counts.get(plateId[j]) ?? 0) + 1)
         total++
@@ -517,5 +484,97 @@ function cleanupPlateSpeckle(
       if (bestN >= 3 && best !== plateId[i]) next[i] = best
     }
     plateId.set(next)
+  }
+}
+
+function mergeTinyPlates(
+  plateId: Int16Array,
+  width: number,
+  height: number,
+  minKeep: number,
+): void {
+  const n = plateId.length
+  const minArea = Math.max(24, Math.floor(n * 0.04))
+  for (let round = 0; round < 6; round++) {
+    const area = new Map<number, number>()
+    for (let i = 0; i < n; i++) {
+      const id = plateId[i]
+      if (id <= 0) continue
+      area.set(id, (area.get(id) ?? 0) + 1)
+    }
+    if (area.size <= minKeep) return
+    let victim = 0
+    let victimN = Number.POSITIVE_INFINITY
+    for (const [id, c] of area) {
+      if (c < victimN) {
+        victimN = c
+        victim = id
+      }
+    }
+    if (victim <= 0 || victimN >= minArea) return
+    for (let i = 0; i < n; i++) {
+      if (plateId[i] !== victim) continue
+      const x = i % width
+      const y = (i - x) / width
+      const counts = new Map<number, number>()
+      for (const [dx, dy] of D4_OFFSETS) {
+        const nx = wrapX(x + dx, width)
+        const ny = y + dy
+        if (ny < 0 || ny >= height) continue
+        const q = plateId[idx(width, nx, ny)]
+        if (q <= 0 || q === victim) continue
+        counts.set(q, (counts.get(q) ?? 0) + 1)
+      }
+      let best = 0
+      let bestN = -1
+      for (const [id, c] of counts) {
+        if (c > bestN) {
+          bestN = c
+          best = id
+        }
+      }
+      if (best > 0) plateId[i] = best
+    }
+  }
+}
+
+function snapSmallIslandsToOnePlate(
+  plateId: Int16Array,
+  mask: Float32Array,
+  width: number,
+  height: number,
+  threshold: number,
+): void {
+  for (const cells of collectLandComponents(mask, width, height, threshold)) {
+    if (cells.length === 0 || cells.length >= SMALL_LANDMASS_CELLS) continue
+    const oceanVotes = new Map<number, number>()
+    const landVotes = new Map<number, number>()
+    for (const i of cells) {
+      const id = plateId[i]
+      if (id > 0) landVotes.set(id, (landVotes.get(id) ?? 0) + 1)
+      const x = i % width
+      const y = (i - x) / width
+      for (const [dx, dy] of D4_OFFSETS) {
+        const nx = wrapX(x + dx, width)
+        const ny = y + dy
+        if (ny < 0 || ny >= height) continue
+        const j = idx(width, nx, ny)
+        if (mask[j] >= threshold) continue
+        const q = plateId[j]
+        if (q <= 0) continue
+        oceanVotes.set(q, (oceanVotes.get(q) ?? 0) + 1)
+      }
+    }
+    const votes = oceanVotes.size > 0 ? oceanVotes : landVotes
+    let best = 0
+    let bestN = -1
+    for (const [id, c] of votes) {
+      if (c > bestN) {
+        bestN = c
+        best = id
+      }
+    }
+    if (best <= 0) continue
+    for (const i of cells) plateId[i] = best
   }
 }

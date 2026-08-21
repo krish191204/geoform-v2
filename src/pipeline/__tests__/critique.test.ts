@@ -23,6 +23,7 @@ import {
 } from '../../critique/analyzeWorld'
 import type { World, Issue, WorldMeta } from '../../world/types'
 import type { CellBiome } from '../../world/types'
+import { emptyPolityState } from '../../world/types'
 import { DEFAULT_META } from '../../world/types'
 import { makeContinentWorld, makeTwinContinentWorld, makePolarStripWorld } from './fixtures'
 import type { TestWorld } from './fixtures'
@@ -62,6 +63,7 @@ function makeWorld(tw: TestWorld, seed: number, threshold: number): World {
     biome: new Array<CellBiome>(n).fill('ocean'),
     suitability: new Float32Array(n),
     cities: [],
+    ...emptyPolityState(n),
   }
 }
 

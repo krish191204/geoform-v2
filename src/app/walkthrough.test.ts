@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { mountApp } from './shell'
-import { critiqueMask, critiqueWorld } from '../critique/main'
+import { critiqueMask, critiqueWorld, gradeFromScore } from '../critique/main'
 import { makeSenseInline, worldFromMakeSense } from '../pipeline/makeSense'
 import { seedSettlements } from '../sketch/settlements'
 import { makeContinentWorld } from '../pipeline/__tests__/fixtures'
@@ -29,8 +29,8 @@ function stubAtlasRect(canvas: HTMLCanvasElement): void {
     }) as DOMRect
 }
 
-function pointer(canvas: HTMLCanvasElement, type: string, clientX: number, clientY: number): void {
-  canvas.dispatchEvent(
+function pointer(target: EventTarget, type: string, clientX: number, clientY: number): void {
+  target.dispatchEvent(
     new PointerEvent(type, {
       clientX,
       clientY,
@@ -65,15 +65,14 @@ describe('Sketch → Worldbuild walkthrough', () => {
     critiqueBtn!.click()
 
     const scoreText = root.querySelector('.score')?.textContent ?? ''
-    const score = Number(scoreText.replace('%', ''))
-    expect(score).toBeGreaterThanOrEqual(0)
-    expect(score).toBeLessThanOrEqual(40)
+    expect(scoreText).toMatch(/^[DF]$/)
+    expect(root.querySelector('.score-caption')?.textContent).toMatch(/accurate|renderable/i)
     expect(hint.hidden).toBe(true)
 
     root.remove()
   })
 
-  it('stamping Full continents hides the empty-ocean hint', () => {
+  it('dragging a continent onto the map hides the empty-ocean hint', () => {
     const root = document.createElement('div')
     document.body.append(root)
     mountApp(root)
@@ -81,9 +80,13 @@ describe('Sketch → Worldbuild walkthrough', () => {
     const hint = root.querySelector('#mapHint') as HTMLElement
     expect(hint.hidden).toBe(false)
 
+    const canvas = root.querySelector('#map') as HTMLCanvasElement
+    stubAtlasRect(canvas)
     const chip = root.querySelector('[data-landform="continents"]') as HTMLButtonElement
     expect(chip).toBeTruthy()
-    chip.click()
+    pointer(chip, 'pointerdown', 320, 160)
+    pointer(chip, 'pointermove', 320, 160)
+    pointer(chip, 'pointerup', 320, 160)
 
     expect(hint.hidden).toBe(true)
     const critiqueBtn = Array.from(root.querySelectorAll('button')).find((b) => b.textContent === 'Critique')
@@ -120,7 +123,13 @@ describe('Sketch → Worldbuild walkthrough', () => {
     }
     expect(flipped).toBeGreaterThan(10)
     seedSettlements(world)
+    const { ensureWorldbuild } = await import('../sketch/polities')
+    ensureWorldbuild(world, 1)
+    expect(world.polities).toHaveLength(1)
+    expect(world.polities[0].analog.label.length).toBeGreaterThan(4)
     const post = critiqueWorld(world)
+    expect(gradeFromScore(post.score)).toBe('A')
+    expect(post.issues.some((i) => i.severity === 'critical')).toBe(false)
 
     const { width: w, height: h } = world.meta
     let pole = 0

@@ -60,12 +60,12 @@ describe('renderCoach writer copy', () => {
     })
     expect(isCoachSilent('sketch.ready')).toBe(false)
     expect(copy.message).toBe(
-      'Empty ocean. Paint land. Critique when the blob looks like a continent.',
+      'Empty ocean. Drag a picture onto the map, or paint land.',
     )
     expect(copy.message).not.toMatch(/512|256|0 land/)
   })
 
-  it('critique names the score without pretending it is geography', () => {
+  it('critique names a letter grade, not a percentage', () => {
     const copy = renderCoach({
       kind: 'critique.grade',
       score: 28,
@@ -74,8 +74,9 @@ describe('renderCoach writer copy', () => {
       majorCount: 1,
       minorCount: 0,
     })
-    expect(copy.message).toContain('Score 28')
-    expect(copy.message).toContain('not a geography grade')
+    expect(copy.message.startsWith('D —')).toBe(true)
+    expect(copy.message).toContain('Barely accurate')
+    expect(copy.message).not.toMatch(/Score 28|28%/)
   })
 
   it('make sense complete does not boast pipeline telemetry', () => {
@@ -88,7 +89,7 @@ describe('renderCoach writer copy', () => {
       riversCount: 400,
       rangeAvgC: 18.4,
     })
-    expect(copy.message).toBe('Atlas grounded. Switch layers. Hover a cell.')
+    expect(copy.message).toBe('A — Geographically accurate. Atlas grounded. Switch layers.')
     for (const snip of ['98', '3.21', '400', '18.4']) {
       expect(copy.message).not.toContain(snip)
     }

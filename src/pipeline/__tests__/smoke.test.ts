@@ -28,6 +28,7 @@ import {
 } from '../../critique/analyzeWorld'
 import { serializeWorld, deserializeWorld } from '../../world/persist'
 import type { World, WorldMeta } from '../../world/types'
+import { emptyPolityState } from '../../world/types'
 import type { SavedMask } from '../../world/persist'
 import { DEFAULT_META } from '../../world/types'
 import { makeContinentWorld } from './fixtures'
@@ -79,8 +80,9 @@ function toWorld(result: Awaited<ReturnType<typeof makeSenseInline>>, meta: Worl
     moistMean: result.moistMean,
     flux: result.flux,
     rivers: result.rivers,
-    biome: result.biome as World['biome'],
-    cities: [],
+      biome: result.biome as World['biome'],
+      cities: [],
+      ...emptyPolityState(result.mask.length),
     suitability: result.suitability,
   } as World
 }

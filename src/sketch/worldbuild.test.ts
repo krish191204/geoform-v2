@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { placeCity, removeNearestCity, cityNameGenerator } from './worldbuild'
 import type { World, City, WorldMeta } from '../world/types'
-import { DEFAULT_META } from '../world/types'
+import { DEFAULT_META, emptyPolityState } from '../world/types'
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -48,6 +48,7 @@ function makeWorld(overrides: Partial<WorldMeta> = {}): World {
     biome: new Array(cells).fill('ocean'),
     suitability,
     cities: [],
+    ...emptyPolityState(cells),
   }
 }
 

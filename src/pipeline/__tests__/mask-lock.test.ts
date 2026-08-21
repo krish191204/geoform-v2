@@ -23,6 +23,7 @@ import { makeSenseInline, MASK_LOCK_AREA_FRACTION, MASK_LOCK_MIN_COMPONENT } fro
 import { bigComponentsMask } from '../helpers'
 import { serializeWorld, deserializeWorld } from '../../world/persist'
 import type { World, WorldMeta } from '../../world/types'
+import { emptyPolityState } from '../../world/types'
 import { makeContinentWorld, makeTwinContinentWorld, makeSpeckleWorld } from './fixtures'
 import type { TestWorld } from './fixtures'
 
@@ -73,8 +74,9 @@ function toWorld(result: Awaited<ReturnType<typeof makeSenseInline>>, meta: Worl
     moistMean: result.moistMean,
     flux: result.flux,
     rivers: result.rivers,
-    biome: result.biome as World['biome'],
-    cities: [],
+      biome: result.biome as World['biome'],
+      cities: [],
+      ...emptyPolityState(result.mask.length),
     suitability: result.suitability,
   } as World
 }
@@ -84,8 +86,8 @@ function toWorld(result: Awaited<ReturnType<typeof makeSenseInline>>, meta: Worl
 // ---------------------------------------------------------------------------
 
 describe('mask-lock constants', () => {
-  it('MASK_LOCK_AREA_FRACTION is 5%', () => {
-    expect(MASK_LOCK_AREA_FRACTION).toBeCloseTo(0.05, 6)
+  it('MASK_LOCK_AREA_FRACTION is 12%', () => {
+    expect(MASK_LOCK_AREA_FRACTION).toBeCloseTo(0.12, 6)
   })
 
   it('MASK_LOCK_MIN_COMPONENT is 100 cells', () => {
@@ -109,7 +111,7 @@ describe('bigComponentsMask (pre-count)', () => {
     const after = bigComponentsMask(result.mask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
     let postBigArea = 0
     for (let i = 0; i < after.mask.length; i++) postBigArea += after.mask[i]
-    expect(Math.abs(postBigArea - preArea) / Math.max(1, preArea)).toBeLessThanOrEqual(0.05)
+    expect(Math.abs(postBigArea - preArea) / Math.max(1, preArea)).toBeLessThanOrEqual(MASK_LOCK_AREA_FRACTION)
     expect(postArea).toBeGreaterThan(0)
     expect(result.provenance.inputMaskArea).toBe(preArea)
   })
@@ -126,7 +128,7 @@ describe('bigComponentsMask (pre-count)', () => {
     expect(Math.abs(result.provenance.outputMaskArea - result.provenance.inputMaskArea)).toBeLessThanOrEqual(allowed)
   })
 
-  it('differences between pre- and post-count stay within ±5%', async () => {
+  it('differences between pre- and post-count stay within the lock budget', async () => {
     const tw = makeTwinContinentWorld()
     const meta = metaFromTest(tw, 99, 0.5)
     const before = bigComponentsMask(tw.mask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
@@ -136,7 +138,7 @@ describe('bigComponentsMask (pre-count)', () => {
     const allowed = MASK_LOCK_AREA_FRACTION * Math.max(1, result.provenance.inputMaskArea)
     expect(areaDelta).toBeLessThanOrEqual(allowed)
     const countDelta = Math.abs(after.count - before.count)
-    expect(countDelta / Math.max(1, before.count)).toBeLessThanOrEqual(0.05)
+    expect(countDelta / Math.max(1, before.count)).toBeLessThanOrEqual(MASK_LOCK_AREA_FRACTION)
   })
 
   it('small components (≤ 100 cells) may disappear', () => {

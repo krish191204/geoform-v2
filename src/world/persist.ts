@@ -20,7 +20,8 @@
  * Backward compatibility: the old `geoform.autosave.v1` key is intentionally
  * ignored. v1 saves are stale and would confuse the new mask-first model.
  */
-import type { World, WorldMeta, CellBiome } from './types'
+import type { World, WorldMeta, CellBiome, Polity, TradeRoute } from './types'
+import { emptyPolityState } from './types'
 
 // ---------------------------------------------------------------------------
 // Storage keys
@@ -76,6 +77,9 @@ export interface SavedWorld {
     biome: string[]
     suitability: number[]
     cities: World['cities']
+    polityId?: number[]
+    polities?: Polity[]
+    routes?: TradeRoute[]
   }
 }
 
@@ -226,6 +230,9 @@ export function serializeWorld(world: World): string {
       biome: world.biome.slice(),
       suitability: Array.from(world.suitability),
       cities: world.cities.map((c) => ({ ...c })),
+      polityId: Array.from(world.polityId),
+      polities: world.polities.map((p) => ({ ...p, analog: { ...p.analog }, exports: [...p.exports], imports: [...p.imports] })),
+      routes: world.routes.map((r) => ({ ...r, path: r.path.map((pt) => ({ ...pt })) })),
     },
   }
   return JSON.stringify(payload)
@@ -307,6 +314,12 @@ export function deserializeWorld(json: string): World | null {
     biome: w.biome.slice() as CellBiome[],
     suitability: Float32Array.from(w.suitability),
     cities: w.cities.map((c) => ({ ...c })),
+    ...emptyPolityState(n),
+    ...(isNumberArray(w.polityId) && w.polityId.length === n
+      ? { polityId: Int16Array.from(w.polityId) }
+      : {}),
+    ...(Array.isArray(w.polities) ? { polities: w.polities as Polity[] } : {}),
+    ...(Array.isArray(w.routes) ? { routes: w.routes as TradeRoute[] } : {}),
   }
 }
 
@@ -370,6 +383,9 @@ export function serializeWorldBlob(world: World): Uint8Array {
     seasons: world.seasons,
     biome: world.biome,
     cities: world.cities.map((c) => ({ ...c })),
+    polities: world.polities,
+    routes: world.routes,
+    polityId: Array.from(world.polityId),
   })
   const headerBytes = new TextEncoder().encode(header)
   const f32: Float32Array[] = [
@@ -419,6 +435,9 @@ export function deserializeWorldBlob(bytes: Uint8Array): World | null {
     seasons?: 2 | 4
     biome?: string[]
     cities?: World['cities']
+    polities?: Polity[]
+    routes?: TradeRoute[]
+    polityId?: number[]
   }
   try {
     header = JSON.parse(new TextDecoder().decode(bytes.subarray(headerStart, headerEnd))) as typeof header
@@ -474,6 +493,12 @@ export function deserializeWorldBlob(bytes: Uint8Array): World | null {
     seasons: header.seasons,
     biome: header.biome.slice() as CellBiome[],
     cities: header.cities.map((c) => ({ ...c })),
+    ...emptyPolityState(n),
+    ...(Array.isArray(header.polityId) && header.polityId.length === n
+      ? { polityId: Int16Array.from(header.polityId) }
+      : {}),
+    ...(Array.isArray(header.polities) ? { polities: header.polities } : {}),
+    ...(Array.isArray(header.routes) ? { routes: header.routes } : {}),
   }
 }
 
