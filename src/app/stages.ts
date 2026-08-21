@@ -219,6 +219,10 @@ export const APP_EVENTS = {
   POLITY_COUNT_CHANGE: 'app:polity-count-change',
   /** Worldbuild overlay. Detail: `{ overlay: WorldOverlay }`. */
   WORLD_OVERLAY_CHANGE: 'app:world-overlay-change',
+  /** Sign in / make account. Detail: `AccountSubmitDetail`. */
+  ACCOUNT_SUBMIT: 'app:account-submit',
+  /** Sign out. No detail. */
+  ACCOUNT_SIGN_OUT: 'app:account-sign-out',
 } as const
 
 /** Type-safe detail for `app:stage-transition`. */
@@ -289,6 +293,13 @@ export interface PolityCountDetail {
 /** Type-safe detail for `app:world-overlay-change`. */
 export interface OverlayChangeDetail {
   readonly overlay: import('../world/types').WorldOverlay
+}
+
+/** Type-safe detail for `app:account-submit`. */
+export interface AccountSubmitDetail {
+  readonly mode: 'in' | 'up'
+  readonly email: string
+  readonly password: string
 }
 
 /** Coach message shape — the `coach:message` event detail. */

@@ -179,6 +179,36 @@ describe('stampLandform', () => {
     )
   })
 
+  it('the same stamp seed keeps a gulf as a gulf when scaled down', () => {
+    const seed = 11
+    const full = empty(96, 48)
+    const small = empty(96, 48)
+    const frozen = 9041
+    stampLandformAt(full.mask, full.meta, 'gulf', seed, 48, 24, 1, frozen)
+    stampLandformAt(small.mask, small.meta, 'gulf', seed, 48, 24, 0.55, frozen)
+    const eastWest = (mask: Float32Array) => {
+      let east = 0
+      let west = 0
+      for (let i = 0; i < mask.length; i++) {
+        if (mask[i] < 0.5) continue
+        const x = i % 96
+        let dx = x - 48
+        if (dx > 48) dx -= 96
+        if (dx < -48) dx += 96
+        if (dx > 2) east++
+        else if (dx < -2) west++
+      }
+      return { east, west }
+    }
+    const a = eastWest(full.mask)
+    const b = eastWest(small.mask)
+    expect(a.east).toBeLessThan(a.west)
+    expect(b.east).toBeLessThan(b.west)
+    expect(landformStats(small.mask, small.meta).landCells).toBeLessThan(
+      landformStats(full.mask, full.meta).landCells,
+    )
+  })
+
   it('clicking a blob trims the outer cells', () => {
     const { meta, mask } = empty(96, 48)
     stampLandformAt(mask, meta, 'continents', 5, 48, 24)

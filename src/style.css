@@ -190,6 +190,91 @@ body {
   max-width: 10rem;
 }
 
+.account-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(28, 34, 28, 0.32);
+}
+
+.account-sheet[hidden] {
+  display: none;
+}
+
+.account-card {
+  width: min(22rem, 100%);
+  background: var(--panel);
+  border: 1px solid rgba(28, 34, 28, 0.12);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.1rem 1.15rem 1rem;
+}
+
+.account-card h2 {
+  margin: 0 0 0.35rem;
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 1.35rem;
+}
+
+.account-lede,
+.account-unwired,
+.account-status,
+.account-who {
+  margin: 0 0 0.75rem;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+}
+
+.account-modes {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.7rem;
+}
+
+.account-mode.active {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.account-form {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.account-form label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+}
+
+.account-form input {
+  border: 1px solid rgba(28, 34, 28, 0.18);
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  padding: 0.5rem 0.85rem;
+  font: inherit;
+  color: var(--ink);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.account-signed-in {
+  display: grid;
+  gap: 0.55rem;
+  margin-bottom: 0.6rem;
+}
+
+.account-dismiss {
+  margin-top: 0.65rem;
+}
+
 .seed-row {
   display: flex;
   align-items: center;

@@ -31,7 +31,10 @@ import {
   type OverlayChangeDetail,
   type PolityCountDetail,
   type ViewChangeDetail,
+  type AccountSubmitDetail,
 } from './stages'
+import { accountsConfigured } from '../auth/account'
+import type { Account } from '../auth/account'
 import { LAYER_CHIPS } from './atlas'
 import { SETTLEMENT_PORT_LABEL, SETTLEMENT_RANK_LABEL, SETTLEMENT_ROLE_LABEL } from '../sketch/settlements'
 import { economyLine, meltingPotLabel } from '../sketch/polities'
@@ -72,8 +75,8 @@ function fire<T>(type: string, detail?: T): void {
 const TRANSPARENT_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 
-/** Transparent PNG silhouette — no names, no navy plate. */
-export function landformThumbPng(kind: LandformKind, scale = 1): string {
+/** Transparent PNG silhouette — no names, no navy plate. Scale is display-only. */
+export function landformThumbPng(kind: LandformKind): string {
   const tw = 64
   const th = 32
   const mask = new Float32Array(tw * th)
@@ -84,7 +87,7 @@ export function landformThumbPng(kind: LandformKind, scale = 1): string {
     11,
     tw / 2,
     th / 2,
-    scale,
+    1,
   )
   const canvas = document.createElement('canvas')
   canvas.width = 160
@@ -115,9 +118,12 @@ export function paintLandformThumb(
   kind: LandformKind,
   scale = 1,
 ): void {
-  const png = landformThumbPng(kind, scale)
+  const png = landformThumbPng(kind)
+  const k = Math.max(0.28, Math.min(1.4, scale))
   if (target instanceof HTMLImageElement) {
     target.src = png
+    target.style.width = `${6 * k}rem`
+    target.style.height = `${3 * k}rem`
     return
   }
   const ctx = target.getContext('2d')
@@ -139,6 +145,18 @@ export interface ChromeRefs {
   readonly downloadBtn: HTMLButtonElement
   readonly clearSeaBtn: HTMLButtonElement
   readonly saveMeta: HTMLElement
+  readonly accountBtn: HTMLButtonElement
+  readonly accountSheet: HTMLElement
+  readonly accountStatus: HTMLElement
+  readonly accountSubmit: HTMLButtonElement
+  readonly accountSignOut: HTMLButtonElement
+}
+
+export type AccountChromeView = {
+  readonly account: Account | null
+  readonly configured: boolean
+  readonly busy: boolean
+  readonly message: string
 }
 
 export function mountChrome(): ChromeRefs {
@@ -164,13 +182,103 @@ export function mountChrome(): ChromeRefs {
   )
   clearSeaBtn.addEventListener('click', () => fire(APP_EVENTS.CLEAR_SEA))
   const saveMeta = el('span', { class: 'save-meta' }, 'No save yet')
+  const accountBtn = el('button', { type: 'button', class: 'action-btn account-btn' }, 'Sign in')
+
+  const emailInput = el('input', {
+    type: 'email',
+    name: 'email',
+    autocomplete: 'username',
+    required: true,
+    placeholder: 'you@example.com',
+  }) as HTMLInputElement
+  const passwordInput = el('input', {
+    type: 'password',
+    name: 'password',
+    autocomplete: 'current-password',
+    required: true,
+    minlength: 8,
+    placeholder: 'password',
+  }) as HTMLInputElement
+  const accountSubmit = el('button', { type: 'submit', class: 'primary' }, 'Sign in')
+  const accountSignOut = el('button', { type: 'button', class: 'action-btn' }, 'Sign out')
+  const accountStatus = el('p', { class: 'account-status', role: 'status' })
+  const modeIn = el('button', { type: 'button', class: 'account-mode active', 'data-mode': 'in' }, 'Sign in')
+  const modeUp = el('button', { type: 'button', class: 'account-mode', 'data-mode': 'up' }, 'Make account')
+  const accountForm = el(
+    'form',
+    { class: 'account-form' },
+    el('label', {}, 'Email', emailInput),
+    el('label', {}, 'Password', passwordInput),
+    accountSubmit,
+  )
+  const unwired = el(
+    'p',
+    { class: 'account-unwired' },
+    'This build has no account server. Add VITE_SUPABASE_URL and the publishable key.',
+  )
+  const signedIn = el(
+    'div',
+    { class: 'account-signed-in', hidden: true },
+    el('p', { class: 'account-who' }),
+    accountSignOut,
+  )
+  const card = el(
+    'div',
+    { class: 'account-card', role: 'document' },
+    el('h2', {}, 'Your account'),
+    el('p', { class: 'account-lede' }, 'The map stays in this browser. The account is just you.'),
+    el('div', { class: 'account-modes' }, modeIn, modeUp),
+    accountForm,
+    signedIn,
+    unwired,
+    accountStatus,
+    el('button', { type: 'button', class: 'account-dismiss' }, 'Close'),
+  )
+  const accountSheet = el('div', { class: 'account-sheet', hidden: true, role: 'dialog', 'aria-label': 'Sign in' }, card)
+
+  let mode: AccountSubmitDetail['mode'] = 'in'
+
+  function setMode(next: AccountSubmitDetail['mode']): void {
+    mode = next
+    modeIn.classList.toggle('active', next === 'in')
+    modeUp.classList.toggle('active', next === 'up')
+    accountSubmit.textContent = next === 'in' ? 'Sign in' : 'Make account'
+    passwordInput.autocomplete = next === 'in' ? 'current-password' : 'new-password'
+  }
+
+  function openSheet(): void {
+    accountSheet.hidden = false
+    emailInput.focus()
+  }
+
+  function closeSheet(): void {
+    accountSheet.hidden = true
+  }
+
+  accountBtn.addEventListener('click', () => openSheet())
+  modeIn.addEventListener('click', () => setMode('in'))
+  modeUp.addEventListener('click', () => setMode('up'))
+  accountSignOut.addEventListener('click', () => fire(APP_EVENTS.ACCOUNT_SIGN_OUT))
+  card.querySelector('.account-dismiss')?.addEventListener('click', () => closeSheet())
+  accountSheet.addEventListener('click', (ev) => {
+    if (ev.target === accountSheet) closeSheet()
+  })
+  accountForm.addEventListener('submit', (ev) => {
+    ev.preventDefault()
+    const detail: AccountSubmitDetail = {
+      mode,
+      email: emailInput.value,
+      password: passwordInput.value,
+    }
+    fire(APP_EVENTS.ACCOUNT_SUBMIT, detail)
+  })
 
   const topnav = el(
     'nav',
     { class: 'topnav', 'aria-label': 'Geoform' },
     brand,
     el('p', { class: 'tagline' }, 'Draw land. We ground it in geography.'),
-    el('div', { class: 'nav-trailing' }, saveBtn, downloadBtn, clearSeaBtn, saveMeta),
+    el('div', { class: 'nav-trailing' }, accountBtn, saveBtn, downloadBtn, clearSeaBtn, saveMeta),
   )
 
   const rail = el('nav', { class: 'ux-stage-rail', 'aria-label': 'Worldbuilding stages' })
@@ -190,7 +298,24 @@ export function mountChrome(): ChromeRefs {
   }
 
   const root = el('header', { class: 'chrome' }, topnav, rail)
-  return { root, stageButtons, saveBtn, downloadBtn, clearSeaBtn, saveMeta }
+  if (!accountsConfigured()) unwired.hidden = false
+  else unwired.hidden = true
+  accountForm.hidden = !accountsConfigured()
+  card.querySelector('.account-modes')?.toggleAttribute('hidden', !accountsConfigured())
+  setMode('in')
+  return {
+    root,
+    stageButtons,
+    saveBtn,
+    downloadBtn,
+    clearSeaBtn,
+    saveMeta,
+    accountBtn,
+    accountSheet,
+    accountStatus,
+    accountSubmit,
+    accountSignOut,
+  }
 }
 
 export function updateChrome(refs: ChromeRefs, state: ShellStateView): void {
@@ -205,6 +330,27 @@ export function updateChrome(refs: ChromeRefs, state: ShellStateView): void {
   }
   refs.clearSeaBtn.disabled = state.isProcessing
   refs.downloadBtn.disabled = !state.world && !state.mask
+}
+
+export function updateAccountChrome(refs: ChromeRefs, view: AccountChromeView): void {
+  const configured = view.configured
+  const signedIn = Boolean(view.account)
+  refs.accountBtn.textContent = signedIn ? view.account!.email : 'Sign in'
+  refs.accountBtn.title = signedIn ? view.account!.email : 'Sign in or make an account'
+  refs.accountSubmit.disabled = view.busy || !configured
+  refs.accountSignOut.disabled = view.busy
+  refs.accountStatus.textContent = view.message
+  const sheet = refs.accountSheet
+  const form = sheet.querySelector('.account-form') as HTMLElement | null
+  const modes = sheet.querySelector('.account-modes') as HTMLElement | null
+  const unwired = sheet.querySelector('.account-unwired') as HTMLElement | null
+  const signedBlock = sheet.querySelector('.account-signed-in') as HTMLElement | null
+  const who = sheet.querySelector('.account-who') as HTMLElement | null
+  if (form) form.hidden = !configured || signedIn
+  if (modes) modes.hidden = !configured || signedIn
+  if (unwired) unwired.hidden = configured
+  if (signedBlock) signedBlock.hidden = !signedIn
+  if (who && view.account) who.textContent = view.account.email
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +420,7 @@ export function mountMapShell(): MapShellRefs {
     alt: '',
     draggable: 'false',
   }) as HTMLImageElement
-  const stampHint = el('div', { class: 'stamp-hint', hidden: true }, 'Drop to place · click to shrink · Esc to cancel')
+  const stampHint = el('div', { class: 'stamp-hint', hidden: true }, 'Empty sea until you drop · click the picture to shrink · Esc to cancel')
   const loading = el('div', { class: 'loading', id: 'loading', hidden: true }, 'Grounding the doodle…')
   const hint = el(
     'div',
@@ -575,7 +721,7 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
         class: 'style-chip',
         'data-landform': opt.id,
         'aria-label': `Drag this shape onto the map`,
-        title: 'Drag onto the map. Click the land to shrink it.',
+        title: 'Drag onto empty ocean. Click the picture to shrink the same shape.',
       },
       thumb,
     )

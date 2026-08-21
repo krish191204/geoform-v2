@@ -13,6 +13,9 @@
  *      when Make-sense commits. Loaded separately on boot, only if the user
  *      clicks "Resume".
  *
+ * Writer accounts (email / password) live in Supabase Auth + `profiles`.
+ * They are not this module. Do not put grids in Postgres.
+ *
  * On boot the mask loads first; the derived world is opt-in. The two stores
  * are independent — you can have a mask without a world (Sketch without
  * Make-sense) or a world without the original mask (re-imported).

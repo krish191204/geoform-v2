@@ -65,6 +65,17 @@ describe('updateChrome aria-current', () => {
     updateChrome(chrome, view({ mask }))
     expect(chrome.downloadBtn.disabled).toBe(false)
   })
+
+  it('opens a Sign in sheet that does not invent a password store', () => {
+    const chrome = mountChrome()
+    expect(chrome.accountBtn.textContent).toBe('Sign in')
+    expect(chrome.accountSheet.hidden).toBe(true)
+    chrome.accountBtn.click()
+    expect(chrome.accountSheet.hidden).toBe(false)
+    expect(chrome.accountSheet.textContent).toMatch(/map stays in this browser/i)
+    expect(chrome.accountSheet.querySelector('.account-unwired')).toBeTruthy()
+    expect(chrome.accountSheet.querySelector('input[type="password"]')).toBeTruthy()
+  })
 })
 
 describe('updateMapShell hint and HUD', () => {
@@ -114,6 +125,14 @@ describe('sketch tools', () => {
     expect(thumbs.every((img) => img && img.src.startsWith('data:image/png'))).toBe(true)
     expect(tools.root.textContent).toMatch(/Drag a picture onto the map/i)
     expect(tools.root.querySelector('#continentCountVal')).toBeNull()
+  })
+})
+
+describe('stamp preview copy', () => {
+  it('tells the writer the map stays empty sea until drop', () => {
+    const map = mountMapShell()
+    expect(map.stampHint.textContent).toMatch(/empty sea/i)
+    expect(map.stampHint.textContent).toMatch(/same|shrink/i)
   })
 })
 

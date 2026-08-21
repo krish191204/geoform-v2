@@ -82,8 +82,6 @@ export interface AtlasPaintOpts {
   showCities?: boolean
   /** Stroke preview: native grid scale, no 4× oversample. */
   preview?: boolean
-  /** Ghost stamp the writer is dragging; not committed land. */
-  ghostMask?: Float32Array | null
   /** Worldbuild ink overlay. One message. */
   worldOverlay?: WorldOverlay | null
 }
@@ -193,10 +191,6 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
   ctx.imageSmoothingQuality = opts.preview ? 'low' : 'high'
   ctx.drawImage(tctx.canvas, box.x, box.y, box.w, box.h)
 
-  if (opts.ghostMask && !opts.world) {
-    paintGhostStamp(ctx, opts.ghostMask, opts.mask, meta, box)
-  }
-
   if (opts.issues && opts.issues.length > 0) {
     ctx.save()
     ctx.translate(box.x, box.y)
@@ -235,37 +229,6 @@ function letterbox(cw: number, ch: number, aspect: number): BlitBox {
     w: dw,
     h: dh,
   }
-}
-
-function paintGhostStamp(
-  ctx: CanvasRenderingContext2D,
-  ghost: Float32Array,
-  committed: Float32Array | null,
-  meta: WorldMeta,
-  box: BlitBox,
-): void {
-  const w = meta.width
-  const h = meta.height
-  const n = w * h
-  if (ghost.length !== n) return
-  const cellW = box.w / w
-  const cellH = box.h / h
-  ctx.save()
-  ctx.globalAlpha = 0.72
-  ctx.fillStyle = 'rgba(186, 210, 140, 0.82)'
-  ctx.strokeStyle = 'rgba(243, 238, 220, 0.9)'
-  ctx.lineWidth = Math.max(1, Math.min(cellW, cellH) * 0.18)
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = y * w + x
-      if (ghost[i] < meta.threshold) continue
-      if (committed && committed[i] >= meta.threshold) continue
-      const px = box.x + x * cellW
-      const py = box.y + y * cellH
-      ctx.fillRect(px, py, cellW + 0.4, cellH + 0.4)
-    }
-  }
-  ctx.restore()
 }
 
 function paintCities(

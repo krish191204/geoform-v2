@@ -25,6 +25,7 @@ import {
   type PolityCountDetail,
   type LayoutChangeDetail,
   type ViewChangeDetail,
+  type AccountSubmitDetail,
 } from './stages'
 import {
   emptyInspectHint,
@@ -36,6 +37,7 @@ import {
   paintLandformThumb,
   showingDerivedWorld,
   sketchInspectHtml,
+  updateAccountChrome,
   updateChrome,
   updateInspector,
   updateMapShell,
@@ -46,7 +48,7 @@ import {
 import { cellFromPointer, paintAtlas } from './atlas'
 import { inspectCell } from '../render/draw'
 import { createMaskBrushes, fireCommitHook } from '../sketch/maskBrushes'
-import { landformStampCopy, stampLandformAt, clampContinentCount, isLandformKind, shrinkLandBlob } from '../sketch/landforms'
+import { landformStampCopy, stampLandformAt, clampContinentCount, isLandformKind, shrinkLandBlob, landformStampSeed, landBlobContains } from '../sketch/landforms'
 import { placeCity, removeNearestCity } from '../sketch/worldbuild'
 import { inferSettlementRole, seedSettlements, annotateSettlement } from '../sketch/settlements'
 import {
@@ -76,6 +78,15 @@ import {
   downloadMask,
 } from '../world/persist'
 import { announce as announceCoach } from './coach'
+import {
+  accountsConfigured,
+  loadAccount,
+  signInAccount,
+  signOutAccount,
+  signUpAccount,
+  watchAccount,
+  type Account,
+} from '../auth/account'
 
 interface ShellFlags {
   mask: Float32Array | null
@@ -157,18 +168,49 @@ export function mountApp(root: HTMLElement): void {
   const layout = document.createElement('div')
   layout.className = 'layout'
   layout.append(map.root, toolsHost, inspector.root)
-  root.append(chrome.root, layout)
+  root.append(chrome.root, layout, chrome.accountSheet)
+
+  let account: Account | null = null
+  let accountBusy = false
+  let accountMessage = ''
+
+  function paintAccount(): void {
+    updateAccountChrome(chrome, {
+      account,
+      configured: accountsConfigured(),
+      busy: accountBusy,
+      message: accountMessage,
+    })
+  }
+
+  paintAccount()
+  void loadAccount().then((next) => {
+    account = next
+    paintAccount()
+  })
+  watchAccount((next) => {
+    account = next
+    paintAccount()
+  })
 
   let toolsRefs: ToolsRefs | null = null
   let painting = false
   let stampDrag: {
     kind: import('../sketch/landforms').LandformKind
     snapshot: Float32Array
-    ghost: Float32Array
+    stampSeed: number
     scale: number
     originX: number
     originY: number
     lastCell: { x: number; y: number } | null
+  } | null = null
+  let lastStamp: {
+    kind: import('../sketch/landforms').LandformKind
+    seed: number
+    scale: number
+    x: number
+    y: number
+    before: Float32Array
   } | null = null
   let dragOrigin: { x: number; y: number } | null = null
   let paintRaf = 0
@@ -195,8 +237,10 @@ export function mountApp(root: HTMLElement): void {
     map.stampHint.hidden = !stampDrag
     root.classList.toggle('is-stamping', Boolean(stampDrag && onMap))
     if (!stampDrag) return
-    map.stampCursor.style.left = `${clientX + 14}px`
-    map.stampCursor.style.top = `${clientY + 14}px`
+    const w = map.stampCursor.offsetWidth || 96
+    const h = map.stampCursor.offsetHeight || 48
+    map.stampCursor.style.left = `${clientX - w / 2}px`
+    map.stampCursor.style.top = `${clientY - h / 2}px`
   }
 
   function clearStampDrag(): void {
@@ -300,8 +344,7 @@ export function mountApp(root: HTMLElement): void {
       season: flags.season,
       issues: state.stage === 'critique' ? state.issues : [],
       showCities: Boolean(showWorld && state.world && state.world.cities.length > 0),
-      preview: (painting || Boolean(stampDrag)) && !showWorld,
-      ghostMask: stampDrag?.ghost ?? null,
+      preview: painting && !showWorld,
       worldOverlay: state.stage === 'worldbuild' ? flags.worldOverlay : null,
     })
   }
@@ -437,6 +480,7 @@ export function mountApp(root: HTMLElement): void {
       if (state.stage !== 'sketch') return
       if (state.tool !== 'draw-land' && state.tool !== 'erase-land') return
 
+      lastStamp = null
       if (state.world) invalidateDerivedWorld()
 
       const mask = ensureMask()
@@ -497,6 +541,34 @@ export function mountApp(root: HTMLElement): void {
       ) {
         const mask = ensureMask()
         if (
+          lastStamp &&
+          landBlobContains(
+            mask,
+            state.meta.width,
+            state.meta.height,
+            state.meta.threshold,
+            downCell.x,
+            downCell.y,
+            lastStamp.x,
+            lastStamp.y,
+          )
+        ) {
+          lastStamp.scale = Math.max(STAMP_MIN_SCALE, lastStamp.scale * STAMP_SHRINK)
+          mask.set(lastStamp.before)
+          stampLandformAt(
+            mask,
+            state.meta,
+            lastStamp.kind,
+            state.meta.seed,
+            lastStamp.x,
+            lastStamp.y,
+            lastStamp.scale,
+            lastStamp.seed,
+          )
+          if (state.world) invalidateDerivedWorld()
+          bindMask(mask)
+          announce('success', 'Smaller. Same continent type. Click again to shrink more.')
+        } else if (
           shrinkLandBlob(
             mask,
             state.meta.width,
@@ -506,6 +578,7 @@ export function mountApp(root: HTMLElement): void {
             downCell.y,
           )
         ) {
+          lastStamp = null
           if (state.world) invalidateDerivedWorld()
           bindMask(mask)
           announce('success', 'Smaller. Click again to shrink more.')
@@ -629,6 +702,41 @@ export function mountApp(root: HTMLElement): void {
     announceCoach({ kind: 'app.stage', from, to: target, trigger: 'user' })
   })
 
+  window.addEventListener(APP_EVENTS.ACCOUNT_SUBMIT, (ev) => {
+    const detail = (ev as CustomEvent).detail as AccountSubmitDetail | undefined
+    if (!detail) return
+    accountBusy = true
+    accountMessage = ''
+    paintAccount()
+    const run = detail.mode === 'up' ? signUpAccount : signInAccount
+    void run(detail.email, detail.password).then((result) => {
+      accountBusy = false
+      if (result.ok === false) {
+        accountMessage = result.error
+        paintAccount()
+        return
+      }
+      account = result.account
+      if (result.needsConfirm) {
+        accountMessage = 'Check your email to confirm, then sign in.'
+      } else {
+        accountMessage = ''
+        chrome.accountSheet.hidden = true
+        if (account) announce('success', `Signed in as ${account.email}`)
+      }
+      paintAccount()
+    })
+  })
+
+  window.addEventListener(APP_EVENTS.ACCOUNT_SIGN_OUT, () => {
+    void signOutAccount().then(() => {
+      account = null
+      accountMessage = ''
+      chrome.accountSheet.hidden = true
+      paintAccount()
+    })
+  })
+
   window.addEventListener(APP_EVENTS.SAVE, () => {
     if (state.world) {
       const json = serializeWorld(state.world)
@@ -686,21 +794,11 @@ export function mountApp(root: HTMLElement): void {
 
   function applyStampPointer(clientX: number, clientY: number, ended: boolean): void {
     if (!stampDrag || state.stage !== 'sketch' || state.isProcessing) return
-    const { kind, scale } = stampDrag
+    const { kind, scale, stampSeed } = stampDrag
     const cell = cellFromPointer(map.canvas, clientX, clientY, state.meta.width, state.meta.height)
     if (cell) stampDrag.lastCell = cell
     setStampCursor(clientX, clientY, Boolean(cell))
-    if (!ended) {
-      if (!cell) {
-        stampDrag.ghost.fill(0)
-        requestPaint()
-        return
-      }
-      stampDrag.ghost.set(stampDrag.snapshot)
-      stampLandformAt(stampDrag.ghost, state.meta, kind, state.meta.seed, cell.x, cell.y, scale)
-      requestPaint()
-      return
-    }
+    if (!ended) return
     if (stampEndLock) return
     stampEndLock = true
     queueMicrotask(() => {
@@ -713,20 +811,8 @@ export function mountApp(root: HTMLElement): void {
       if (dx * dx + dy * dy < STAMP_CLICK_PX * STAMP_CLICK_PX) {
         stampDrag.scale = Math.max(STAMP_MIN_SCALE, stampDrag.scale * STAMP_SHRINK)
         paintLandformThumb(map.stampCursor, kind, stampDrag.scale)
-        if (stampDrag.lastCell) {
-          stampDrag.ghost.set(stampDrag.snapshot)
-          stampLandformAt(
-            stampDrag.ghost,
-            state.meta,
-            kind,
-            state.meta.seed,
-            stampDrag.lastCell.x,
-            stampDrag.lastCell.y,
-            stampDrag.scale,
-          )
-        }
-        announce('info', 'Smaller. Drop it on the map, or click again.')
-        requestPaint()
+        setStampCursor(clientX, clientY, Boolean(cell))
+        announce('info', 'Smaller. Same continent type. Drop it on empty sea, or click again.')
         return
       }
       flags.mask!.set(stampDrag.snapshot)
@@ -737,7 +823,15 @@ export function mountApp(root: HTMLElement): void {
     if (state.world) invalidateDerivedWorld()
     const mask = ensureMask()
     mask.set(stampDrag.snapshot)
-    stampLandformAt(mask, state.meta, kind, state.meta.seed, cell.x, cell.y, scale)
+    stampLandformAt(mask, state.meta, kind, state.meta.seed, cell.x, cell.y, scale, stampSeed)
+    lastStamp = {
+      kind,
+      seed: stampSeed,
+      scale,
+      x: cell.x,
+      y: cell.y,
+      before: new Float32Array(stampDrag.snapshot),
+    }
     bindMask(mask)
     clearStampDrag()
     announce('success', landformStampCopy(kind))
@@ -754,7 +848,7 @@ export function mountApp(root: HTMLElement): void {
       stampDrag = {
         kind,
         snapshot: new Float32Array(mask),
-        ghost: new Float32Array(mask.length),
+        stampSeed: landformStampSeed(mask, state.meta.threshold, state.meta.seed),
         scale: 1,
         originX: clientX,
         originY: clientY,
@@ -1037,7 +1131,12 @@ export function mountApp(root: HTMLElement): void {
 
   window.addEventListener('keydown', (e) => {
     const t = e.target
+    if (e.key === 'Escape' && !chrome.accountSheet.hidden) {
+      chrome.accountSheet.hidden = true
+      return
+    }
     if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return
+    if (!chrome.accountSheet.hidden) return
     if (state.stage === 'sketch') {
       if (e.key === '1') state.tool = 'draw-land'
       else if (e.key === '2') state.tool = 'erase-land'
