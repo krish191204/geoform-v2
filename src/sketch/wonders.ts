@@ -40,6 +40,8 @@ export interface Wonder {
   futures: string
   /** A real Earth place that formed the same way, at a similar latitude. */
   earthCousin: string
+  /** One local measurement for the grouped gazetteer row (height, temperature). */
+  fact: string
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +407,69 @@ const KIND_EPITHET: Readonly<Record<WonderKind, string>> = {
   'stone-forest': 'Pinnacles',
 }
 
+/** Gazetteer heading for a kind — one essay, many named places. */
+export const KIND_LABEL: Readonly<Record<WonderKind, string>> = {
+  'salt-flat': 'Salt pans',
+  'fjord-coast': 'Fjords',
+  'great-delta': 'Deltas',
+  'painted-mesa': 'Badlands',
+  'monsoon-coast': 'Monsoon coasts',
+  'glacier-field': 'Icefields',
+  'mangrove-labyrinth': 'Mangrove mazes',
+  'dune-sea': 'Sand seas',
+  'rift-gorge': 'Gorges',
+  'stone-forest': 'Stone forests',
+}
+
+/** Shared mechanism — printed once per kind, not once per twin. */
+export const KIND_MECHANISM: Readonly<Record<WonderKind, string>> = {
+  'salt-flat': 'Closed basins evaporate in place; salt remains where a river would be.',
+  'fjord-coast': 'Ice cut troughs to the sea; the drowned valleys are deep and still.',
+  'great-delta': 'A great river meets the sea and drops its load, splitting into a fan of silt.',
+  'painted-mesa': 'Dry air and rare cloudbursts carve flat beds into mesas and banded slopes.',
+  'monsoon-coast': 'Onshore winds wring a wet season against the land, then reverse and leave it parched.',
+  'glacier-field': 'Snowfall outpaces melt; crevassed ice drains the accumulation zone toward the valleys.',
+  'mangrove-labyrinth': 'Tidal channels and roots knit the mud each tide delivers, and the forest builds its own land.',
+  'dune-sea': 'Far from the sea and starved of rivers, sand here moves only with the wind.',
+  'rift-gorge': 'A river cuts down as fast as the land around it stands up.',
+  'stone-forest': 'Warm rain etches moderately broken rock into fins, sinkholes, and pinnacle thickets.',
+}
+
+export interface WonderKindGroup {
+  readonly kind: WonderKind
+  readonly label: string
+  readonly mechanism: string
+  readonly places: readonly Wonder[]
+}
+
+/** Drop the kind epithet when the group heading already names it. */
+export function shortWonderName(wonder: Wonder): string {
+  const suffix = ` ${KIND_EPITHET[wonder.kind]}`
+  return wonder.name.endsWith(suffix) ? wonder.name.slice(0, -suffix.length) : wonder.name
+}
+
+/** Cluster twins so the gazetteer does not reprint the same essay. */
+export function groupWondersByKind(wonders: readonly Wonder[]): WonderKindGroup[] {
+  const buckets = new Map<WonderKind, Wonder[]>()
+  for (const w of wonders) {
+    const list = buckets.get(w.kind)
+    if (list) list.push(w)
+    else buckets.set(w.kind, [w])
+  }
+  const groups: WonderKindGroup[] = []
+  for (const kind of KINDS) {
+    const places = buckets.get(kind)
+    if (!places?.length) continue
+    groups.push({
+      kind,
+      label: KIND_LABEL[kind],
+      mechanism: KIND_MECHANISM[kind],
+      places,
+    })
+  }
+  return groups
+}
+
 function wonderName(kind: WonderKind, x: number, y: number, seed: number): string {
   const p = PREFIX[Math.floor(hash2(x, y, seed) * PREFIX.length)]
   const s = SUFFIX[Math.floor(hash2(x + 101, y + 57, seed ^ 0x9e3779) * SUFFIX.length)]
@@ -417,6 +482,35 @@ function wonderName(kind: WonderKind, x: number, y: number, seed: number): strin
 
 function pickFuture(a: string, b: string, x: number, y: number, seed: number): string {
   return hash2(x * 3 + 1, y * 5 + 2, seed) < 0.5 ? a : b
+}
+
+/** Compact local fact for a grouped row — the essay lives in inspect. */
+function localFact(kind: WonderKind, world: World, x: number, y: number): string {
+  const i = y * world.meta.width + x
+  switch (kind) {
+    case 'salt-flat':
+      return `${Math.max(0, Math.round(basinDepth(world, x, y)))} m below rims`
+    case 'fjord-coast':
+      return `${Math.round(landRelief(world, x, y, 2))} m, ${Math.round(world.tempMean[i])}°C`
+    case 'great-delta':
+      return `flux ≈${Math.round(world.flux[i])}`
+    case 'painted-mesa':
+      return `~${Math.round(landElevStd(world, x, y, 2))} m relief`
+    case 'monsoon-coast':
+      return `swing ${Math.abs(world.summerMoist[i] - world.winterMoist[i]).toFixed(2)}`
+    case 'glacier-field':
+      return world.elev[i] > 2000
+        ? `${Math.round(world.elev[i])} m`
+        : `mean ${Math.round(world.tempMean[i])}°C`
+    case 'mangrove-labyrinth':
+      return `${shoreFeel(world.tempMean[i])} ${latBand(y, world.meta.height)} shore`
+    case 'dune-sea':
+      return `${Math.round(world.moistMean[i] * 100)}% moisture`
+    case 'rift-gorge':
+      return `${Math.round(gorgeWall(world, x, y))} m walls`
+    case 'stone-forest':
+      return `moisture ${world.moistMean[i].toFixed(2)}`
+  }
 }
 
 function describe(
@@ -782,6 +876,7 @@ export function findWonders(world: World): Wonder[] {
       blurb,
       futures,
       earthCousin: earthCousinFor(kind, y, h),
+      fact: localFact(kind, world, x, y),
     })
   }
   return wonders

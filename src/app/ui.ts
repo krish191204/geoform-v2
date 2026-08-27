@@ -10,15 +10,20 @@
  * work block. Buttons dispatch `app:*` events; the shell owns state.
  */
 
-import type { City, Layer, Tool } from '../world/types'
+import type { City, Layer, Polity, Tool, World } from '../world/types'
 import { DEFAULT_META, groupedBiomeLegend } from '../world/types'
 import {
   APP_EVENTS,
   STAGE_LABEL,
   STAGE_NUM,
   WRITER_STAGE_ORDER,
+  WORLDBUILD_ACT_LABEL,
+  WORLDBUILD_ACT_NEXT,
+  WORLDBUILD_ACT_NUM,
+  WORLDBUILD_ACT_ORDER,
   isSketchNoteTool,
   stageRailTitle,
+  type WorldbuildAct,
   type WriterStage,
   STAGES,
   type BrushChangeDetail,
@@ -38,13 +43,16 @@ import {
   type StrengthChangeDetail,
   type RenamePlaceDetail,
   type GotoCellDetail,
+  type WorldbuildActDetail,
 } from './stages'
 import { accountsConfigured } from '../auth/account'
 import type { Account } from '../auth/account'
 import { LAYER_CHIPS, SEASON_LAYERS } from './atlas'
 import { SETTLEMENT_PORT_LABEL, SETTLEMENT_RANK_LABEL, SETTLEMENT_ROLE_LABEL } from '../sketch/settlements'
-import { routeCaption, tradeKindForOverlay, TRADE_GOOD_LABEL } from '../sketch/polities'
+import { routeCaption, tradeKindForOverlay, TRADE_GOOD_LABEL, MAX_POLITIES } from '../sketch/polities'
 import { wondersFor } from './wondersCache'
+import { groupWondersByKind, shortWonderName } from '../sketch/wonders'
+import { labelLandmasses } from '../sketch/countBigComponents'
 import { LANDFORM_OPTIONS, stampLandformAt, type LandformKind } from '../sketch/landforms'
 import { hasAnyLand } from './canvas_paint'
 import { analogStillDataUri, ANALOG_STILL_CAPTION } from './analogStills'
@@ -218,6 +226,8 @@ function mountKeysSheet(): HTMLElement {
 export interface ChromeRefs {
   readonly root: HTMLElement
   readonly stageButtons: Record<WriterStage, HTMLButtonElement>
+  readonly actRail: HTMLElement
+  readonly actButtons: Record<WorldbuildAct, HTMLButtonElement>
   readonly saveBtn: HTMLButtonElement
   readonly downloadBtn: HTMLButtonElement
   readonly clearSeaBtn: HTMLButtonElement
@@ -427,7 +437,28 @@ export function mountChrome(): ChromeRefs {
     rail.append(btn)
   }
 
-  const root = el('header', { class: 'chrome' }, topnav, rail, keysSheet)
+  const actButtons = {} as ChromeRefs['actButtons']
+  const actRail = el('nav', {
+    class: 'ux-act-rail',
+    'aria-label': 'Worldbuild chapters',
+    hidden: true,
+  })
+  for (const act of WORLDBUILD_ACT_ORDER) {
+    const btn = el(
+      'button',
+      { type: 'button', class: 'ux-act-btn', 'data-act': act },
+      el('small', {}, WORLDBUILD_ACT_NUM[act]),
+      el('strong', {}, WORLDBUILD_ACT_LABEL[act]),
+    )
+    btn.addEventListener('click', () => {
+      const detail: WorldbuildActDetail = { act }
+      fire(APP_EVENTS.WORLDBUILD_ACT_CHANGE, detail)
+    })
+    actButtons[act] = btn
+    actRail.append(btn)
+  }
+
+  const root = el('header', { class: 'chrome' }, topnav, rail, actRail, keysSheet)
   if (!accountsConfigured()) unwired.hidden = false
   else unwired.hidden = true
   accountForm.hidden = !accountsConfigured()
@@ -436,6 +467,8 @@ export function mountChrome(): ChromeRefs {
   return {
     root,
     stageButtons,
+    actRail,
+    actButtons,
     saveBtn,
     downloadBtn,
     clearSeaBtn,
@@ -456,6 +489,16 @@ export function updateChrome(refs: ChromeRefs, state: ShellStateView): void {
     btn.classList.toggle('active', isActive)
     btn.disabled = !reachable
     btn.title = stageRailTitle(stage, state)
+    if (isActive) btn.setAttribute('aria-current', 'step')
+    else btn.removeAttribute('aria-current')
+  }
+  const inWorldbuild = state.stage === 'worldbuild'
+  refs.actRail.hidden = !inWorldbuild
+  refs.root.classList.toggle('is-worldbuild-chrome', inWorldbuild)
+  for (const act of WORLDBUILD_ACT_ORDER) {
+    const btn = refs.actButtons[act]
+    const isActive = inWorldbuild && state.worldbuildAct === act
+    btn.classList.toggle('active', isActive)
     if (isActive) btn.setAttribute('aria-current', 'step')
     else btn.removeAttribute('aria-current')
   }
@@ -850,12 +893,13 @@ export interface InspectorRefs {
 
 const COACH_TONES = ['coach-info', 'coach-success', 'coach-warn', 'coach-error'] as const
 const COACH_SIZE_KEY = 'geoform:coachSize:v1'
-const COACH_MIN_W = 240
-const COACH_MIN_H = 180
+export const TOOLS_SIZE_KEY = 'geoform:toolsSize:v1'
+const PANEL_MIN_W = 240
+const PANEL_MIN_H = 180
 
-function loadCoachSize(): { width: number; height: number } | null {
+function loadPanelSize(key: string): { width: number; height: number } | null {
   try {
-    const raw = localStorage.getItem(COACH_SIZE_KEY)
+    const raw = localStorage.getItem(key)
     if (!raw) return null
     const parsed = JSON.parse(raw) as { width?: unknown; height?: unknown }
     const width = typeof parsed.width === 'number' ? parsed.width : NaN
@@ -867,45 +911,53 @@ function loadCoachSize(): { width: number; height: number } | null {
   }
 }
 
-function saveCoachSize(width: number, height: number): void {
+function savePanelSize(key: string, width: number, height: number): void {
   try {
-    localStorage.setItem(COACH_SIZE_KEY, JSON.stringify({ width, height }))
+    localStorage.setItem(key, JSON.stringify({ width, height }))
   } catch {
     /* quota / private mode */
   }
 }
 
-function applyCoachSize(panel: HTMLElement, width: number, height: number): void {
-  const maxW = Math.max(COACH_MIN_W, window.innerWidth - 24)
-  const maxH = Math.max(COACH_MIN_H, window.innerHeight - 24)
-  const w = Math.min(maxW, Math.max(COACH_MIN_W, Math.round(width)))
-  const h = Math.min(maxH, Math.max(COACH_MIN_H, Math.round(height)))
+function applyPanelSize(panel: HTMLElement, width: number, height: number): void {
+  const maxW = Math.max(PANEL_MIN_W, window.innerWidth - 24)
+  const maxH = Math.max(PANEL_MIN_H, window.innerHeight - 24)
+  const w = Math.min(maxW, Math.max(PANEL_MIN_W, Math.round(width)))
+  const h = Math.min(maxH, Math.max(PANEL_MIN_H, Math.round(height)))
   panel.style.width = `${w}px`
   panel.style.height = `${h}px`
   panel.style.maxHeight = 'none'
 }
 
-/** Drag the left or bottom edge to resize; double-click an edge to reset. */
-function attachCoachResize(panel: HTMLElement): void {
-  const saved = loadCoachSize()
-  if (saved) applyCoachSize(panel, saved.width, saved.height)
+export interface PanelChromeOpts {
+  readonly dragFrom: readonly HTMLElement[]
+  readonly edge: 'left' | 'right'
+  readonly sizeKey: string
+}
 
+/** Drag the whole card off the map; resize; double-click title or edge to dock/reset. */
+export function attachPanelChrome(panel: HTMLElement, opts: PanelChromeOpts): void {
+  const saved = loadPanelSize(opts.sizeKey)
+  if (saved) applyPanelSize(panel, saved.width, saved.height)
+
+  const xClass = opts.edge === 'left' ? 'inspector-resize-x' : 'tools-resize-x'
+  const xyClass = opts.edge === 'left' ? 'inspector-resize-xy' : 'tools-resize-xy'
   const edge = el('button', {
     type: 'button',
-    class: 'inspector-resize inspector-resize-x',
-    'aria-label': 'Resize coach width',
+    class: `inspector-resize ${xClass}`,
+    'aria-label': 'Resize panel width',
     title: 'Drag to change width · double-click to reset',
   })
   const foot = el('button', {
     type: 'button',
     class: 'inspector-resize inspector-resize-y',
-    'aria-label': 'Resize coach height',
+    'aria-label': 'Resize panel height',
     title: 'Drag to change height · double-click to reset',
   })
   const corner = el('button', {
     type: 'button',
-    class: 'inspector-resize inspector-resize-xy',
-    'aria-label': 'Resize coach',
+    class: `inspector-resize ${xyClass}`,
+    'aria-label': 'Resize panel',
     title: 'Drag to change size · double-click to reset',
   })
   panel.append(edge, foot, corner)
@@ -919,13 +971,37 @@ function attachCoachResize(panel: HTMLElement): void {
   let startLeft = 0
   let grab: HTMLElement | null = null
 
-  const onDown = (which: 'x' | 'y' | 'xy') => (e: PointerEvent) => {
+  const pid = (e: MouseEvent): number =>
+    'pointerId' in e && typeof (e as PointerEvent).pointerId === 'number'
+      ? (e as PointerEvent).pointerId
+      : 1
+
+  const capture = (node: HTMLElement, e: MouseEvent): void => {
+    if (!('pointerId' in e)) return
+    try {
+      node.setPointerCapture((e as PointerEvent).pointerId)
+    } catch {
+      /* jsdom / unsupported */
+    }
+  }
+
+  const release = (node: HTMLElement, e: MouseEvent): void => {
+    if (!('pointerId' in e)) return
+    try {
+      node.releasePointerCapture((e as PointerEvent).pointerId)
+    } catch {
+      /* already released */
+    }
+  }
+
+  const onDown = (which: 'x' | 'y' | 'xy') => (e: MouseEvent) => {
     if (e.button !== 0) return
+    if (mode) return
     e.preventDefault()
     e.stopPropagation()
     const r = panel.getBoundingClientRect()
     mode = which
-    pointerId = e.pointerId
+    pointerId = pid(e)
     startX = e.clientX
     startY = e.clientY
     startW = r.width
@@ -933,50 +1009,48 @@ function attachCoachResize(panel: HTMLElement): void {
     startLeft = r.left
     grab = e.currentTarget as HTMLElement
     panel.classList.add('is-resizing')
-    try {
-      grab.setPointerCapture(e.pointerId)
-    } catch {
-      /* jsdom / unsupported */
-    }
+    capture(grab, e)
   }
 
-  const onMove = (e: PointerEvent) => {
-    if (!mode || e.pointerId !== pointerId) return
+  const onMove = (e: MouseEvent) => {
+    if (!mode || pid(e) !== pointerId) return
     const dx = e.clientX - startX
     const dy = e.clientY - startY
-    const w = mode === 'y' ? startW : startW - dx
+    const growX = opts.edge === 'left' ? -dx : dx
+    const w = mode === 'y' ? startW : startW + growX
     const h = mode === 'x' ? startH : startH + dy
-    applyCoachSize(panel, w, h)
-    if (panel.classList.contains('is-floating') && mode !== 'y') {
+    applyPanelSize(panel, w, h)
+    if (panel.classList.contains('is-floating') && mode !== 'y' && opts.edge === 'left') {
       const applied = parseFloat(panel.style.width) || w
       panel.style.left = `${startLeft + startW - applied}px`
       panel.style.right = 'auto'
     }
   }
 
-  const onUp = (e: PointerEvent) => {
-    if (!mode || e.pointerId !== pointerId) return
+  const onUp = (e: MouseEvent) => {
+    if (!mode || pid(e) !== pointerId) return
     mode = null
     pointerId = null
     panel.classList.remove('is-resizing')
-    if (grab) {
-      try {
-        grab.releasePointerCapture(e.pointerId)
-      } catch {
-        /* already released */
-      }
-    }
+    if (grab) release(grab, e)
     grab = null
     const w = parseFloat(panel.style.width)
     const h = parseFloat(panel.style.height)
-    if (Number.isFinite(w) && Number.isFinite(h)) saveCoachSize(w, h)
+    if (Number.isFinite(w) && Number.isFinite(h)) savePanelSize(opts.sizeKey, w, h)
   }
 
-  edge.addEventListener('pointerdown', onDown('x'))
-  foot.addEventListener('pointerdown', onDown('y'))
-  corner.addEventListener('pointerdown', onDown('xy'))
+  for (const [node, which] of [
+    [edge, 'x'],
+    [foot, 'y'],
+    [corner, 'xy'],
+  ] as const) {
+    node.addEventListener('pointerdown', onDown(which))
+    node.addEventListener('mousedown', onDown(which))
+  }
   window.addEventListener('pointermove', onMove)
+  window.addEventListener('mousemove', onMove)
   window.addEventListener('pointerup', onUp)
+  window.addEventListener('mouseup', onUp)
   window.addEventListener('pointercancel', onUp)
 
   const reset = (e: Event) => {
@@ -986,38 +1060,21 @@ function attachCoachResize(panel: HTMLElement): void {
     panel.style.height = ''
     panel.style.maxHeight = ''
     try {
-      localStorage.removeItem(COACH_SIZE_KEY)
+      localStorage.removeItem(opts.sizeKey)
     } catch {
       /* private mode */
     }
   }
   for (const node of [edge, foot, corner]) node.addEventListener('dblclick', reset)
-}
-
-/** Drag the Coach panel; double-click the title or grip to dock it. */
-function attachCoachDrag(coach: HTMLElement, dock: HTMLElement, panel: HTMLElement): void {
-  void dock
-  const handle = el('button', {
-    type: 'button',
-    class: 'coach-handle',
-    'aria-label': 'Drag coach',
-    title: 'Drag to move · double-click to dock',
-  })
-  coach.prepend(handle)
-  const title = panel.querySelector('h2')
-  if (title) {
-    title.classList.add('coach-title-drag')
-    title.title = 'Drag to move · double-click to dock'
-  }
 
   let floating = false
   let dragging = false
-  let pointerId: number | null = null
-  let startX = 0
-  let startY = 0
+  let dragPointer: number | null = null
+  let dragStartX = 0
+  let dragStartY = 0
   let origLeft = 0
   let origTop = 0
-  let grab: HTMLElement | null = null
+  let dragGrab: HTMLElement | null = null
 
   const clamp = (left: number, top: number) => {
     const pad = 8
@@ -1053,90 +1110,115 @@ function attachCoachDrag(coach: HTMLElement, dock: HTMLElement, panel: HTMLEleme
     floating = false
   }
 
-  const onDown = (e: PointerEvent) => {
+  const ignoreChrome = (e: Event) => {
+    const t = e.target
+    return t instanceof Element && Boolean(t.closest('.panel-collapse, .inspector-resize'))
+  }
+
+  const onDragDown = (e: MouseEvent) => {
     if (e.button !== 0) return
+    if (dragging) return
+    if (ignoreChrome(e)) return
     e.preventDefault()
     e.stopPropagation()
-    grab = e.currentTarget as HTMLElement
-    try {
-      grab.setPointerCapture(e.pointerId)
-    } catch {
-      /* jsdom / unsupported */
-    }
-    pointerId = e.pointerId
+    dragGrab = e.currentTarget as HTMLElement
+    capture(dragGrab, e)
+    dragPointer = pid(e)
     dragging = true
     const r = panel.getBoundingClientRect()
-    startX = e.clientX
-    startY = e.clientY
+    dragStartX = e.clientX
+    dragStartY = e.clientY
     origLeft = r.left
     origTop = r.top
     panel.classList.add('is-dragging')
   }
 
-  const onMove = (e: PointerEvent) => {
-    if (!dragging || e.pointerId !== pointerId) return
-    const dx = e.clientX - startX
-    const dy = e.clientY - startY
+  const onDragMove = (e: MouseEvent) => {
+    if (!dragging || pid(e) !== dragPointer) return
+    const dx = e.clientX - dragStartX
+    const dy = e.clientY - dragStartY
     if (!floating && Math.hypot(dx, dy) < 4) return
     floatAt(origLeft + dx, origTop + dy)
   }
 
-  const onUp = (e: PointerEvent) => {
-    if (!dragging || e.pointerId !== pointerId) return
+  const onDragUp = (e: MouseEvent) => {
+    if (!dragging || pid(e) !== dragPointer) return
     dragging = false
-    pointerId = null
+    dragPointer = null
     panel.classList.remove('is-dragging')
-    if (grab) {
-      try {
-        grab.releasePointerCapture(e.pointerId)
-      } catch {
-        /* already released */
-      }
-    }
-    grab = null
+    if (dragGrab) release(dragGrab, e)
+    dragGrab = null
   }
 
   const onDbl = (e: Event) => {
+    if (ignoreChrome(e)) return
     e.preventDefault()
     e.stopPropagation()
     dockBack()
   }
 
-  const grips: HTMLElement[] = [handle]
-  if (title) grips.push(title)
-  for (const node of grips) {
-    node.addEventListener('pointerdown', onDown)
-    node.addEventListener('pointermove', onMove)
-    node.addEventListener('pointerup', onUp)
-    node.addEventListener('pointercancel', onUp)
+  for (const node of opts.dragFrom) {
+    node.classList.add('coach-title-drag')
+    node.title = node.title || 'Drag to move · double-click to dock'
+    node.addEventListener('pointerdown', onDragDown)
+    node.addEventListener('mousedown', onDragDown)
+    node.addEventListener('pointermove', onDragMove)
+    node.addEventListener('pointerup', onDragUp)
+    node.addEventListener('pointercancel', onDragUp)
     node.addEventListener('dblclick', onDbl)
   }
-  window.addEventListener('pointermove', onMove)
-  window.addEventListener('pointerup', onUp)
+  window.addEventListener('pointermove', onDragMove)
+  window.addEventListener('mousemove', onDragMove)
+  window.addEventListener('pointerup', onDragUp)
+  window.addEventListener('mouseup', onDragUp)
+}
+
+export function attachPanelCollapse(panel: HTMLElement, btn: HTMLButtonElement): void {
+  const hideLabel = btn.getAttribute('aria-label') ?? 'Hide panel'
+  const showLabel = hideLabel.replace(/^Hide\b/, 'Show')
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const next = !panel.classList.contains('is-collapsed')
+    panel.classList.toggle('is-collapsed', next)
+    btn.textContent = next ? 'Show' : 'Hide'
+    btn.title = next ? 'Show panel' : 'Hide panel so the map is clear'
+    btn.setAttribute('aria-label', next ? showLabel : hideLabel)
+  })
 }
 
 export function mountInspector(): InspectorRefs {
-  const coach = el('div', {
+  const handle = el('button', {
+    type: 'button',
+    class: 'panel-handle',
+    'aria-label': 'Drag gazetteer',
+    title: 'Drag to move · double-click to dock',
+  })
+  const title = el('h2', { class: 'panel-title' }, 'Coach')
+  const collapse = el(
+    'button',
+    {
+      type: 'button',
+      class: 'panel-collapse',
+      title: 'Hide panel so the map is clear',
+      'aria-label': 'Hide gazetteer',
+    },
+    'Hide',
+  )
+  const head = el('div', { class: 'panel-head' }, handle, title, collapse)
+  const coach = el('p', {
     id: 'coach',
-    class: 'coach-card coach-info',
+    class: 'gazetteer-status coach-info',
     role: 'status',
     'aria-live': 'polite',
-  })
-  coach.append(
-    el(
-      'p',
-      { class: 'coach-empty' },
-      'Drop a continent, or paint land.',
-    ),
-  )
-  const coachDock = el('div', { class: 'coach-dock' }, coach)
+  }, 'Drop a continent, or paint land.')
   const workHost = el('div', { id: 'stageWork', class: 'stage-work' })
   const inspect = el('div', { id: 'inspect' })
   inspect.append(
     el('p', { class: 'hint' }, 'Hover the map. After Make sense, this cell is real geography.'),
   )
   const status = el('div', { class: 'status', id: 'status' }, 'Empty ocean.')
-  const inspectHead = el('h2', { class: 'inspect-head-label' }, 'Inspector')
+  const inspectHead = el('h2', { class: 'inspect-head-label' }, 'Inspect')
+  const inspectBlock = el('div', { class: 'inspect-block' }, inspectHead, inspect, status)
 
   window.addEventListener('coach:message', (ev) => {
     const detail = (ev as CustomEvent).detail as
@@ -1146,27 +1228,19 @@ export function mountInspector(): InspectorRefs {
     const text = detail?.message ?? detail?.text ?? ''
     for (const t of COACH_TONES) coach.classList.remove(t)
     coach.classList.add(`coach-${tone}`)
-    // Keep the grip; replace only the body copy.
-    const handle = coach.querySelector('.coach-handle')
-    coach.replaceChildren(handle ?? document.createDocumentFragment(), el('p', { class: 'coach-body' }, text))
+    coach.textContent = text
   })
 
-  const inspectBlock = el('div', { class: 'inspect-block' }, inspectHead, inspect, status)
-
-  const root = el(
-    'aside',
-    { class: 'panel inspector' },
-    el('h2', {}, 'Coach'),
-    coachDock,
-    workHost,
-    inspectBlock,
-  )
-  attachCoachDrag(coach, coachDock, root)
-  attachCoachResize(root)
+  const root = el('aside', { class: 'panel inspector' }, head, coach, workHost, inspectBlock)
+  attachPanelCollapse(root, collapse)
+  attachPanelChrome(root, { dragFrom: [head], edge: 'left', sizeKey: COACH_SIZE_KEY })
   return { root, coach, workHost, inspect, status }
 }
 
+
 export function updateInspector(refs: InspectorRefs, state: ShellStateView): void {
+  const title = refs.root.querySelector('.panel-title')
+  if (title) title.textContent = state.stage === 'worldbuild' ? 'Gazetteer' : 'Coach'
   const derived = showingDerivedWorld(state)
   const inspectBlock = refs.root.querySelector('.inspect-block') as HTMLElement | null
   const land = landCellCount(state.mask, state.meta.threshold)
@@ -1228,18 +1302,34 @@ const SKETCH_NOTE_TOOLS: readonly { id: Tool; label: string; glyph: string; desc
 ]
 
 const WORLDBUILD_TOOLS: readonly { id: Tool; label: string; desc: string }[] = [
-  { id: 'place-city', label: 'Place city', desc: 'Found a settlement on suitable land' },
-  { id: 'remove-city', label: 'Remove city', desc: 'Remove nearest settlement' },
+  { id: 'place-city', label: 'Place town', desc: 'Found a settlement on suitable land' },
+  { id: 'remove-city', label: 'Raze town', desc: 'Remove nearest settlement' },
   { id: 'claim-land', label: 'Paint border', desc: 'Claim land for the nearest country' },
   { id: 'trace-route', label: 'Trace route', desc: 'Click two towns. Overlay picks caravan or sea lane' },
   { id: 'cut-route', label: 'Cut route', desc: 'Remove the nearest caravan or sea lane' },
   { id: 'inspect', label: 'Inspect', desc: 'Read the cell under the cursor' },
 ]
 
+function toolsForAct(act: WorldbuildAct): readonly { id: Tool; label: string; desc: string }[] {
+  if (act === 'land') return []
+  if (act === 'kingdoms') {
+    return WORLDBUILD_TOOLS.filter((t) => t.id === 'claim-land' || t.id === 'inspect')
+  }
+  if (act === 'towns') {
+    return WORLDBUILD_TOOLS.filter(
+      (t) => t.id === 'place-city' || t.id === 'remove-city' || t.id === 'inspect',
+    )
+  }
+  return WORLDBUILD_TOOLS.filter(
+    (t) => t.id === 'trace-route' || t.id === 'cut-route' || t.id === 'inspect',
+  )
+}
+
 export interface ToolsRefs {
   readonly root: HTMLElement
   readonly stage: ShellStateView['stage']
   readonly plane?: ShellStateView['sketchPlane']
+  readonly act?: WorldbuildAct
 }
 
 export function mountStageTools(state: ShellStateView): ToolsRefs {
@@ -1251,7 +1341,11 @@ export function mountStageTools(state: ShellStateView): ToolsRefs {
     case 'make-sense':
       return { root: mountMakeSenseTools(state), stage: 'make-sense' }
     case 'worldbuild':
-      return { root: mountWorldbuildTools(state), stage: 'worldbuild' }
+      return {
+        root: mountWorldbuildTools(state),
+        stage: 'worldbuild',
+        act: state.worldbuildAct,
+      }
   }
 }
 
@@ -1518,8 +1612,10 @@ function mountMakeSenseTools(state: ShellStateView): HTMLElement {
 }
 
 function mountWorldbuildTools(state: ShellStateView): HTMLElement {
+  const act = state.worldbuildAct
+  const chapterTools = toolsForAct(act)
   const toolGrid = el('div', { class: 'tool-grid' })
-  for (const tool of WORLDBUILD_TOOLS) {
+  for (const tool of chapterTools) {
     const btn = el(
       'button',
       {
@@ -1530,10 +1626,11 @@ function mountWorldbuildTools(state: ShellStateView): HTMLElement {
           tool.id === 'claim-land' && state.viewMode === 'planet'
             ? 'Paint borders on the atlas'
             : tool.desc,
-        disabled: tool.id === 'claim-land' && state.viewMode === 'planet',
+        disabled:
+          (tool.id === 'claim-land' || tool.id === 'trace-route' || tool.id === 'cut-route') &&
+          state.viewMode === 'planet',
       },
       tool.label,
-      el('small', {}, tool.desc),
     )
     btn.addEventListener('click', () => {
       const detail: ToolChangeDetail = { tool: tool.id }
@@ -1542,61 +1639,80 @@ function mountWorldbuildTools(state: ShellStateView): HTMLElement {
     toolGrid.append(btn)
   }
 
-  const countVal = el('span', { id: 'polityCountVal' }, String(state.polityCount))
-  const countSlider = el('input', {
-    type: 'range',
-    id: 'polityCount',
-    min: 1,
-    max: 12,
-    step: 1,
-    value: state.polityCount,
-  }) as HTMLInputElement
-  countSlider.addEventListener('input', () => {
-    const detail: PolityCountDetail = { count: Number(countSlider.value) }
-    fire(APP_EVENTS.POLITY_COUNT_CHANGE, detail)
-    countVal.textContent = String(countSlider.value)
-  })
+  const kids: Node[] = [el('h2', {}, WORLDBUILD_ACT_LABEL[act])]
+  if (chapterTools.length) kids.push(toolGrid)
 
-  const overlays: readonly { id: ShellStateView['worldOverlay']; label: string; title: string }[] = [
-    { id: 'countries', label: 'Countries', title: 'Borders grown from seats of power' },
-    { id: 'caravans', label: 'Caravans', title: 'Overland travel and trade. Width is cargo volume.' },
-    { id: 'sea-lanes', label: 'Sea lanes', title: 'Port-to-port travel. Width is cargo volume.' },
-  ]
-  const overlayRow = el('div', { class: 'overlay-row', 'aria-label': 'Worldbuild overlay' })
-  for (const o of overlays) {
-    const btn = el(
-      'button',
-      {
-        type: 'button',
-        class: 'chip' + (state.worldOverlay === o.id ? ' active' : ''),
-        'data-overlay': o.id,
-        title: o.title,
-      },
-      o.label,
-    )
-    btn.addEventListener('click', () => {
-      const detail: OverlayChangeDetail = { overlay: o.id }
-      fire(APP_EVENTS.WORLD_OVERLAY_CHANGE, detail)
+  if (act === 'kingdoms') {
+    const countVal = el('span', { id: 'polityCountVal' }, String(state.polityCount))
+    const countSlider = el('input', {
+      type: 'range',
+      id: 'polityCount',
+      min: 1,
+      max: MAX_POLITIES,
+      step: 1,
+      value: state.polityCount,
+    }) as HTMLInputElement
+    countSlider.addEventListener('input', () => {
+      const detail: PolityCountDetail = { count: Number(countSlider.value) }
+      fire(APP_EVENTS.POLITY_COUNT_CHANGE, detail)
+      countVal.textContent = String(countSlider.value)
     })
-    overlayRow.append(btn)
+    kids.push(el('div', { class: 'slider-row' }, el('label', {}, 'Countries · ', countVal), countSlider))
+    kids.push(el('p', { class: 'hint' }, 'Split the land. Rename in the gazetteer.'))
+  }
+
+  if (act === 'land') {
+    kids.push(
+      el('p', { class: 'hint' }, 'Look at the plate. Layers stay on the map. Hover a cell to inspect.'),
+    )
+  }
+
+  if (act === 'towns') {
+    kids.push(el('p', { class: 'hint' }, 'Found, raze, or rename. Towns sit under their kingdom.'))
+  }
+
+  if (act === 'trade') {
+    const overlays: readonly { id: 'caravans' | 'sea-lanes'; label: string; title: string }[] = [
+      { id: 'caravans', label: 'Caravans', title: 'Overland travel. Width is cargo volume.' },
+      { id: 'sea-lanes', label: 'Sea lanes', title: 'Port-to-port travel. Width is cargo volume.' },
+    ]
+    const overlayRow = el('div', { class: 'overlay-row', 'aria-label': 'Trade overlay' })
+    const active = state.worldOverlay === 'sea-lanes' ? 'sea-lanes' : 'caravans'
+    for (const o of overlays) {
+      const btn = el(
+        'button',
+        {
+          type: 'button',
+          class: 'chip' + (active === o.id ? ' active' : ''),
+          'data-overlay': o.id,
+          title: o.title,
+        },
+        o.label,
+      )
+      btn.addEventListener('click', () => {
+        const detail: OverlayChangeDetail = { overlay: o.id }
+        fire(APP_EVENTS.WORLD_OVERLAY_CHANGE, detail)
+      })
+      overlayRow.append(btn)
+    }
+    kids.push(overlayRow)
+    kids.push(el('p', { class: 'hint' }, 'One overlay. Width is surplus and path cost, not GDP.'))
+  }
+
+  const next = WORLDBUILD_ACT_NEXT[act]
+  if (next) {
+    const nextBtn = el('button', { type: 'button', class: 'primary', 'data-act-next': next.act }, next.label)
+    nextBtn.addEventListener('click', () => {
+      const detail: WorldbuildActDetail = { act: next.act }
+      fire(APP_EVENTS.WORLDBUILD_ACT_CHANGE, detail)
+    })
+    kids.push(nextBtn)
   }
 
   const backBtn = el('button', { type: 'button' }, 'Back to Sketch')
   backBtn.addEventListener('click', () => fire(APP_EVENTS.BACK_TO_SKETCH))
-  return el(
-    'div',
-    { class: 'tools-inner' },
-    el('h2', {}, 'Worldbuild'),
-    toolGrid,
-    el('div', { class: 'slider-row' }, el('label', {}, 'Countries · ', countVal), countSlider),
-    overlayRow,
-    el(
-      'p',
-      { class: 'hint' },
-      'Drag the slider to split the land. Overlay is one message: countries, caravans, or sea lanes. Trace a route between two towns. Width is surplus and path cost, not GDP. Rename countries and towns in Coach.',
-    ),
-    backBtn,
-  )
+  kids.push(backBtn)
+  return el('div', { class: 'tools-inner' }, ...kids)
 }
 
 export function updateStageTools(refs: ToolsRefs, state: ShellStateView): void {
@@ -1672,9 +1788,6 @@ function mountMakeSenseWork(state: ShellStateView): HTMLElement {
 }
 
 function cityListBlurb(city: City, state: ShellStateView): string {
-  // Compact on purpose: the country card already carries the landscape
-  // analog, and the map carries the location — repeating them here was
-  // pure noise in a narrow column.
   const bits: string[] = []
   if (city.role) bits.push(SETTLEMENT_ROLE_LABEL[city.role])
   if (city.port && city.port !== 'none') {
@@ -1691,139 +1804,310 @@ function cityListBlurb(city: City, state: ShellStateView): string {
   return bits.join(' · ')
 }
 
-function mountWorldbuildWork(state: ShellStateView): HTMLElement {
-  const n = state.world ? state.world.cities.length : 0
-  const list = el('ul', { class: 'city-list' })
-  if (state.world) {
-    for (const p of state.world.polities) {
-      const country = el('input', {
-        type: 'text',
-        class: 'place-name',
-        value: p.name,
-        maxlength: 40,
-        'aria-label': 'Country name',
-        title: 'The state. Independent of the people who live there.',
-      }) as HTMLInputElement
-      country.addEventListener('change', () => {
-        const detail: RenamePlaceDetail = { kind: 'polity', id: p.id, name: country.value }
-        fire(APP_EVENTS.RENAME_PLACE, detail)
-      })
-      const people = el('input', {
-        type: 'text',
-        class: 'place-name place-name-people',
-        value: p.tradition,
-        maxlength: 60,
-        'aria-label': 'People name',
-        title: 'Who names this country. Landscape analog stays climate, not an ethnicity.',
-      }) as HTMLInputElement
-      people.addEventListener('change', () => {
-        const detail: RenamePlaceDetail = { kind: 'people', id: p.id, name: people.value }
-        fire(APP_EVENTS.RENAME_PLACE, detail)
-      })
-      const sells = p.exports.map((g) => TRADE_GOOD_LABEL[g]).join(', ') || 'little surplus'
-      const wants = p.imports.map((g) => TRADE_GOOD_LABEL[g]).join(', ') || 'little want'
-      list.append(
-        el(
-          'li',
-          { class: 'country-block' },
-          el('div', { class: 'place-fields' },
-            el('label', {}, 'Country', country),
-            el('label', {}, 'People', people),
-          ),
-          el(
-            'div',
-            { class: 'polity-dossier' },
-            el('span', { class: 'dossier-chip dossier-land' }, p.analog.label),
-            el('span', { class: 'dossier-chip' }, `Sells ${sells}`),
-            el('span', { class: 'dossier-chip' }, `Wants ${wants}`),
-          ),
-        ),
-      )
-    }
-    list.append(el('li', { class: 'route-head' }, 'Towns'))
-    for (const city of state.world.cities) {
-      const name = el('input', {
-        type: 'text',
-        class: 'place-name',
-        value: city.name,
-        maxlength: 40,
-        'aria-label': 'Town name',
-        title: 'Rename this town. Auto-placed towns are a first guess.',
-      }) as HTMLInputElement
-      name.addEventListener('change', () => {
-        const detail: RenamePlaceDetail = { kind: 'city', x: city.x, y: city.y, name: name.value }
-        fire(APP_EVENTS.RENAME_PLACE, detail)
-      })
-      list.append(
-        el(
-          'li',
-          {},
-          name,
-          el('span', {}, cityListBlurb(city, state)),
-        ),
-      )
-    }
+function cellKm(state: ShellStateView): number {
+  const circ = 2 * Math.PI * state.meta.planetRadiusKm
+  return circ / Math.max(1, state.meta.width)
+}
+
+function isFocus(state: ShellStateView, x: number, y: number): boolean {
+  return Boolean(state.focusCell && state.focusCell.x === x && state.focusCell.y === y)
+}
+
+function goTo(x: number, y: number): void {
+  const detail: GotoCellDetail = { x, y }
+  fire(APP_EVENTS.GOTO_CELL, detail)
+}
+
+function groupPolitiesByLandmass(world: World): { name: string; polities: Polity[] }[] {
+  const mask = world.mask
+  const width = world.meta?.width ?? 0
+  const height = world.meta?.height ?? 0
+  if (!mask || !width || mask.length !== width * height) {
+    return [{ name: 'The land', polities: [...world.polities] }]
   }
-  if (n === 0) list.append(el('li', {}, 'No cities yet — land may be too harsh to settle.'))
-  if (state.world) {
-    const wonders = wondersFor(state.world)
-    if (wonders.length > 0) {
-      list.append(el('li', { class: 'route-head' }, 'Natural wonders'))
-      for (const w of wonders) {
-        const goBtn = el(
-          'button',
-          { type: 'button', class: 'wonder-goto', title: 'Zoom the atlas to this wonder' },
-          w.name,
-        )
-        goBtn.addEventListener('click', () => {
-          const detail: GotoCellDetail = { x: w.x, y: w.y }
-          fire(APP_EVENTS.GOTO_CELL, detail)
-        })
-        list.append(
-          el(
-            'li',
-            { class: 'wonder-line' },
-            goBtn,
-            el('span', { class: 'wonder-blurb' }, `${w.blurb} ${w.futures}`),
-            el('span', { class: 'wonder-earth' }, `On Earth: ${w.earthCousin}`),
-          ),
-        )
-      }
+  const labels = labelLandmasses(mask, width, height, world.meta.threshold)
+  const groups = new Map<number, Polity[]>()
+  const unknown: Polity[] = []
+  for (const p of world.polities) {
+    const i = p.capitalY * world.meta.width + p.capitalX
+    const id = labels.id[i] ?? -1
+    if (id < 0) {
+      unknown.push(p)
+      continue
     }
+    const list = groups.get(id)
+    if (list) list.push(p)
+    else groups.set(id, [p])
   }
-  const kind = tradeKindForOverlay(state.worldOverlay)
-  if (kind && state.world) {
-    const routes = state.world.routes.filter((r) => r.kind === kind && r.path.length >= 2)
-    if (routes.length) {
-      list.append(el('li', { class: 'route-head' }, kind === 'sea' ? 'Sea lanes' : 'Caravans'))
-      const ranked = [...routes].sort((a, b) => b.volume - a.volume).slice(0, 8)
-      for (const r of ranked) {
-        list.append(el('li', { class: 'route-line' }, routeCaption(state.world, r)))
-      }
-    } else {
-      list.append(
-        el(
-          'li',
-          { class: 'route-line' },
-          kind === 'sea'
-            ? 'No sea lanes yet — Trace route between two ports, or found a coastal town.'
-            : 'No caravans yet — Trace route between two towns.',
-        ),
-      )
-    }
-  }
-  const countries = state.world?.polities.length ?? 0
-  return el(
+  const ordered = [...groups.entries()].sort((a, b) => a[0] - b[0])
+  const out = ordered.map(([id, polities]) => ({ name: labels.name[id] ?? 'Land', polities }))
+  if (unknown.length) out.push({ name: 'Unclaimed islets', polities: unknown })
+  return out
+}
+
+function countryBlock(p: Polity, state: ShellStateView): HTMLElement {
+  const country = el('input', {
+    type: 'text',
+    class: 'place-name',
+    value: p.name,
+    maxlength: 40,
+    'aria-label': 'Country name',
+    title: 'The state. Independent of the people who live there.',
+  }) as HTMLInputElement
+  country.addEventListener('change', () => {
+    const detail: RenamePlaceDetail = { kind: 'polity', id: p.id, name: country.value }
+    fire(APP_EVENTS.RENAME_PLACE, detail)
+  })
+  const people = el('input', {
+    type: 'text',
+    class: 'place-name place-name-people',
+    value: p.tradition,
+    maxlength: 60,
+    'aria-label': 'People name',
+    title: 'Who names this country. Landscape analog stays climate, not an ethnicity.',
+  }) as HTMLInputElement
+  people.addEventListener('change', () => {
+    const detail: RenamePlaceDetail = { kind: 'people', id: p.id, name: people.value }
+    fire(APP_EVENTS.RENAME_PLACE, detail)
+  })
+  const sells = p.exports.map((g) => TRADE_GOOD_LABEL[g]).join(', ') || 'little surplus'
+  const wants = p.imports.map((g) => TRADE_GOOD_LABEL[g]).join(', ') || 'little want'
+  const selected = isFocus(state, p.capitalX, p.capitalY)
+  const row = el(
     'div',
-    {},
-    el('p', { class: 'cities-count' }, `Countries: ${countries} · Towns: ${n}`),
+    { class: 'country-block' + (selected ? ' is-selected' : ''), 'data-x': p.capitalX, 'data-y': p.capitalY },
+    el('div', { class: 'place-fields' }, el('label', {}, 'Country', country), el('label', {}, 'People', people)),
+    el(
+      'div',
+      { class: 'polity-dossier' },
+      el('span', { class: 'dossier-chip dossier-land' }, p.analog.label),
+      el('span', { class: 'dossier-chip' }, `Sells ${sells}`),
+      el('span', { class: 'dossier-chip' }, `Wants ${wants}`),
+    ),
+  )
+  row.addEventListener('click', (e) => {
+    if (e.target instanceof HTMLInputElement) return
+    goTo(p.capitalX, p.capitalY)
+  })
+  return row
+}
+
+function townRow(city: City, state: ShellStateView): HTMLElement {
+  const name = el('input', {
+    type: 'text',
+    class: 'place-name',
+    value: city.name,
+    maxlength: 40,
+    'aria-label': 'Town name',
+    title: 'Rename this town. Auto-placed towns are a first guess.',
+  }) as HTMLInputElement
+  name.addEventListener('change', () => {
+    const detail: RenamePlaceDetail = { kind: 'city', x: city.x, y: city.y, name: name.value }
+    fire(APP_EVENTS.RENAME_PLACE, detail)
+  })
+  const selected = isFocus(state, city.x, city.y)
+  const row = el(
+    'li',
+    { class: 'town-row' + (selected ? ' is-selected' : ''), 'data-x': city.x, 'data-y': city.y },
+    name,
+    el('span', {}, cityListBlurb(city, state)),
+  )
+  row.addEventListener('click', (e) => {
+    if (e.target instanceof HTMLInputElement) return
+    goTo(city.x, city.y)
+  })
+  return row
+}
+
+function mountLandPage(state: ShellStateView): HTMLElement {
+  const land = landCellCount(state.mask, state.meta.threshold)
+  const total = state.meta.width * state.meta.height
+  const pct = total > 0 ? Math.round((land / total) * 100) : 0
+  const list = el('div', { class: 'gazetteer-page' })
+  list.append(
     el(
       'p',
-      { class: 'hint' },
-      'Towns are a first guess — rename, found, or remove. Country is the state. People is who names it. Landscape is climate, not an ethnicity.',
+      { class: 'cities-count' },
+      `${pct}% land · ~${Math.round(cellKm(state))} km / cell · seed ${state.meta.seed}`,
     ),
-    list,
   )
+  if (!state.world) {
+    list.append(el('p', { class: 'hint' }, 'Ground the doodle first.'))
+    return list
+  }
+  const groups = groupWondersByKind(wondersFor(state.world))
+  if (!groups.length) {
+    list.append(el('p', { class: 'hint' }, 'No standout wonders on this plate — hover a cell anyway.'))
+    return list
+  }
+  for (const group of groups) {
+    const body = el('div', { class: 'wonder-group-body' })
+    body.append(el('p', { class: 'wonder-mechanism' }, group.mechanism))
+    const places = el('ul', { class: 'wonder-places' })
+    for (const w of group.places) {
+      const goBtn = el(
+        'button',
+        { type: 'button', class: 'wonder-goto', title: `Zoom to ${w.name}` },
+        shortWonderName(w),
+      )
+      goBtn.addEventListener('click', () => goTo(w.x, w.y))
+      places.append(
+        el(
+          'li',
+          {
+            class: 'wonder-place' + (isFocus(state, w.x, w.y) ? ' is-selected' : ''),
+            'data-x': w.x,
+            'data-y': w.y,
+          },
+          goBtn,
+          el('span', { class: 'wonder-fact' }, w.fact),
+          el('span', { class: 'wonder-earth' }, w.earthCousin),
+        ),
+      )
+    }
+    body.append(places)
+    const open = group.places.some((w) => isFocus(state, w.x, w.y)) || groups.length === 1
+    const box = el(
+      'details',
+      { class: 'gazetteer-fold', open: open ? true : null },
+      el('summary', {}, `${group.label} (${group.places.length})`),
+      body,
+    )
+    list.append(box)
+  }
+  return list
+}
+
+function mountKingdomsPage(state: ShellStateView): HTMLElement {
+  const world = state.world
+  const n = world?.polities.length ?? 0
+  const page = el('div', { class: 'gazetteer-page' })
+  page.append(el('p', { class: 'cities-count' }, `${n} ${n === 1 ? 'country' : 'countries'}`))
+  if (!world || n === 0) {
+    page.append(el('p', { class: 'hint' }, 'No countries yet — land may be too harsh to settle.'))
+    return page
+  }
+  const masses = groupPolitiesByLandmass(world)
+  let opened = false
+  for (const mass of masses) {
+    const body = el('div', { class: 'landmass-body' })
+    for (const p of mass.polities) {
+      const focus = isFocus(state, p.capitalX, p.capitalY)
+      const card = el(
+        'details',
+        { class: 'gazetteer-fold gazetteer-kingdom', open: focus || (!opened && masses.length === 1) ? true : null },
+        el('summary', {}, p.name),
+        countryBlock(p, state),
+      )
+      if (focus || (!opened && masses.length === 1)) opened = true
+      body.append(card)
+    }
+    const massOpen = mass.polities.some((p) => isFocus(state, p.capitalX, p.capitalY)) || masses.length === 1
+    page.append(
+      el(
+        'details',
+        { class: 'gazetteer-fold gazetteer-landmass', open: massOpen ? true : null },
+        el('summary', {}, `${mass.name} · ${mass.polities.length}`),
+        body,
+      ),
+    )
+  }
+  return page
+}
+
+function mountTownsPage(state: ShellStateView): HTMLElement {
+  const world = state.world
+  const n = world?.cities.length ?? 0
+  const page = el('div', { class: 'gazetteer-page' })
+  page.append(el('p', { class: 'cities-count' }, `${n} ${n === 1 ? 'town' : 'towns'}`))
+  if (!world || n === 0) {
+    page.append(el('p', { class: 'hint' }, 'No towns yet — land may be too harsh to settle.'))
+    return page
+  }
+  const byPolity = new Map<number, City[]>()
+  const stray: City[] = []
+  for (const city of world.cities) {
+    const pid = city.polityId ?? -1
+    if (pid < 0) {
+      stray.push(city)
+      continue
+    }
+    const list = byPolity.get(pid)
+    if (list) list.push(city)
+    else byPolity.set(pid, [city])
+  }
+  for (const p of world.polities) {
+    const towns = byPolity.get(p.id) ?? []
+    const ul = el('ul', { class: 'city-list' })
+    for (const city of towns) ul.append(townRow(city, state))
+    const open = towns.some((c) => isFocus(state, c.x, c.y))
+    page.append(
+      el(
+        'details',
+        { class: 'gazetteer-fold', open: open ? true : null },
+        el('summary', {}, `${p.name} · ${towns.length}`),
+        ul,
+      ),
+    )
+  }
+  if (stray.length) {
+    const ul = el('ul', { class: 'city-list' })
+    for (const city of stray) ul.append(townRow(city, state))
+    page.append(el('details', { class: 'gazetteer-fold', open: true }, el('summary', {}, 'Unclaimed'), ul))
+  }
+  return page
+}
+
+function mountTradePage(state: ShellStateView): HTMLElement {
+  const page = el('div', { class: 'gazetteer-page' })
+  const overlay = state.worldOverlay === 'sea-lanes' ? 'sea-lanes' : 'caravans'
+  const kind = tradeKindForOverlay(overlay)
+  const world = state.world
+  if (!kind || !world) {
+    page.append(el('p', { class: 'hint' }, 'Open trade after towns exist.'))
+    return page
+  }
+  const routes = world.routes.filter((r) => r.kind === kind && r.path.length >= 2)
+  page.append(
+    el(
+      'p',
+      { class: 'cities-count' },
+      `${routes.length} ${kind === 'sea' ? 'sea lanes' : 'caravans'}`,
+    ),
+  )
+  const list = el('ul', { class: 'city-list' })
+  if (!routes.length) {
+    list.append(
+      el(
+        'li',
+        { class: 'route-line' },
+        kind === 'sea'
+          ? 'No sea lanes yet — Trace route between two ports, or found a coastal town.'
+          : 'No caravans yet — Trace route between two towns.',
+      ),
+    )
+  } else {
+    const ranked = [...routes].sort((a, b) => b.volume - a.volume).slice(0, 12)
+    for (const r of ranked) {
+      const mid = r.path[Math.floor(r.path.length / 2)]
+      const row = el('li', { class: 'route-line', 'data-x': mid?.x ?? 0, 'data-y': mid?.y ?? 0 }, routeCaption(world, r))
+      if (mid) {
+        row.addEventListener('click', () => goTo(mid.x, mid.y))
+        if (isFocus(state, mid.x, mid.y)) row.classList.add('is-selected')
+      }
+      list.append(row)
+    }
+  }
+  page.append(list)
+  return page
+}
+
+function mountWorldbuildWork(state: ShellStateView): HTMLElement {
+  const act = state.worldbuildAct
+  if (act === 'kingdoms') return mountKingdomsPage(state)
+  if (act === 'towns') return mountTownsPage(state)
+  if (act === 'trade') return mountTradePage(state)
+  return mountLandPage(state)
 }
 
 // ---------------------------------------------------------------------------

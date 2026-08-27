@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CellBiome, World } from '../world/types'
 import { emptyPolityState } from '../world/types'
-import { findWonders, MAX_PER_KIND, MAX_WONDERS, MIN_KIND_SPACING, earthCousinFor } from './wonders'
+import { findWonders, MAX_PER_KIND, MAX_WONDERS, MIN_KIND_SPACING, earthCousinFor, groupWondersByKind, shortWonderName } from './wonders'
 
 const W = 64
 const H = 32
@@ -217,5 +217,39 @@ describe('findWonders', () => {
     expect(fjord?.earthCousin).toBe('Geirangerfjord, Norway')
     expect(earthCousinFor('fjord-coast', 2, 32)).toBe('Geirangerfjord, Norway')
     expect(earthCousinFor('fjord-coast', 30, 32)).toBe('Milford Sound, New Zealand')
+  })
+
+  it('groups twin fjords under one mechanism', () => {
+    const twins = [
+      {
+        id: 'fjord-coast-0',
+        kind: 'fjord-coast' as const,
+        name: 'Beldale Fjords',
+        x: 1,
+        y: 2,
+        blurb: 'essay',
+        futures: 'future',
+        earthCousin: 'Geirangerfjord, Norway',
+        fact: '2098 m, -6°C',
+      },
+      {
+        id: 'fjord-coast-1',
+        kind: 'fjord-coast' as const,
+        name: 'Belfast Fjords',
+        x: 8,
+        y: 3,
+        blurb: 'essay',
+        futures: 'future',
+        earthCousin: 'Milford Sound, New Zealand',
+        fact: '1999 m, -23°C',
+      },
+    ]
+    const groups = groupWondersByKind(twins)
+    expect(groups).toHaveLength(1)
+    expect(groups[0].label).toBe('Fjords')
+    expect(groups[0].mechanism).toMatch(/ice cut troughs/i)
+    expect(groups[0].places).toHaveLength(2)
+    expect(shortWonderName(twins[0])).toBe('Beldale')
+    expect(shortWonderName(twins[1])).toBe('Belfast')
   })
 })

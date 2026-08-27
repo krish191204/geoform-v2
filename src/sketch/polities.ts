@@ -12,7 +12,9 @@ import { ensureSeatCount } from './settlements'
 import { gravityFlow } from '../science/gravity'
 
 export const MIN_POLITIES = 1
-export const MAX_POLITIES = 12
+export const MAX_POLITIES = 24
+/** Floor for the automatic country count so a continent is not a peninsula. */
+const DEFAULT_POLITY_FLOOR = 6
 
 export function clampPolityCount(n: number): number {
   if (!Number.isFinite(n)) return 4
@@ -28,7 +30,7 @@ export function defaultPolityCount(world: World): number {
     if (world.suitability[i] < 0.28) continue
     n++
   }
-  return clampPolityCount(Math.max(1, Math.round(n / 1800)))
+  return clampPolityCount(Math.max(DEFAULT_POLITY_FLOOR, Math.round(n / 900)))
 }
 
 function wrapX(x: number, w: number): number {

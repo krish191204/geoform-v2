@@ -19,6 +19,39 @@ import { hasAnyLand } from './canvas_paint'
 
 export type WriterStage = 'sketch' | 'make-sense' | 'worldbuild'
 
+/** Pages of the worldbuild atlas — one job each. */
+export type WorldbuildAct = 'land' | 'kingdoms' | 'towns' | 'trade'
+
+export const WORLDBUILD_ACT_ORDER: readonly WorldbuildAct[] = [
+  'land',
+  'kingdoms',
+  'towns',
+  'trade',
+]
+
+export const WORLDBUILD_ACT_LABEL: Readonly<Record<WorldbuildAct, string>> = {
+  land: 'Land',
+  kingdoms: 'Kingdoms',
+  towns: 'Towns',
+  trade: 'Trade',
+}
+
+export const WORLDBUILD_ACT_NUM: Readonly<Record<WorldbuildAct, string>> = {
+  land: 'I',
+  kingdoms: 'II',
+  towns: 'III',
+  trade: 'IV',
+}
+
+export const WORLDBUILD_ACT_NEXT: Readonly<
+  Record<WorldbuildAct, { readonly act: WorldbuildAct; readonly label: string } | null>
+> = {
+  land: { act: 'kingdoms', label: 'People this land' },
+  kingdoms: { act: 'towns', label: 'Found towns' },
+  towns: { act: 'trade', label: 'Open trade' },
+  trade: null,
+}
+
 export type SketchPlane = 'land' | 'notes'
 
 export type SketchNoteTool =
@@ -123,8 +156,12 @@ export interface ShellStateView extends EditorState {
   readonly score: number
   /** How many continent blobs a Full-continents stamp should drop, 1–7. */
   readonly continentCount: number
-  /** How many countries Worldbuild should grow, 1–12. */
+  /** How many countries Worldbuild should grow, 1–24. */
   readonly polityCount: number
+  /** Worldbuild atlas chapter. */
+  readonly worldbuildAct: WorldbuildAct
+  /** Last inspected cell, for gazetteer highlight. */
+  readonly focusCell: { readonly x: number; readonly y: number } | null
   /** Worldbuild ink overlay. */
   readonly worldOverlay: import('../world/types').WorldOverlay
   /** Atlas layer after Make sense. */
@@ -255,8 +292,31 @@ export function stageRailTitle(stage: WriterStage, state: ShellStateView): strin
       : 'Make sense — needs land'
   }
   return state.makeSenseComplete
-    ? 'Worldbuild — towns and trade'
+    ? 'Worldbuild — the atlas after geography'
     : 'Worldbuild — after Make sense'
+}
+
+export function overlayForWorldbuildAct(
+  act: WorldbuildAct,
+  overlay: import('../world/types').WorldOverlay,
+): import('../world/types').WorldOverlay | null {
+  if (act === 'kingdoms') return 'countries'
+  if (act === 'trade') return overlay === 'sea-lanes' ? 'sea-lanes' : 'caravans'
+  return null
+}
+
+export function defaultToolForAct(act: WorldbuildAct): Tool {
+  if (act === 'land') return 'inspect'
+  if (act === 'kingdoms') return 'claim-land'
+  if (act === 'towns') return 'place-city'
+  return 'trace-route'
+}
+
+export function actStatusLine(act: WorldbuildAct): string {
+  if (act === 'land') return 'This is the plate. Wonders are grouped by how they formed.'
+  if (act === 'kingdoms') return 'Countries on the land you drew. Nested under each continent.'
+  if (act === 'towns') return 'Towns are a first guess — rename, found, or raze.'
+  return 'One overlay: caravans or sea lanes. Width is cargo, not GDP.'
 }
 
 /** The seven Make-sense pipeline steps shown in the progress bar. */
@@ -345,6 +405,8 @@ export const APP_EVENTS = {
   SKETCH_PLANE_CHANGE: 'app:sketch-plane-change',
   /** How many countries to grow. Detail: `{ count: number }`. */
   POLITY_COUNT_CHANGE: 'app:polity-count-change',
+  /** Worldbuild chapter. Detail: `{ act: WorldbuildAct }`. */
+  WORLDBUILD_ACT_CHANGE: 'app:worldbuild-act-change',
   /** Worldbuild overlay. Detail: `{ overlay: WorldOverlay }`. */
   WORLD_OVERLAY_CHANGE: 'app:world-overlay-change',
   /** Sign in / make account. Detail: `AccountSubmitDetail`. */
@@ -442,6 +504,11 @@ export interface PolityCountDetail {
 /** Type-safe detail for `app:world-overlay-change`. */
 export interface OverlayChangeDetail {
   readonly overlay: import('../world/types').WorldOverlay
+}
+
+/** Type-safe detail for `app:worldbuild-act-change`. */
+export interface WorldbuildActDetail {
+  readonly act: WorldbuildAct
 }
 
 /** Type-safe detail for `app:toggle-inspector`. */

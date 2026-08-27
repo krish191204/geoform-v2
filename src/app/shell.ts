@@ -14,7 +14,9 @@ import {
   isSketchInkTool,
   isSketchMaskTool,
   isSketchNoteTool,
-  isWorldbuildTool,
+  overlayForWorldbuildAct,
+  defaultToolForAct,
+  actStatusLine,
   paintModeForTool,
   presetBrushForTool,
   sketchPlaneForTool,
@@ -37,6 +39,8 @@ import {
   type StrengthChangeDetail,
   type RenamePlaceDetail,
   type GotoCellDetail,
+  type WorldbuildActDetail,
+  type WorldbuildAct,
 } from './stages'
 import {
   emptyInspectHint,
@@ -55,6 +59,9 @@ import {
   updateMapShell,
   updateStageTools,
   worldInspectHtml,
+  attachPanelChrome,
+  attachPanelCollapse,
+  TOOLS_SIZE_KEY,
   type ToolsRefs,
 } from './ui'
 import { cellFromPointer, createIdleBakeScheduler, paintAtlas, paintCities, paintWorldOverlay } from './atlas'
@@ -146,6 +153,8 @@ interface ShellFlags {
   layoutMode: 'chrome' | 'view-map'
   continentCount: number
   polityCount: number
+  worldbuildAct: WorldbuildAct
+  focusCell: { x: number; y: number } | null
   worldOverlay: WorldOverlay
   canUndo: boolean
   canRedo: boolean
@@ -183,6 +192,8 @@ function makeInitialBundle(): ShellBundle {
     layoutMode: 'chrome',
     continentCount: 4,
     polityCount: 4,
+    worldbuildAct: 'land',
+    focusCell: null,
     worldOverlay: 'countries',
     canUndo: false,
     canRedo: false,
@@ -262,6 +273,32 @@ export function mountApp(root: HTMLElement): void {
   const inspector = mountInspector()
   const toolsHost = document.createElement('aside')
   toolsHost.className = 'panel tools-panel'
+  const toolsHandle = document.createElement('button')
+  toolsHandle.type = 'button'
+  toolsHandle.className = 'panel-handle'
+  toolsHandle.setAttribute('aria-label', 'Drag tools')
+  toolsHandle.title = 'Drag to move · double-click to dock'
+  const toolsTitle = document.createElement('h2')
+  toolsTitle.className = 'panel-title'
+  toolsTitle.textContent = 'Draw'
+  const toolsCollapse = document.createElement('button')
+  toolsCollapse.type = 'button'
+  toolsCollapse.className = 'panel-collapse'
+  toolsCollapse.textContent = 'Hide'
+  toolsCollapse.title = 'Hide panel so the map is clear'
+  toolsCollapse.setAttribute('aria-label', 'Hide tools')
+  const toolsHead = document.createElement('div')
+  toolsHead.className = 'panel-head'
+  toolsHead.append(toolsHandle, toolsTitle, toolsCollapse)
+  const toolsBody = document.createElement('div')
+  toolsBody.className = 'panel-body'
+  toolsHost.append(toolsHead, toolsBody)
+  attachPanelCollapse(toolsHost, toolsCollapse)
+  attachPanelChrome(toolsHost, {
+    dragFrom: [toolsHead],
+    edge: 'right',
+    sizeKey: TOOLS_SIZE_KEY,
+  })
   const layout = document.createElement('div')
   layout.className = 'layout'
   layout.append(map.root, toolsHost, inspector.root)
@@ -491,7 +528,10 @@ export function mountApp(root: HTMLElement): void {
       h: state.meta.height * sy,
     }
     if (world.cities.length > 0) paintCities(ctx, world, gridBox)
-    const overlay = state.stage === 'worldbuild' ? flags.worldOverlay : null
+    const overlay =
+      state.stage === 'worldbuild'
+        ? overlayForWorldbuildAct(flags.worldbuildAct, flags.worldOverlay)
+        : null
     if (overlay) paintWorldOverlay(ctx, world, gridBox, overlay)
     zc.style.left = `${atlasPanX + vx0 * atlasScale}px`
     zc.style.top = `${atlasPanY + vy0 * atlasScale}px`
@@ -686,10 +726,19 @@ export function mountApp(root: HTMLElement): void {
     updateMapShell(map, view)
     updateInspector(inspector, view)
     applyAtlasView()
-    const remount = opts.remount || !toolsRefs || toolsRefs.stage !== state.stage
+    const remount =
+      opts.remount ||
+      !toolsRefs ||
+      toolsRefs.stage !== state.stage ||
+      toolsRefs.act !== view.worldbuildAct
     if (remount) {
       toolsRefs = mountStageTools(view)
-      toolsHost.replaceChildren(toolsRefs.root)
+      toolsBody.replaceChildren(toolsRefs.root)
+      const innerTitle = toolsRefs.root.querySelector('h2')
+      if (innerTitle) {
+        toolsTitle.textContent = innerTitle.textContent || 'Tools'
+        innerTitle.hidden = true
+      }
       inspector.workHost.replaceChildren(mountStageWork(view))
     } else {
       updateStageTools(toolsRefs, view)
@@ -733,7 +782,10 @@ export function mountApp(root: HTMLElement): void {
       showCities: Boolean(showWorld && state.world && state.world.cities.length > 0),
       preview: (painting || hdBake.pending) && !showWorld && !stampDrag,
       sketchEpoch,
-      worldOverlay: state.stage === 'worldbuild' ? flags.worldOverlay : null,
+      worldOverlay:
+        state.stage === 'worldbuild'
+          ? overlayForWorldbuildAct(flags.worldbuildAct, flags.worldOverlay)
+          : null,
       marks: showWorld ? null : flags.marks,
     })
   }
@@ -783,6 +835,7 @@ export function mountApp(root: HTMLElement): void {
   }
 
   function inspectAt(x: number, y: number): void {
+    flags.focusCell = { x, y }
     const i = y * state.meta.width + x
     if (showingDerivedWorld(state) && state.world) {
       const cell = inspectCell(state.world, x, y)
@@ -844,7 +897,8 @@ export function mountApp(root: HTMLElement): void {
           wonder: wonderHere ? `${wonderHere.name}. ${wonderHere.blurb} ${wonderHere.futures}` : undefined,
           wonderEarth: wonderHere?.earthCousin,
           route: (() => {
-            const kind = tradeKindForOverlay(flags.worldOverlay)
+            const painted = overlayForWorldbuildAct(flags.worldbuildAct, flags.worldOverlay)
+            const kind = tradeKindForOverlay(painted ?? flags.worldOverlay)
             if (!kind || state.stage !== 'worldbuild') return undefined
             const hit = routeNearCell(state.world, x, y, kind)
             return hit ? routeDossier(state.world, hit) : undefined
@@ -860,10 +914,36 @@ export function mountApp(root: HTMLElement): void {
     updateInspector(inspector, buildView(bundle))
   }
 
+  function refreshGazetteer(): void {
+    if (state.stage !== 'worldbuild') return
+    inspector.workHost.replaceChildren(mountStageWork(buildView(bundle)))
+  }
+
+  function applyWorldbuildAct(act: WorldbuildAct): void {
+    flags.worldbuildAct = act
+    const allowed =
+      act === 'land'
+        ? new Set(['inspect'])
+        : act === 'kingdoms'
+          ? new Set(['claim-land', 'inspect'])
+          : act === 'towns'
+            ? new Set(['place-city', 'remove-city', 'inspect'])
+            : new Set(['trace-route', 'cut-route', 'inspect'])
+    if (!allowed.has(state.tool)) state.tool = defaultToolForAct(act)
+    if (act === 'land') state.tool = 'inspect'
+    if (act === 'kingdoms') {
+      flags.worldOverlay = 'countries'
+      if (state.world) ensureWorldbuild(state.world, flags.polityCount)
+    }
+    if (act === 'trade' && flags.worldOverlay === 'countries') flags.worldOverlay = 'caravans'
+    announce('info', actStatusLine(act))
+  }
+
   function applyRouteClick(x: number, y: number): boolean {
     if (state.stage !== 'worldbuild' || !state.world) return false
     if (state.tool !== 'trace-route' && state.tool !== 'cut-route') return false
-    const kind = tradeKindForOverlay(flags.worldOverlay) ?? 'land'
+    const painted = overlayForWorldbuildAct(flags.worldbuildAct, flags.worldOverlay)
+    const kind = tradeKindForOverlay(painted ?? flags.worldOverlay) ?? 'land'
     if (state.tool === 'cut-route') {
       const hit = removeRouteNearCell(state.world, x, y, kind)
       announce(
@@ -1054,6 +1134,7 @@ export function mountApp(root: HTMLElement): void {
       const hovering = !isDown && !painting
       if (state.tool === 'inspect' || hovering) {
         inspectAt(x, y)
+        if (isDown && state.stage === 'worldbuild') refreshGazetteer()
         if (state.tool === 'inspect') return
         if (hovering) return
       }
@@ -1408,9 +1489,7 @@ export function mountApp(root: HTMLElement): void {
     const from = state.stage
     STAGES[from].leave(view)
     state.stage = target
-    if (target === 'worldbuild' && !isWorldbuildTool(state.tool)) {
-      state.tool = 'place-city'
-    }
+    if (target === 'worldbuild') applyWorldbuildAct(flags.worldbuildAct || 'land')
     if (target === 'sketch' && !isSketchMaskTool(state.tool) && state.tool !== 'inspect') {
       state.tool = 'draw-land'
     }
@@ -1832,8 +1911,7 @@ export function mountApp(root: HTMLElement): void {
     if (!STAGES[state.stage].canLeave(view)) return
     STAGES[state.stage].leave(view)
     state.stage = 'worldbuild'
-    state.tool = 'place-city'
-    flags.worldOverlay = 'countries'
+    applyWorldbuildAct('land')
     if (state.world) ensureWorldbuild(state.world, flags.polityCount)
     render({ remount: true })
     STAGES[state.stage].enter(view)
@@ -1976,6 +2054,13 @@ export function mountApp(root: HTMLElement): void {
     if (toolsRefs) updateStageTools(toolsRefs, buildView(bundle))
   })
 
+  window.addEventListener(APP_EVENTS.WORLDBUILD_ACT_CHANGE, (ev) => {
+    const detail = (ev as CustomEvent).detail as WorldbuildActDetail | undefined
+    if (!detail || state.stage !== 'worldbuild') return
+    applyWorldbuildAct(detail.act)
+    render({ remount: true })
+  })
+
   window.addEventListener(APP_EVENTS.POLITY_COUNT_CHANGE, (ev) => {
     const detail = (ev as CustomEvent).detail as PolityCountDetail | undefined
     if (!detail) return
@@ -2082,6 +2167,8 @@ export function mountApp(root: HTMLElement): void {
     atlasPanX = map.canvas.offsetWidth / 2 - cx * atlasScale
     atlasPanY = map.canvas.offsetHeight / 2 - cy * atlasScale
     applyAtlasView()
+    inspectAt(detail.x, detail.y)
+    refreshGazetteer()
     requestPaint()
   })
 

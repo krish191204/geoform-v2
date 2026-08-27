@@ -49,17 +49,17 @@ function firstLand(world: ReturnType<typeof worldFromMakeSense>): { x: number; y
 }
 
 describe('polity count', () => {
-  it('clamps to 1–12', () => {
+  it('clamps to 1–24', () => {
     expect(clampPolityCount(0)).toBe(1)
-    expect(clampPolityCount(99)).toBe(12)
+    expect(clampPolityCount(99)).toBe(24)
     expect(clampPolityCount(4.4)).toBe(4)
   })
 
   it('defaults from inhabitable area, not from doodle pixels', async () => {
     const world = await groundedContinent()
     const n = defaultPolityCount(world)
-    expect(n).toBeGreaterThanOrEqual(1)
-    expect(n).toBeLessThanOrEqual(7)
+    expect(n).toBeGreaterThanOrEqual(6)
+    expect(n).toBeLessThanOrEqual(24)
   })
 })
 
@@ -267,6 +267,16 @@ describe('growPolities heap', () => {
 
   it('grows 12 countries on a 768×384 atlas without RangeError', () => {
     const world = landWorld(768, 384, 12)
+    expect(() => growPolities(world)).not.toThrow()
+    let claimed = 0
+    for (let i = 0; i < world.polityId.length; i++) {
+      if (world.polityId[i] >= 0) claimed++
+    }
+    expect(claimed).toBeGreaterThan(1000)
+  })
+
+  it('grows 24 countries on a 768×384 atlas without RangeError', () => {
+    const world = landWorld(768, 384, 24)
     expect(() => growPolities(world)).not.toThrow()
     let claimed = 0
     for (let i = 0; i < world.polityId.length; i++) {

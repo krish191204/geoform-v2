@@ -181,6 +181,53 @@ kbd {
   cursor: not-allowed;
 }
 
+.ux-act-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.3rem;
+}
+
+.ux-act-rail[hidden] {
+  display: none !important;
+}
+
+.ux-act-btn {
+  text-align: left;
+  border: 1px solid rgba(28, 34, 28, 0.1);
+  background: rgba(255, 255, 255, 0.38);
+  border-radius: 999px;
+  padding: 0.18rem 0.55rem;
+  cursor: pointer;
+  font: inherit;
+  color: var(--ink-soft);
+}
+
+.ux-act-btn small {
+  display: inline;
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-right: 0.3rem;
+  opacity: 0.7;
+}
+
+.ux-act-btn strong {
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+
+.ux-act-btn.active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+
+.ux-act-btn.active strong {
+  color: var(--paper);
+}
+
 .topbar {
   display: flex;
   align-items: flex-end;
@@ -640,6 +687,78 @@ button.primary:hover {
 .city-list .wonder-line {
   display: grid;
   gap: 0.2rem;
+}
+
+.wonder-goto {
+  justify-self: start;
+  font: inherit;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--line, rgba(28, 34, 28, 0.16));
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.4);
+  color: var(--copper, #b85a2a);
+  cursor: pointer;
+}
+
+.wonder-goto:hover {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.wonder-mechanism {
+  margin: 0.2rem 0 0.35rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+
+.wonder-places {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.wonder-place,
+.town-row,
+.route-line {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.2rem 0.25rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.wonder-place.is-selected,
+.town-row.is-selected,
+.country-block.is-selected,
+.route-line.is-selected {
+  background: rgba(74, 107, 69, 0.12);
+}
+
+.wonder-fact {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+.gazetteer-fold {
+  margin: 0 0 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.35);
+  padding: 0.2rem 0.45rem 0.35rem;
+}
+
+.gazetteer-fold > summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.25rem 0;
+}
+
+.gazetteer-page {
+  display: grid;
+  gap: 0.15rem;
 }
 
 .wonder-goto {
@@ -1483,28 +1602,25 @@ button.primary:hover {
   cursor: not-allowed;
 }
 
-/* Coach — tone-coded rule down the left edge so the eye reads the mood
-   before the words. Drag the grip to float it over the map. */
-.coach-dock {
-  margin: 0 0 0.75rem;
-  min-height: 0;
-}
-
-.coach-card {
-  margin: 0;
-  padding: 0.45rem 0.7rem 0.6rem 0.8rem;
-  border-radius: 10px;
+/* Coach — one status line. Drag the gazetteer head to float it over the map. */
+.gazetteer-status {
+  flex: 0 0 auto;
+  margin: 0 0.75rem 0.45rem;
+  padding: 0.35rem 0.55rem;
+  border-radius: 8px;
   border: 1px solid rgba(28, 34, 28, 0.1);
   border-left: 3px solid var(--sea);
   background: var(--card);
-  font-size: 0.86rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
-.coach-handle {
+.panel-handle {
   display: block;
-  width: 100%;
+  width: 1.1rem;
   height: 0.7rem;
-  margin: 0 0 0.35rem;
+  flex: 0 0 auto;
+  margin: 0;
   padding: 0;
   border: none;
   border-radius: 3px;
@@ -1516,41 +1632,16 @@ button.primary:hover {
   opacity: 0.55;
 }
 
-.coach-handle:hover,
-.coach-handle:focus-visible {
+.panel-handle:hover,
+.panel-handle:focus-visible {
   opacity: 0.9;
   outline: none;
   background-color: rgba(28, 34, 28, 0.06);
 }
 
-.coach-card.is-dragging .coach-handle {
+.inspector.is-dragging .panel-handle,
+.tools-panel.is-dragging .panel-handle {
   cursor: grabbing;
-}
-
-.coach-card.is-floating {
-  position: fixed;
-  z-index: 55;
-  width: min(17.25rem, 42vw);
-  margin: 0;
-  background-image: var(--grain), var(--card);
-  background-color: var(--card);
-  border: 1px solid rgba(28, 34, 28, 0.4);
-  box-shadow:
-    inset 0 0 0 3px rgba(241, 235, 221, 0.9),
-    inset 0 0 0 4px rgba(28, 34, 28, 0.14),
-    var(--shadow-lift);
-  pointer-events: auto;
-}
-
-.coach-card.is-dragging {
-  opacity: 0.96;
-  user-select: none;
-  touch-action: none;
-}
-
-.app.is-view-map .coach-card.is-floating {
-  opacity: 0;
-  pointer-events: none;
 }
 
 .coach-success {
@@ -1566,23 +1657,6 @@ button.primary:hover {
 .coach-error {
   border-left-color: #a33;
   background: linear-gradient(rgba(170, 51, 51, 0.1), rgba(170, 51, 51, 0.1)), var(--card);
-}
-
-.coach-card.is-floating.coach-success {
-  background-image: var(--grain), linear-gradient(rgba(74, 107, 69, 0.12), rgba(74, 107, 69, 0.12)), var(--card);
-}
-
-.coach-card.is-floating.coach-warn {
-  background-image: var(--grain), linear-gradient(rgba(184, 90, 42, 0.12), rgba(184, 90, 42, 0.12)), var(--card);
-}
-
-.coach-card.is-floating.coach-error {
-  background-image: var(--grain), linear-gradient(rgba(170, 51, 51, 0.1), rgba(170, 51, 51, 0.1)), var(--card);
-}
-
-.coach-body,
-.coach-empty {
-  margin: 0;
 }
 
 .inspect-head {
@@ -1688,6 +1762,8 @@ button.primary:hover {
   max-height: calc(100% - 6.65rem);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  padding: 0;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -1698,14 +1774,87 @@ button.primary:hover {
   text-shadow: none;
 }
 
+.chrome.is-worldbuild-chrome ~ .layout .tools-panel,
+.chrome.is-worldbuild-chrome ~ .layout .inspector {
+  top: 7.55rem;
+  max-height: calc(100% - 8.3rem);
+}
+
 .tools-panel {
   left: 0.75rem;
 }
 
 .inspector {
   right: 0.75rem;
-  width: min(17.25rem, 24vw);
+  width: min(21rem, 28vw);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+  padding: 0.55rem 0.75rem 0.35rem;
+}
+
+.panel-head .panel-title,
+.panel-head h2 {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.panel-collapse {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.panel-body,
+.stage-work {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+  padding: 0 0.75rem 0.6rem;
+}
+
+.inspect-block {
+  flex: 0 0 auto;
+  max-height: 42%;
+  overflow: auto;
+  margin: 0 0.55rem 0.55rem;
+  padding: 0.5rem 0.55rem 0.6rem;
+  border-top: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.42);
+  border-radius: 8px;
+}
+
+.tools-panel.is-collapsed,
+.inspector.is-collapsed {
+  /* Inline resize sizes would otherwise keep the card covering the map. */
+  width: auto !important;
+  height: auto !important;
+  max-height: none !important;
+  min-width: 0;
+}
+
+.tools-panel.is-collapsed:not(.is-floating) {
+  right: auto !important;
+}
+
+.inspector.is-collapsed:not(.is-floating) {
+  left: auto !important;
+}
+
+.tools-panel.is-collapsed .panel-body,
+.tools-panel.is-collapsed .inspector-resize,
+.inspector.is-collapsed .gazetteer-status,
+.inspector.is-collapsed .stage-work,
+.inspector.is-collapsed .inspect-block,
+.inspector.is-collapsed .inspector-resize {
+  display: none;
 }
 
 .inspector-resize {
@@ -1716,10 +1865,20 @@ button.primary:hover {
   border: none;
   border-radius: 0;
   background: transparent;
+  touch-action: none;
 }
 
 .inspector-resize-x {
   left: 0;
+  top: 0;
+  width: 0.55rem;
+  height: 100%;
+  cursor: ew-resize;
+}
+
+.tools-resize-x {
+  left: auto;
+  right: 0;
   top: 0;
   width: 0.55rem;
   height: 100%;
@@ -1742,29 +1901,43 @@ button.primary:hover {
   cursor: nesw-resize;
 }
 
+.tools-resize-xy {
+  left: auto;
+  right: 0;
+  bottom: 0;
+  width: 0.9rem;
+  height: 0.9rem;
+  cursor: nwse-resize;
+}
+
 .inspector-resize:hover,
 .inspector-resize:focus-visible {
   background: rgba(28, 34, 28, 0.08);
   outline: none;
 }
 
-.inspector.is-resizing {
+.inspector.is-resizing,
+.tools-panel.is-resizing {
   user-select: none;
 }
 
-.inspector.is-floating {
+.inspector.is-floating,
+.tools-panel.is-floating {
   position: fixed;
   z-index: 60;
   right: auto;
 }
 
-.inspector.is-dragging {
+.inspector.is-dragging,
+.tools-panel.is-dragging {
   user-select: none;
   cursor: grabbing;
 }
 
+.panel-head,
 .coach-title-drag {
   cursor: grab;
+  touch-action: none;
 }
 
 .tools-panel .style-chip:hover {

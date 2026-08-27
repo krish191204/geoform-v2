@@ -43,6 +43,8 @@ function view(over: Partial<ShellStateView> = {}): ShellStateView {
     layoutMode: 'chrome',
     continentCount: 4,
     polityCount: 4,
+    worldbuildAct: 'land',
+    focusCell: null,
     worldOverlay: 'countries',
     canUndo: false,
     canRedo: false,
@@ -61,6 +63,16 @@ describe('updateChrome aria-current', () => {
     expect(chrome.stageButtons.sketch.getAttribute('aria-current')).toBe('step')
     expect(chrome.stageButtons['make-sense'].hasAttribute('aria-current')).toBe(false)
     expect(chrome.stageButtons.worldbuild.hasAttribute('aria-current')).toBe(false)
+  })
+
+  it('shows the four worldbuild chapters only after Make sense', () => {
+    const chrome = mountChrome()
+    updateChrome(chrome, view({ stage: 'sketch' }))
+    expect(chrome.actRail.hidden).toBe(true)
+    updateChrome(chrome, view({ stage: 'worldbuild', makeSenseComplete: true, worldbuildAct: 'kingdoms' }))
+    expect(chrome.actRail.hidden).toBe(false)
+    expect(chrome.actButtons.kingdoms.getAttribute('aria-current')).toBe('step')
+    expect(chrome.actButtons.land.hasAttribute('aria-current')).toBe(false)
   })
 
   it('offers Download JSON after land exists, not on empty ocean', () => {
@@ -112,6 +124,39 @@ describe('inspector first-run', () => {
     expect((inspector.root.querySelector('.inspect-block') as HTMLElement).hidden).toBe(false)
   })
 
+  it('retitles Coach to Gazetteer in worldbuild and keeps a collapse control', () => {
+    const inspector = mountInspector()
+    updateInspector(inspector, view({ stage: 'sketch' }))
+    expect(inspector.root.querySelector('.panel-title')?.textContent).toBe('Coach')
+    updateInspector(
+      inspector,
+      view({
+        stage: 'worldbuild',
+        makeSenseComplete: true,
+        world: { biome: ['ocean'] } as unknown as World,
+      }),
+    )
+    expect(inspector.root.querySelector('.panel-title')?.textContent).toBe('Gazetteer')
+    expect(inspector.root.querySelector('.panel-collapse')).toBeTruthy()
+    expect(inspector.root.querySelector('.gazetteer-status')).toBeTruthy()
+  })
+
+  it('collapses the coach to a title bar so the map is clear', () => {
+    const inspector = mountInspector()
+    inspector.root.style.width = '360px'
+    inspector.root.style.height = '480px'
+    const collapse = inspector.root.querySelector('.panel-collapse') as HTMLButtonElement
+    expect(collapse.textContent).toBe('Hide')
+    collapse.click()
+    expect(inspector.root.classList.contains('is-collapsed')).toBe(true)
+    expect(collapse.textContent).toBe('Show')
+    expect(collapse.getAttribute('aria-label')).toBe('Show gazetteer')
+    collapse.click()
+    expect(inspector.root.classList.contains('is-collapsed')).toBe(false)
+    expect(collapse.textContent).toBe('Hide')
+    expect(collapse.getAttribute('aria-label')).toBe('Hide gazetteer')
+  })
+
   it('lets the coach panel float from its title and dock on double-click', () => {
     const app = document.createElement('div')
     app.className = 'app'
@@ -144,6 +189,32 @@ describe('inspector first-run', () => {
     window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 7, bubbles: true }))
     title.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
     expect(inspector.root.classList.contains('is-floating')).toBe(false)
+    app.remove()
+  })
+
+  it('lets the coach panel float from a mouse drag on the title bar', () => {
+    const app = document.createElement('div')
+    app.className = 'app'
+    document.body.append(app)
+    const inspector = mountInspector()
+    app.append(inspector.root)
+    const head = inspector.root.querySelector('.panel-head') as HTMLElement
+    inspector.root.getBoundingClientRect = () =>
+      ({
+        x: 700,
+        y: 80,
+        left: 700,
+        top: 80,
+        width: 276,
+        height: 400,
+        right: 976,
+        bottom: 480,
+        toJSON: () => ({}),
+      }) as DOMRect
+    head.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, clientY: 100, button: 0, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 180, clientY: 160, bubbles: true }))
+    expect(inspector.root.classList.contains('is-floating')).toBe(true)
+    window.dispatchEvent(new MouseEvent('mouseup', { clientX: 180, clientY: 160, bubbles: true }))
     app.remove()
   })
 
@@ -335,14 +406,22 @@ describe('stamp preview copy', () => {
 })
 
 describe('worldbuild tools', () => {
-  it('offers country count, overlays, and paint border without naming ethnic groups', () => {
-    const tools = mountStageTools(view({ stage: 'worldbuild', tool: 'place-city' }))
+  it('keeps land chapter free of country tools', () => {
+    const tools = mountStageTools(view({ stage: 'worldbuild', worldbuildAct: 'land', tool: 'inspect' }))
+    expect(tools.root.querySelector('#polityCount')).toBeNull()
+    expect(tools.root.querySelector('[data-tool="claim-land"]')).toBeNull()
+    expect(tools.root.querySelector('[data-tool="trace-route"]')).toBeNull()
+    expect(tools.root.textContent).toMatch(/People this land/)
+    expect(tools.root.textContent).not.toMatch(/\bethnicity\b|\brace\b|\btribe of\b/i)
+  })
+
+  it('offers a country slider and paint border on the kingdoms chapter', () => {
+    const tools = mountStageTools(
+      view({ stage: 'worldbuild', worldbuildAct: 'kingdoms', tool: 'claim-land', polityCount: 5 }),
+    )
     expect(tools.root.querySelector('#polityCount')).toBeTruthy()
-    expect(tools.root.querySelector('[data-overlay="countries"]')).toBeTruthy()
-    expect(tools.root.querySelector('[data-overlay="caravans"]')).toBeTruthy()
-    expect(tools.root.querySelector('[data-overlay="sea-lanes"]')).toBeTruthy()
     expect(tools.root.querySelector('[data-tool="claim-land"]')).toBeTruthy()
-    expect(tools.root.querySelector('[data-tool="trace-route"]')).toBeTruthy()
+    expect(tools.root.querySelector('[data-overlay="caravans"]')).toBeNull()
     expect(tools.root.textContent).not.toMatch(/\bethnicity\b|\brace\b|\btribe of\b/i)
   })
 })
@@ -485,11 +564,11 @@ describe('full-page atlas', () => {
 })
 
 describe('worldbuild names', () => {
-  it('exposes country and town name fields the writer can edit', () => {
+  it('exposes country and people fields on the kingdoms page', () => {
     const world = {
       cities: [
-        { x: 2, y: 2, name: 'Harbour', role: 'fishing' },
-        { x: 1, y: 1, name: 'Seat', role: 'seat_of_power' },
+        { x: 2, y: 2, name: 'Harbour', role: 'fishing', polityId: 0 },
+        { x: 1, y: 1, name: 'Seat', role: 'seat_of_power', polityId: 0 },
       ],
       polities: [
         {
@@ -506,37 +585,48 @@ describe('worldbuild names', () => {
         },
       ],
     } as unknown as World
-    const work = mountStageWork(view({ stage: 'worldbuild', world, tool: 'place-city' }))
-    const names = Array.from(work.querySelectorAll('.place-name')) as HTMLInputElement[]
-    expect(names.map((el) => el.value)).toEqual(['Northland', 'Herders', 'Harbour', 'Seat'])
-    expect(work.textContent).toMatch(/Tundra edge/)
-    expect(work.textContent).toMatch(/Country is the state/)
-    expect(work.querySelector('[aria-label="People name"]')).toBeTruthy()
-    expect(work.textContent).toMatch(/Towns are a first guess/)
+    const kingdoms = mountStageWork(
+      view({ stage: 'worldbuild', worldbuildAct: 'kingdoms', world, tool: 'claim-land' }),
+    )
+    const names = Array.from(kingdoms.querySelectorAll('.place-name')) as HTMLInputElement[]
+    expect(names.map((el) => el.value)).toEqual(['Northland', 'Herders'])
+    expect(kingdoms.textContent).toMatch(/Tundra edge/)
+    expect(kingdoms.querySelector('[aria-label="People name"]')).toBeTruthy()
+    const towns = mountStageWork(
+      view({ stage: 'worldbuild', worldbuildAct: 'towns', world, tool: 'place-city' }),
+    )
+    const townNames = Array.from(towns.querySelectorAll('.place-name')) as HTMLInputElement[]
+    expect(townNames.map((el) => el.value)).toEqual(['Harbour', 'Seat'])
   })
 })
 
 describe('worldbuild tools', () => {
-  it('offers a country slider, one overlay at a time, and paint-border', () => {
+  it('offers a country slider and paint-border on kingdoms, trade overlays on trade', () => {
     const tools = mountStageTools(
-      view({ stage: 'worldbuild', tool: 'place-city', polityCount: 5, worldOverlay: 'caravans' }),
+      view({
+        stage: 'worldbuild',
+        worldbuildAct: 'kingdoms',
+        tool: 'claim-land',
+        polityCount: 5,
+        worldOverlay: 'caravans',
+      }),
     )
     const slider = tools.root.querySelector('#polityCount') as HTMLInputElement
     expect(slider).toBeTruthy()
     expect(slider.min).toBe('1')
-    expect(slider.max).toBe('12')
+    expect(slider.max).toBe('24')
     expect(slider.value).toBe('5')
     expect(tools.root.querySelector('[data-tool="claim-land"]')).toBeTruthy()
-    expect(tools.root.querySelector('[data-tool="trace-route"]')).toBeTruthy()
-    expect(tools.root.querySelector('[data-tool="cut-route"]')).toBeTruthy()
-    const overlays = Array.from(tools.root.querySelectorAll('[data-overlay]')).map((el) =>
+    expect(tools.root.querySelector('[data-tool="trace-route"]')).toBeNull()
+    const trade = mountStageTools(
+      view({ stage: 'worldbuild', worldbuildAct: 'trade', tool: 'trace-route', worldOverlay: 'caravans' }),
+    )
+    const overlays = Array.from(trade.root.querySelectorAll('[data-overlay]')).map((el) =>
       el.getAttribute('data-overlay'),
     )
-    expect(overlays).toEqual(['countries', 'caravans', 'sea-lanes'])
-    expect(tools.root.querySelector('[data-overlay="caravans"]')?.classList.contains('active')).toBe(true)
-    expect(tools.root.querySelector('[data-overlay="countries"]')?.classList.contains('active')).toBe(false)
-    expect(tools.root.textContent).toMatch(/one message/i)
-    expect(tools.root.textContent).toMatch(/path cost/i)
+    expect(overlays).toEqual(['caravans', 'sea-lanes'])
+    expect(trade.root.querySelector('[data-overlay="caravans"]')?.classList.contains('active')).toBe(true)
+    expect(trade.root.textContent).toMatch(/one overlay/i)
   })
 })
 

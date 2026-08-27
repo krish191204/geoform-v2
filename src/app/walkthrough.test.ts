@@ -62,7 +62,7 @@ describe('Sketch → Worldbuild walkthrough', () => {
     const makeSenseBtn = root.querySelector('#makeSenseBtn') as HTMLButtonElement
     expect(makeSenseBtn).toBeTruthy()
     expect(makeSenseBtn.disabled).toBe(false)
-    expect(root.querySelector('.coach-body')?.textContent).toMatch(/doodle/i)
+    expect(root.querySelector('#coach')?.textContent).toMatch(/doodle/i)
     expect(Array.from(root.querySelectorAll('button')).some((b) => b.textContent === 'Critique')).toBe(false)
     expect(root.querySelector('[data-tool="fill-mask"]')).toBeTruthy()
     const undoBtn = root.querySelector('#undoBtn') as HTMLButtonElement
@@ -86,7 +86,7 @@ describe('Sketch → Worldbuild walkthrough', () => {
 
     const mountain = root.querySelector('[data-tool="draw-ridge"]') as HTMLButtonElement
     mountain.click()
-    expect(root.querySelector('.coach-body')?.textContent).toMatch(/mountain range/i)
+    expect(root.querySelector('#coach')?.textContent).toMatch(/mountain range/i)
     expect((root.querySelector('#mapHint') as HTMLElement).hidden).toBe(true)
     expect((root.querySelector('.inspect-block') as HTMLElement).hidden).toBe(false)
 
