@@ -217,7 +217,8 @@ describe('createIdleBakeScheduler', () => {
     expect(timers).toHaveLength(1)
     expect(fires).toBe(0)
 
-    timers[0].fn()
+    const due = timers.pop()
+    due?.fn()
     expect(fires).toBe(1)
     expect(hd.pending).toBe(false)
 
