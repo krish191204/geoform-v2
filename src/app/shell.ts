@@ -45,7 +45,7 @@ import {
   worldInspectHtml,
   type ToolsRefs,
 } from './ui'
-import { cellFromPointer, paintAtlas } from './atlas'
+import { cellFromPointer, createIdleBakeScheduler, paintAtlas } from './atlas'
 import { inspectCell } from '../render/draw'
 import { createMaskBrushes, fireCommitHook } from '../sketch/maskBrushes'
 import { landformStampCopy, stampLandformAt, clampContinentCount, isLandformKind, shrinkLandBlob, landformStampSeed, landBlobContains } from '../sketch/landforms'
@@ -214,10 +214,18 @@ export function mountApp(root: HTMLElement): void {
   } | null = null
   let dragOrigin: { x: number; y: number } | null = null
   let paintRaf = 0
+  let sketchEpoch = 0
+  let strokeNeedsHd = false
+  const hdBake = createIdleBakeScheduler()
   const DRAG_HIDE_PX = 10
+
+  function bumpSketchEpoch(): void {
+    sketchEpoch++
+  }
 
   function beginPointerStroke(clientX: number, clientY: number): void {
     painting = true
+    hdBake.cancel()
     dragOrigin = { x: clientX, y: clientY }
   }
 
@@ -344,7 +352,8 @@ export function mountApp(root: HTMLElement): void {
       season: flags.season,
       issues: state.stage === 'critique' ? state.issues : [],
       showCities: Boolean(showWorld && state.world && state.world.cities.length > 0),
-      preview: painting && !showWorld,
+      preview: (painting || hdBake.pending) && !showWorld && !stampDrag,
+      sketchEpoch,
       worldOverlay: state.stage === 'worldbuild' ? flags.worldOverlay : null,
     })
   }
@@ -353,8 +362,14 @@ export function mountApp(root: HTMLElement): void {
     if (!flags.mask) {
       flags.mask = new Float32Array(state.meta.width * state.meta.height)
       bindMask(flags.mask)
+      bumpSketchEpoch()
     }
     return flags.mask
+  }
+
+  function deferSketchHd(): void {
+    if (showingDerivedWorld(state) || stampDrag) return
+    hdBake.afterStroke(() => requestPaint())
   }
 
   function invalidateDerivedWorld(): void {
@@ -494,6 +509,8 @@ export function mountApp(root: HTMLElement): void {
         tool: state.tool,
       })
       lastPaintCell = { x, y }
+      bumpSketchEpoch()
+      strokeNeedsHd = true
       requestPaint()
     }
 
@@ -567,6 +584,8 @@ export function mountApp(root: HTMLElement): void {
           )
           if (state.world) invalidateDerivedWorld()
           bindMask(mask)
+          bumpSketchEpoch()
+          strokeNeedsHd = true
           announce('success', 'Smaller. Same continent type. Click again to shrink more.')
         } else if (
           shrinkLandBlob(
@@ -581,6 +600,8 @@ export function mountApp(root: HTMLElement): void {
           lastStamp = null
           if (state.world) invalidateDerivedWorld()
           bindMask(mask)
+          bumpSketchEpoch()
+          strokeNeedsHd = true
           announce('success', 'Smaller. Click again to shrink more.')
         }
       }
@@ -588,6 +609,10 @@ export function mountApp(root: HTMLElement): void {
         refreshWorldbuildAfterPaint(state.world)
       }
       endPointerStroke()
+      if (strokeNeedsHd) {
+        deferSketchHd()
+        strokeNeedsHd = false
+      }
       downCell = null
       strokeMoved = false
       if (lastPaintCell) inspectAt(lastPaintCell.x, lastPaintCell.y)
@@ -595,6 +620,10 @@ export function mountApp(root: HTMLElement): void {
     })
     canvas.addEventListener('pointercancel', () => {
       endPointerStroke()
+      if (strokeNeedsHd) {
+        deferSketchHd()
+        strokeNeedsHd = false
+      }
       downCell = null
       strokeMoved = false
       render()
@@ -816,6 +845,7 @@ export function mountApp(root: HTMLElement): void {
         return
       }
       flags.mask!.set(stampDrag.snapshot)
+      bumpSketchEpoch()
       clearStampDrag()
       requestPaint()
       return
@@ -833,6 +863,7 @@ export function mountApp(root: HTMLElement): void {
       before: new Float32Array(stampDrag.snapshot),
     }
     bindMask(mask)
+    bumpSketchEpoch()
     clearStampDrag()
     announce('success', landformStampCopy(kind))
     render()
@@ -844,6 +875,7 @@ export function mountApp(root: HTMLElement): void {
     if (!detail || !isLandformKind(detail.kind)) return
     const { kind, phase, clientX, clientY } = detail
     if (phase === 'start') {
+      hdBake.cancel()
       const mask = ensureMask()
       stampDrag = {
         kind,
@@ -870,6 +902,7 @@ export function mountApp(root: HTMLElement): void {
   window.addEventListener('pointercancel', () => {
     if (!stampDrag) return
     flags.mask?.set(stampDrag.snapshot)
+    bumpSketchEpoch()
     clearStampDrag()
     requestPaint()
   })
@@ -879,6 +912,8 @@ export function mountApp(root: HTMLElement): void {
     const h = state.meta.height
     flags.mask = new Float32Array(w * h)
     bindMask(flags.mask)
+    bumpSketchEpoch()
+    hdBake.cancel()
     invalidateDerivedWorld()
     state.stage = 'sketch'
     state.tool = 'draw-land'
@@ -1039,6 +1074,8 @@ export function mountApp(root: HTMLElement): void {
     if (!detail) return
     if (flags.makeSenseComplete) return
     state.meta = { ...state.meta, ...detail.meta }
+    bumpSketchEpoch()
+    hdBake.cancel()
     render()
   })
 
@@ -1097,6 +1134,7 @@ export function mountApp(root: HTMLElement): void {
     if (stampDrag) {
       e.preventDefault()
       flags.mask?.set(stampDrag.snapshot)
+      bumpSketchEpoch()
       clearStampDrag()
       requestPaint()
       return

@@ -84,17 +84,34 @@ export interface AtlasPaintOpts {
   preview?: boolean
   /** Worldbuild ink overlay. One message. */
   worldOverlay?: WorldOverlay | null
+  /**
+   * Cheap sketch invalidation. Shell bumps this on mask / meta writes.
+   * Pan/zoom is CSS and must not change it.
+   */
+  sketchEpoch?: number
+}
+
+export interface SizeCanvasOpts {
+  /**
+   * Sketch keeps a 1× backing store even in dev. A 2× retina canvas on top
+   * of the 4× paper bake is wasted work; pointer mapping uses the CSS rect.
+   */
+  sketch?: boolean
 }
 
 /**
- * Size the canvas backing store to the CSS box (device pixels).
+ * Size the canvas backing store to the CSS box.
+ * Production is always 1×. Sketch is 1× in dev too so a ~1600px map is not
+ * 2× retina × 4× bake. World in dev may still use min(2, dpr).
  * Returns the bitmap width/height written.
  */
-export function sizeCanvas(canvas: HTMLCanvasElement): { width: number; height: number } {
+export function sizeCanvas(
+  canvas: HTMLCanvasElement,
+  opts: SizeCanvasOpts = {},
+): { width: number; height: number } {
   const rect = canvas.getBoundingClientRect()
-  const dpr = import.meta.env.PROD
-    ? 1
-    : Math.min(2, typeof devicePixelRatio === 'number' ? devicePixelRatio : 1)
+  const rawDpr = typeof devicePixelRatio === 'number' ? devicePixelRatio : 1
+  const dpr = import.meta.env.PROD || opts.sketch ? 1 : Math.min(2, rawDpr)
   const width = Math.max(320, Math.floor((rect.width || 640) * dpr))
   const height = Math.max(180, Math.floor((rect.height || 320) * dpr))
   if (canvas.width !== width || canvas.height !== height) {
@@ -102,6 +119,52 @@ export function sizeCanvas(canvas: HTMLCanvasElement): { width: number; height: 
     canvas.height = height
   }
   return { width, height }
+}
+
+/** Idle delay before swapping the 1× stroke preview for the 4× paper bake. */
+export const SKETCH_HD_IDLE_MS = 100
+
+export interface IdleBakeClock {
+  setTimeout: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>
+  clearTimeout: (id: ReturnType<typeof setTimeout>) => void
+}
+
+/**
+ * After a stroke, keep showing the 1× preview until `delayMs` of idle.
+ * Cancel / reschedule when another stroke starts. Not Make-sense debounce.
+ */
+export function createIdleBakeScheduler(
+  delayMs: number = SKETCH_HD_IDLE_MS,
+  clock: IdleBakeClock = {
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (id) => clearTimeout(id),
+  },
+): {
+  readonly pending: boolean
+  cancel: () => void
+  afterStroke: (onIdle: () => void) => void
+} {
+  let handle: ReturnType<typeof setTimeout> | 0 = 0
+  let pending = false
+  return {
+    get pending() {
+      return pending
+    },
+    cancel() {
+      if (handle) clock.clearTimeout(handle)
+      handle = 0
+      pending = false
+    },
+    afterStroke(onIdle: () => void) {
+      if (handle) clock.clearTimeout(handle)
+      pending = true
+      handle = clock.setTimeout(() => {
+        handle = 0
+        pending = false
+        onIdle()
+      }, delayMs)
+    },
+  }
 }
 
 /** Map a pointer onto a grid cell, rejecting letterbox clicks. */
@@ -126,7 +189,20 @@ export function cellFromPointer(
 }
 
 const worldBakeCache = new WeakMap<World, { key: string; image: ImageData }>()
+let sketchBakeCache: { key: string; image: ImageData } | null = null
+let sketchBakeCount = 0
 let blitCanvas: HTMLCanvasElement | null = null
+
+/** Test hook: how many sketch rasters were actually baked. */
+export function atlasSketchBakeCount(): number {
+  return sketchBakeCount
+}
+
+/** Test hook: drop the sketch raster cache. */
+export function resetAtlasSketchBakeCache(): void {
+  sketchBakeCache = null
+  sketchBakeCount = 0
+}
 
 function blitScratch(width: number, height: number): CanvasRenderingContext2D | null {
   if (!blitCanvas) blitCanvas = document.createElement('canvas')
@@ -155,11 +231,44 @@ function cachedWorldBake(
   return image
 }
 
+function sketchBakeKey(
+  opts: AtlasPaintOpts,
+  bakeW: number,
+  bakeH: number,
+): string {
+  const { meta } = opts
+  const preview = opts.preview === true ? 1 : 0
+  const epoch = opts.sketchEpoch ?? 0
+  return `${epoch}|${meta.seed}|${meta.threshold}|${bakeW}x${bakeH}|${preview}`
+}
+
+function cachedSketchBake(
+  opts: AtlasPaintOpts,
+  bakeW: number,
+  bakeH: number,
+): ImageData {
+  const key = sketchBakeKey(opts, bakeW, bakeH)
+  if (sketchBakeCache && sketchBakeCache.key === key) return sketchBakeCache.image
+  const { meta } = opts
+  const image = bakeSketchMaskImageData(
+    opts.mask,
+    meta.width,
+    meta.height,
+    meta.threshold,
+    bakeW,
+    bakeH,
+    meta.seed,
+  )
+  sketchBakeCount++
+  sketchBakeCache = { key, image }
+  return image
+}
+
 /** Paint the atlas into `canvas`. World wins over mask. */
 export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): void {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  const { width: cw, height: ch } = sizeCanvas(canvas)
+  const { width: cw, height: ch } = sizeCanvas(canvas, { sketch: !opts.world })
   ctx.fillStyle = SEA_FILL
   ctx.fillRect(0, 0, cw, ch)
 
@@ -174,15 +283,7 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
 
   const image = opts.world
     ? cachedWorldBake(opts.world, opts.season, opts.layer, bakeW)
-    : bakeSketchMaskImageData(
-        opts.mask,
-        meta.width,
-        meta.height,
-        meta.threshold,
-        bakeW,
-        bakeH,
-        meta.seed,
-      )
+    : cachedSketchBake(opts, bakeW, bakeH)
 
   const tctx = blitScratch(image.width, image.height)
   if (!tctx) return
