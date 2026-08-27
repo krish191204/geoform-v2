@@ -59,10 +59,26 @@ describe('renderCoach writer copy', () => {
       landCells: 0,
     })
     expect(isCoachSilent('sketch.ready')).toBe(false)
-    expect(copy.message).toBe(
-      'Empty ocean. Drag a picture onto the map, or paint land.',
-    )
+    expect(copy.message).toBe('Drop a continent, or paint land.')
     expect(copy.message).not.toMatch(/512|256|0 land/)
+  })
+
+  it('notices land without listing tools', () => {
+    const copy = renderCoach({ kind: 'sketch.hasLand' })
+    expect(isCoachSilent('sketch.hasLand')).toBe(false)
+    expect(copy.message).toMatch(/doodle/i)
+    expect(copy.message).toMatch(/Make sense/)
+    expect(copy.message).not.toMatch(/Range|River|Fill/)
+  })
+
+  it('decorate tools tell the writer the ticks are notes', () => {
+    const copy = renderCoach({ kind: 'sketch.decorate', tool: 'draw-ridge' })
+    expect(isCoachSilent('sketch.decorate')).toBe(false)
+    expect(copy.message).toMatch(/mountain range/i)
+    expect(copy.message).toMatch(/note/)
+    expect(copy.message).not.toContain('Ridge')
+    expect(copy.message).not.toContain('Channel')
+    expect(renderCoach({ kind: 'sketch.decorate', tool: 'erase-channel' }).message).toMatch(/Paint a river/)
   })
 
   it('critique names a letter grade, not a percentage', () => {
@@ -89,7 +105,7 @@ describe('renderCoach writer copy', () => {
       riversCount: 400,
       rangeAvgC: 18.4,
     })
-    expect(copy.message).toBe('A — Geographically accurate. Atlas grounded. Switch layers.')
+    expect(copy.message).toBe('Same land, grounded. Switch layers. Hover a cell.')
     for (const snip of ['98', '3.21', '400', '18.4']) {
       expect(copy.message).not.toContain(snip)
     }
@@ -98,6 +114,8 @@ describe('renderCoach writer copy', () => {
   it('writer-facing kinds never contain debug snippets', () => {
     const events: CoachEvent[] = [
       { kind: 'sketch.ready', width: 512, height: 256, landCells: 0 },
+      { kind: 'sketch.hasLand' },
+      { kind: 'sketch.decorate', tool: 'draw-ridge' },
       {
         kind: 'sketch.commit',
         metaSeed: 1,

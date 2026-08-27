@@ -117,3 +117,124 @@ export function analyseComponents(
   }
   return { bigComponents, areas: reversed }
 }
+
+/**
+ * Per-cell landmass ids for the gazetteer. Sketch-layer blob walk — not a
+ * new political engine. 0 is the largest blob; ocean is -1.
+ */
+export interface LandmassLabels {
+  readonly id: Int32Array
+  readonly area: number[]
+  readonly name: string[]
+}
+
+function uniqueLabel(base: string, used: Set<string>): string {
+  if (!used.has(base)) {
+    used.add(base)
+    return base
+  }
+  let n = 2
+  while (used.has(`${base} ${n}`)) n++
+  const name = `${base} ${n}`
+  used.add(name)
+  return name
+}
+
+function landmassTitle(
+  area: number,
+  biggest: number,
+  cx: number,
+  cy: number,
+  width: number,
+  height: number,
+): string {
+  const lat = cy / Math.max(1, height)
+  const lon = cx / Math.max(1, width)
+  const ns = lat < 0.38 ? 'Northern' : lat > 0.62 ? 'Southern' : ''
+  const ew = lon < 0.38 ? 'western' : lon > 0.62 ? 'eastern' : ''
+  const bearing = [ns, ew].filter(Boolean).join(' ').trim()
+  if (area >= Math.max(80, biggest * 0.4)) {
+    if (!bearing) return 'The continent'
+    const head = bearing.charAt(0).toUpperCase() + bearing.slice(1)
+    return `${head} continent`
+  }
+  if (area < 48) {
+    return bearing ? `${bearing.charAt(0).toUpperCase()}${bearing.slice(1)} islet` : 'Islet'
+  }
+  return bearing ? `${bearing.charAt(0).toUpperCase()}${bearing.slice(1)} island` : 'The island'
+}
+
+/** Label every land blob so kingdoms can nest under the continents you drew. */
+export function labelLandmasses(
+  mask: Float32Array,
+  width: number,
+  height: number,
+  threshold: number,
+): LandmassLabels {
+  const n = width * height
+  const id = new Int32Array(n).fill(-1)
+  if (width <= 0 || height <= 0 || mask.length !== n) {
+    return { id, area: [], name: [] }
+  }
+
+  const visited = new Uint8Array(n)
+  const queue = new Int32Array(n)
+  const raw: { cells: number[]; area: number; sx: number; sy: number }[] = []
+
+  for (let y = 0; y < height; y++) {
+    const rowBase = y * width
+    for (let x = 0; x < width; x++) {
+      const seed = rowBase + x
+      if (visited[seed] !== 0) continue
+      if (mask[seed] < threshold) {
+        visited[seed] = 1
+        continue
+      }
+      let head = 0
+      let tail = 0
+      queue[tail++] = seed
+      visited[seed] = 1
+      const cells: number[] = []
+      let sx = 0
+      let sy = 0
+      while (head < tail) {
+        const i = queue[head++]
+        cells.push(i)
+        const cx = i % width
+        const cy = (i - cx) / width
+        sx += cx
+        sy += cy
+        const neighbours = [
+          [cx === 0 ? width - 1 : cx - 1, cy],
+          [cx === width - 1 ? 0 : cx + 1, cy],
+          [cx, cy - 1],
+          [cx, cy + 1],
+        ] as const
+        for (const [nx, ny] of neighbours) {
+          if (ny < 0 || ny >= height) continue
+          const j = ny * width + nx
+          if (visited[j] !== 0) continue
+          if (mask[j] < threshold) continue
+          visited[j] = 1
+          queue[tail++] = j
+        }
+      }
+      raw.push({ cells, area: cells.length, sx, sy })
+    }
+  }
+
+  raw.sort((a, b) => b.area - a.area)
+  const area: number[] = []
+  const name: string[] = []
+  const used = new Set<string>()
+  const biggest = raw[0]?.area ?? 0
+  for (let k = 0; k < raw.length; k++) {
+    const blob = raw[k]
+    area.push(blob.area)
+    const cx = blob.sx / blob.area
+    const cy = blob.sy / blob.area
+    name.push(uniqueLabel(landmassTitle(blob.area, biggest, cx, cy, width, height), used))
+    for (const i of blob.cells) id[i] = k
+  }
+  return { id, area, name }
+}

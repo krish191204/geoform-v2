@@ -1,11 +1,10 @@
 // @vitest-environment happy-dom
 /**
- * Sketch → Critique → Make sense → Worldbuild walkthrough.
+ * Sketch → Make sense → Worldbuild walkthrough.
  *
  * Equivalent of the Playwright product path: paint a blob, the empty-ocean
- * hint goes away, Critique refuses to flatter the doodle, Make sense
- * grounds climate / plates / mixed towns. Runs in Vitest so CI does not
- * need a browser install.
+ * hint goes away, Make sense is the primary, then the factory grounds climate /
+ * plates / mixed towns. Runs in Vitest so CI does not need a browser install.
  */
 import { describe, expect, it } from 'vitest'
 import { mountApp } from './shell'
@@ -42,13 +41,14 @@ function pointer(target: EventTarget, type: string, clientX: number, clientY: nu
 }
 
 describe('Sketch → Worldbuild walkthrough', () => {
-  it('hides the empty-ocean hint after paint and Critique scores the doodle ≤ 40', () => {
+  it('hides the empty-ocean hint after paint and enables Make sense', () => {
     const root = document.createElement('div')
     document.body.append(root)
     mountApp(root)
 
     const hint = root.querySelector('#mapHint') as HTMLElement
     expect(hint.hidden).toBe(false)
+    expect(root.querySelector('[data-stage="critique"]')).toBeNull()
 
     const canvas = root.querySelector('#map') as HTMLCanvasElement
     stubAtlasRect(canvas)
@@ -59,15 +59,40 @@ describe('Sketch → Worldbuild walkthrough', () => {
 
     expect(hint.hidden).toBe(true)
 
-    const critiqueBtn = Array.from(root.querySelectorAll('button')).find((b) => b.textContent === 'Critique')
-    expect(critiqueBtn).toBeTruthy()
-    expect(critiqueBtn!.disabled).toBe(false)
-    critiqueBtn!.click()
+    const makeSenseBtn = root.querySelector('#makeSenseBtn') as HTMLButtonElement
+    expect(makeSenseBtn).toBeTruthy()
+    expect(makeSenseBtn.disabled).toBe(false)
+    expect(root.querySelector('#coach')?.textContent).toMatch(/doodle/i)
+    expect(Array.from(root.querySelectorAll('button')).some((b) => b.textContent === 'Critique')).toBe(false)
+    expect(root.querySelector('[data-tool="fill-mask"]')).toBeTruthy()
+    const undoBtn = root.querySelector('#undoBtn') as HTMLButtonElement
+    expect(undoBtn).toBeTruthy()
+    expect(undoBtn.disabled).toBe(false)
 
-    const scoreText = root.querySelector('.score')?.textContent ?? ''
-    expect(scoreText).toMatch(/^[DF]$/)
-    expect(root.querySelector('.score-caption')?.textContent).toMatch(/accurate|renderable/i)
-    expect(hint.hidden).toBe(true)
+    root.remove()
+  })
+
+  it('stamps a mountain note on click and coaches the decorate tool', () => {
+    const root = document.createElement('div')
+    document.body.append(root)
+    mountApp(root)
+
+    const canvas = root.querySelector('#map') as HTMLCanvasElement
+    stubAtlasRect(canvas)
+    pointer(canvas, 'pointerdown', 320, 160)
+    pointer(canvas, 'pointermove', 340, 150)
+    pointer(canvas, 'pointermove', 300, 170)
+    pointer(canvas, 'pointerup', 300, 170)
+
+    const mountain = root.querySelector('[data-tool="draw-ridge"]') as HTMLButtonElement
+    mountain.click()
+    expect(root.querySelector('#coach')?.textContent).toMatch(/mountain range/i)
+    expect((root.querySelector('#mapHint') as HTMLElement).hidden).toBe(true)
+    expect((root.querySelector('.inspect-block') as HTMLElement).hidden).toBe(false)
+
+    pointer(canvas, 'pointerdown', 320, 160)
+    pointer(canvas, 'pointerup', 320, 160)
+    expect(root.querySelector('#inspect')?.textContent).toMatch(/Mountain note/)
 
     root.remove()
   })
@@ -84,13 +109,13 @@ describe('Sketch → Worldbuild walkthrough', () => {
     stubAtlasRect(canvas)
     const chip = root.querySelector('[data-landform="continents"]') as HTMLButtonElement
     expect(chip).toBeTruthy()
-    pointer(chip, 'pointerdown', 320, 160)
+    pointer(chip, 'pointerdown', 40, 200)
     pointer(chip, 'pointermove', 320, 160)
     pointer(chip, 'pointerup', 320, 160)
 
     expect(hint.hidden).toBe(true)
-    const critiqueBtn = Array.from(root.querySelectorAll('button')).find((b) => b.textContent === 'Critique')
-    expect(critiqueBtn?.disabled).toBe(false)
+    const makeSenseBtn = root.querySelector('#makeSenseBtn') as HTMLButtonElement
+    expect(makeSenseBtn?.disabled).toBe(false)
 
     root.remove()
   })

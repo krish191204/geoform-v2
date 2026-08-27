@@ -13,18 +13,27 @@ import {
   type Season,
 } from '../render/draw'
 import { drawIssueOverlays } from '../critique/preview'
+import { buildSketchNoteFields } from '../sketch/sketchMarks'
+import { TRADE_GOOD_LABEL } from '../sketch/analogs'
 
 export type { Season }
 
-export const LAYER_CHIPS: readonly { id: Layer; label: string; title: string }[] = [
-  { id: 'relief', label: 'Relief', title: 'Landform, hillshade, and rivers' },
-  { id: 'biome', label: 'Biome', title: 'Climate class, grouped' },
-  { id: 'moisture', label: 'Moisture', title: 'Precipitation, 0–1' },
-  { id: 'temperature', label: 'Temperature', title: 'Mean temperature, °C' },
-  { id: 'suitability', label: 'Settle', title: 'Where people can live' },
-  { id: 'plates', label: 'Plates', title: 'Tectonic plates' },
-  { id: 'elevation', label: 'Height', title: 'Elevation in metres' },
+export const LAYER_CHIPS: readonly { id: Layer; label: string; title: string; caption: string }[] = [
+  { id: 'relief', label: 'Relief', title: 'Landform, hillshade, and rivers', caption: 'Hillshade and rivers on the grounded land.' },
+  { id: 'biome', label: 'Biome', title: 'Climate class, grouped', caption: 'Climate class, grouped. Ocean is not a land class.' },
+  { id: 'moisture', label: 'Moisture', title: 'Precipitation, 0–1', caption: '0 dry, 1 wet — not millimetres of rain.' },
+  { id: 'temperature', label: 'Temperature', title: 'Mean temperature, °C', caption: 'Air temperature in Celsius.' },
+  { id: 'suitability', label: 'Settle', title: 'Where people can live', caption: 'How livable the cell is for towns, 0–1.' },
+  { id: 'plates', label: 'Plates', title: 'Tectonic plates', caption: 'Crust pieces. Colour is an id, not height.' },
+  { id: 'elevation', label: 'Height', title: 'Elevation in metres', caption: 'Elevation in metres above the reference surface.' },
 ]
+
+export const SEASON_LAYERS: ReadonlySet<Layer> = new Set([
+  'relief',
+  'biome',
+  'moisture',
+  'temperature',
+])
 
 const SEA_FILL = '#163a44'
 
@@ -82,21 +91,43 @@ export interface AtlasPaintOpts {
   showCities?: boolean
   /** Stroke preview: native grid scale, no 4× oversample. */
   preview?: boolean
-  /** Ghost stamp the writer is dragging; not committed land. */
-  ghostMask?: Float32Array | null
   /** Worldbuild ink overlay. One message. */
   worldOverlay?: WorldOverlay | null
+  /**
+   * Cheap sketch invalidation. Shell bumps this on mask / meta writes.
+   * Pan/zoom is CSS and must not change it.
+   */
+  sketchEpoch?: number
+  /** Sketch decorate notes. Doodle only — never on a grounded atlas. */
+  marks?: Uint8Array | null
+}
+
+export interface SizeCanvasOpts {
+  /**
+   * Sketch keeps a 1× backing store even in dev. A 2× retina canvas on top
+   * of the 4× paper bake is wasted work; pointer mapping uses the CSS rect.
+   */
+  sketch?: boolean
+}
+
+/** Doodle ticks stay on Sketch. After Make sense the relief is the map. */
+export function paintSketchNotesOnAtlas(world: World | null | undefined): boolean {
+  return world == null
 }
 
 /**
- * Size the canvas backing store to the CSS box (device pixels).
+ * Size the canvas backing store to the CSS box.
+ * Production is always 1×. Sketch is 1× in dev too so a ~1600px map is not
+ * 2× retina × 4× bake. World in dev may still use min(2, dpr).
  * Returns the bitmap width/height written.
  */
-export function sizeCanvas(canvas: HTMLCanvasElement): { width: number; height: number } {
+export function sizeCanvas(
+  canvas: HTMLCanvasElement,
+  opts: SizeCanvasOpts = {},
+): { width: number; height: number } {
   const rect = canvas.getBoundingClientRect()
-  const dpr = import.meta.env.PROD
-    ? 1
-    : Math.min(2, typeof devicePixelRatio === 'number' ? devicePixelRatio : 1)
+  const rawDpr = typeof devicePixelRatio === 'number' ? devicePixelRatio : 1
+  const dpr = import.meta.env.PROD || opts.sketch ? 1 : Math.min(2, rawDpr)
   const width = Math.max(320, Math.floor((rect.width || 640) * dpr))
   const height = Math.max(180, Math.floor((rect.height || 320) * dpr))
   if (canvas.width !== width || canvas.height !== height) {
@@ -106,13 +137,60 @@ export function sizeCanvas(canvas: HTMLCanvasElement): { width: number; height: 
   return { width, height }
 }
 
-/** Map a pointer onto a grid cell, rejecting letterbox clicks. */
+/** Idle delay before swapping the 1× stroke preview for the 4× paper bake. */
+export const SKETCH_HD_IDLE_MS = 100
+
+export interface IdleBakeClock {
+  setTimeout: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>
+  clearTimeout: (id: ReturnType<typeof setTimeout>) => void
+}
+
+/**
+ * After a stroke, keep showing the 1× preview until `delayMs` of idle.
+ * Cancel / reschedule when another stroke starts. Not Make-sense debounce.
+ */
+export function createIdleBakeScheduler(
+  delayMs: number = SKETCH_HD_IDLE_MS,
+  clock: IdleBakeClock = {
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (id) => clearTimeout(id),
+  },
+): {
+  readonly pending: boolean
+  cancel: () => void
+  afterStroke: (onIdle: () => void) => void
+} {
+  let handle: ReturnType<typeof setTimeout> | 0 = 0
+  let pending = false
+  return {
+    get pending() {
+      return pending
+    },
+    cancel() {
+      if (handle) clock.clearTimeout(handle)
+      handle = 0
+      pending = false
+    },
+    afterStroke(onIdle: () => void) {
+      if (handle) clock.clearTimeout(handle)
+      pending = true
+      handle = clock.setTimeout(() => {
+        handle = 0
+        pending = false
+        onIdle()
+      }, delayMs)
+    },
+  }
+}
+
+/** Map a pointer onto a grid cell, rejecting letterbox clicks unless `clamp`. */
 export function cellFromPointer(
   canvas: HTMLCanvasElement,
   clientX: number,
   clientY: number,
   gridW: number,
   gridH: number,
+  clamp = false,
 ): { x: number; y: number } | null {
   const hit = clientToContainedBitmap(
     clientX,
@@ -120,6 +198,7 @@ export function cellFromPointer(
     canvas.getBoundingClientRect(),
     gridW,
     gridH,
+    clamp,
   )
   if (!hit) return null
   const x = Math.min(gridW - 1, Math.max(0, Math.floor(hit.nx * gridW)))
@@ -128,7 +207,20 @@ export function cellFromPointer(
 }
 
 const worldBakeCache = new WeakMap<World, { key: string; image: ImageData }>()
+let sketchBakeCache: { key: string; image: ImageData } | null = null
+let sketchBakeCount = 0
 let blitCanvas: HTMLCanvasElement | null = null
+
+/** Test hook: how many sketch rasters were actually baked. */
+export function atlasSketchBakeCount(): number {
+  return sketchBakeCount
+}
+
+/** Test hook: drop the sketch raster cache. */
+export function resetAtlasSketchBakeCache(): void {
+  sketchBakeCache = null
+  sketchBakeCount = 0
+}
 
 function blitScratch(width: number, height: number): CanvasRenderingContext2D | null {
   if (!blitCanvas) blitCanvas = document.createElement('canvas')
@@ -145,7 +237,7 @@ function cachedWorldBake(
   layer: Layer,
   bakeW: number,
 ): ImageData {
-  const showRivers = layer === 'relief' || layer === 'biome'
+  const showRivers = layer === 'relief'
   const key = `${season}|${layer}|${bakeW}|${showRivers ? 1 : 0}`
   const hit = worldBakeCache.get(world)
   if (hit && hit.key === key) return hit.image
@@ -157,11 +249,49 @@ function cachedWorldBake(
   return image
 }
 
+function sketchBakeKey(
+  opts: AtlasPaintOpts,
+  bakeW: number,
+  bakeH: number,
+): string {
+  const { meta } = opts
+  const preview = opts.preview === true ? 1 : 0
+  const epoch = opts.sketchEpoch ?? 0
+  return `${epoch}|${meta.seed}|${meta.threshold}|${bakeW}x${bakeH}|${preview}`
+}
+
+function cachedSketchBake(
+  opts: AtlasPaintOpts,
+  bakeW: number,
+  bakeH: number,
+): ImageData {
+  const key = sketchBakeKey(opts, bakeW, bakeH)
+  if (sketchBakeCache && sketchBakeCache.key === key) return sketchBakeCache.image
+  const { meta } = opts
+  const notes =
+    paintSketchNotesOnAtlas(opts.world) && opts.marks
+      ? buildSketchNoteFields(opts.marks, meta.width, meta.height)
+      : null
+  const image = bakeSketchMaskImageData(
+    opts.mask,
+    meta.width,
+    meta.height,
+    meta.threshold,
+    bakeW,
+    bakeH,
+    meta.seed,
+    notes,
+  )
+  sketchBakeCount++
+  sketchBakeCache = { key, image }
+  return image
+}
+
 /** Paint the atlas into `canvas`. World wins over mask. */
 export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): void {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  const { width: cw, height: ch } = sizeCanvas(canvas)
+  const { width: cw, height: ch } = sizeCanvas(canvas, { sketch: !opts.world })
   ctx.fillStyle = SEA_FILL
   ctx.fillRect(0, 0, cw, ch)
 
@@ -176,15 +306,7 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
 
   const image = opts.world
     ? cachedWorldBake(opts.world, opts.season, opts.layer, bakeW)
-    : bakeSketchMaskImageData(
-        opts.mask,
-        meta.width,
-        meta.height,
-        meta.threshold,
-        bakeW,
-        bakeH,
-        meta.seed,
-      )
+    : cachedSketchBake(opts, bakeW, bakeH)
 
   const tctx = blitScratch(image.width, image.height)
   if (!tctx) return
@@ -192,10 +314,6 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = opts.preview ? 'low' : 'high'
   ctx.drawImage(tctx.canvas, box.x, box.y, box.w, box.h)
-
-  if (opts.ghostMask && !opts.world) {
-    paintGhostStamp(ctx, opts.ghostMask, opts.mask, meta, box)
-  }
 
   if (opts.issues && opts.issues.length > 0) {
     ctx.save()
@@ -237,38 +355,8 @@ function letterbox(cw: number, ch: number, aspect: number): BlitBox {
   }
 }
 
-function paintGhostStamp(
-  ctx: CanvasRenderingContext2D,
-  ghost: Float32Array,
-  committed: Float32Array | null,
-  meta: WorldMeta,
-  box: BlitBox,
-): void {
-  const w = meta.width
-  const h = meta.height
-  const n = w * h
-  if (ghost.length !== n) return
-  const cellW = box.w / w
-  const cellH = box.h / h
-  ctx.save()
-  ctx.globalAlpha = 0.72
-  ctx.fillStyle = 'rgba(186, 210, 140, 0.82)'
-  ctx.strokeStyle = 'rgba(243, 238, 220, 0.9)'
-  ctx.lineWidth = Math.max(1, Math.min(cellW, cellH) * 0.18)
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = y * w + x
-      if (ghost[i] < meta.threshold) continue
-      if (committed && committed[i] >= meta.threshold) continue
-      const px = box.x + x * cellW
-      const py = box.y + y * cellH
-      ctx.fillRect(px, py, cellW + 0.4, cellH + 0.4)
-    }
-  }
-  ctx.restore()
-}
-
-function paintCities(
+/** Exported for the zoom overlay, which repaints markers over its HD window. */
+export function paintCities(
   ctx: CanvasRenderingContext2D,
   world: World,
   box: BlitBox,
@@ -313,7 +401,8 @@ function wrapX(x: number, w: number): number {
   return ((x % w) + w) % w
 }
 
-function paintWorldOverlay(
+/** Exported for the zoom overlay, which repaints worldbuild ink over its HD window. */
+export function paintWorldOverlay(
   ctx: CanvasRenderingContext2D,
   world: World,
   box: BlitBox,
@@ -364,6 +453,19 @@ function paintCountryInk(ctx: CanvasRenderingContext2D, world: World, box: BlitB
     }
   }
   ctx.stroke()
+  ctx.globalAlpha = 0.95
+  ctx.fillStyle = '#f4efe4'
+  ctx.strokeStyle = 'rgba(12, 16, 14, 0.85)'
+  ctx.lineWidth = 3
+  ctx.font = `600 ${Math.max(10, Math.min(14, cellW * 3.2))}px Outfit, system-ui, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  for (const p of world.polities) {
+    const lx = box.x + (p.capitalX + 0.5) * cellW
+    const ly = box.y + (p.capitalY + 0.5) * cellH
+    ctx.strokeText(p.name, lx, ly)
+    ctx.fillText(p.name, lx, ly)
+  }
   ctx.restore()
 }
 
@@ -376,12 +478,12 @@ function paintTradeInk(
   const { width: w, height: h } = world.meta
   const cellW = box.w / w
   const cellH = box.h / h
+  const routes = world.routes.filter((r) => r.kind === kind && r.path.length >= 2)
   ctx.save()
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   ctx.strokeStyle = kind === 'sea' ? 'rgba(36, 92, 128, 0.88)' : 'rgba(92, 58, 32, 0.82)'
-  for (const route of world.routes) {
-    if (route.kind !== kind || route.path.length < 2) continue
+  for (const route of routes) {
     ctx.lineWidth = Math.max(1.2, Math.min(cellW, cellH) * (0.18 + route.volume * 0.7))
     ctx.beginPath()
     let pen = false
@@ -406,5 +508,53 @@ function paintTradeInk(
     }
     ctx.stroke()
   }
+
+  const terminals = new Map<string, { x: number; y: number }>()
+  for (const route of routes) {
+    terminals.set(`${route.ax},${route.ay}`, { x: route.ax, y: route.ay })
+    terminals.set(`${route.bx},${route.by}`, { x: route.bx, y: route.by })
+  }
+  const r = Math.max(2.4, Math.min(cellW, cellH) * 0.55)
+  ctx.lineWidth = 1.4
+  ctx.strokeStyle = '#1c221c'
+  for (const t of terminals.values()) {
+    const px = box.x + (t.x + 0.5) * cellW
+    const py = box.y + (t.y + 0.5) * cellH
+    ctx.beginPath()
+    ctx.fillStyle = kind === 'sea' ? '#d7e7ef' : '#efe4d2'
+    if (kind === 'sea') ctx.arc(px, py, r, 0, Math.PI * 2)
+    else ctx.rect(px - r, py - r, r * 2, r * 2)
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  const labelled: { x: number; y: number }[] = []
+  const ranked = [...routes].sort((a, b) => b.volume - a.volume).slice(0, 4)
+  ctx.font = `600 ${Math.max(9, Math.min(12, cellW * 2.6))}px Outfit, system-ui, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.lineWidth = 3
+  ctx.strokeStyle = 'rgba(244, 239, 228, 0.92)'
+  ctx.fillStyle = kind === 'sea' ? '#1d3f52' : '#4a321c'
+  for (const route of ranked) {
+    const mid = route.path[Math.floor(route.path.length / 2)]
+    const lx = box.x + (mid.x + 0.5) * cellW
+    const ly = box.y + (mid.y + 0.5) * cellH
+    if (labelled.some((p) => Math.hypot(p.x - lx, p.y - ly) < 36)) continue
+    labelled.push({ x: lx, y: ly })
+    const label = TRADE_GOOD_LABEL[route.good]
+    ctx.strokeText(label, lx, ly)
+    ctx.fillText(label, lx, ly)
+  }
+
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'bottom'
+  ctx.font = '500 11px Outfit, system-ui, sans-serif'
+  ctx.lineWidth = 3
+  ctx.strokeStyle = 'rgba(244, 239, 228, 0.9)'
+  ctx.fillStyle = '#2a2620'
+  const legend = kind === 'sea' ? 'Sea lanes · width ∝ cargo volume' : 'Caravans · width ∝ cargo volume'
+  ctx.strokeText(legend, box.x + 8, box.y + box.h - 8)
+  ctx.fillText(legend, box.x + 8, box.y + box.h - 8)
   ctx.restore()
 }

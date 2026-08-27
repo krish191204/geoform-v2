@@ -83,6 +83,20 @@ describe('persist: mask layer', () => {
     expect(restored!.mask).toBeInstanceOf(Float32Array)
   })
 
+  it('round-trips sparse range and river notes', () => {
+    const meta = makeMeta(3)
+    const mask = makeMask(meta, 0.2)
+    const marks = new Uint8Array(meta.width * meta.height)
+    marks[0] = 1
+    marks[4] = 2
+    marks[5] = 4
+    const restored = deserializeMask(serializeMask(meta, mask, marks))
+    expect(restored?.marks?.[0]).toBe(1)
+    expect(restored?.marks?.[4]).toBe(2)
+    expect(restored?.marks?.[5]).toBe(4)
+    expect(JSON.parse(serializeMask(meta, mask)).signifiers).toBeUndefined()
+  })
+
   it('saveMask / loadMask round-trip through localStorage', () => {
     const meta = makeMeta(11)
     const mask = makeMask(meta, 0.42)

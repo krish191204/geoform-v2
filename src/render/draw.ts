@@ -19,6 +19,7 @@
  */
 import { biomeColor, type Layer, type World } from '../world/types'
 import { classifyOcean, type OceanClass } from '../pipeline/oceanClass'
+import type { SketchNoteFields } from '../sketch/sketchMarks'
 
 // ---------------------------------------------------------------------------
 // 1. Types
@@ -328,10 +329,125 @@ function sampleMask(world: World, x: number, y: number): number {
 
 /** Characteristic relief so rolling hills and ranges both shade. Elev is metres. */
 const SHADE_M = 600
-/** Flux above this tints as a tributary (matches hydrology river cutoff). */
-const RIVER_VISIBLE = 8
-/** Flux above this tints as a main stem. */
-const RIVER_MAIN = 24
+/** Same cutoff hydrology uses: flux above this is a river cell. */
+const RIVER_FLUX = 8
+
+const D8: ReadonlyArray<readonly [number, number]> = [
+  [-1, -1],
+  [0, -1],
+  [1, -1],
+  [-1, 0],
+  [1, 0],
+  [-1, 1],
+  [0, 1],
+  [1, 1],
+]
+
+function wrapDeltaX(dx: number, w: number): number {
+  if (dx > w / 2) return dx - w
+  if (dx < -w / 2) return dx + w
+  return dx
+}
+
+/** Distance from a point to a segment, wrapping in x. */
+function distToSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  w: number,
+): number {
+  const dx = wrapDeltaX(bx - ax, w)
+  const dy = by - ay
+  const lx = wrapDeltaX(px - ax, w)
+  const ly = py - ay
+  const len2 = dx * dx + dy * dy
+  if (len2 < 1e-8) return Math.hypot(lx, ly)
+  let t = (lx * dx + ly * dy) / len2
+  if (t < 0) t = 0
+  else if (t > 1) t = 1
+  return Math.hypot(lx - t * dx, ly - t * dy)
+}
+
+/**
+ * Downhill neighbour index (D8 on World elev), or -1 at a local max.
+ * Look-only: same rule hydrology uses, so ink follows drainage, not cell blobs.
+ */
+function downhillIndex(world: World, x: number, y: number): number {
+  const { width: w, height: h } = world.meta
+  const i = y * w + x
+  let best = -1
+  let bestH = world.elev[i]
+  for (const [dx, dy] of D8) {
+    const nx = wrapX(x + dx, w)
+    const ny = y + dy
+    if (ny < 0 || ny >= h) continue
+    const j = ny * w + nx
+    const e = world.elev[j]
+    if (e < bestH) {
+      bestH = e
+      best = j
+    }
+  }
+  return best
+}
+
+/**
+ * Antialiased ink 0..1 for a drainage stroke through nearby river cells,
+ * plus the stem strength (0 = trickle, 1 = main artery) of the nearest reach.
+ *
+ * Each river cell contributes the segment from its centre to its downhill
+ * neighbour's centre; consecutive segments share endpoints, so the network
+ * reads as connected polylines. Width and opacity taper with log(flux) so
+ * tributaries are hairlines and the trunk carries the statement, like an
+ * engraved atlas plate.
+ */
+function riverInk(world: World, xf: number, yf: number): { ink: number; stem: number } {
+  const { width: w, height: h } = world.meta
+  const x0 = wrapX(Math.floor(xf), w)
+  const y0 = Math.max(0, Math.min(h - 1, Math.floor(yf)))
+  let dist = 1e9
+  let flux = 0
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const cx = wrapX(x0 + dx, w)
+      const cy = y0 + dy
+      if (cy < 0 || cy >= h) continue
+      const i = cy * w + cx
+      if (world.rivers[i] !== 1) continue
+      const ax = cx + 0.5
+      const ay = cy + 0.5
+      const down = downhillIndex(world, cx, cy)
+      let d: number
+      if (down < 0) {
+        // Degenerate flat fixture: no downhill anywhere. Point ink so the
+        // cell still registers; real sink-filled worlds never hit this.
+        d = distToSegment(xf, yf, ax, ay, ax, ay, w)
+      } else {
+        const bx = (down % w) + 0.5
+        const by = Math.floor(down / w) + 0.5
+        d = distToSegment(xf, yf, ax, ay, bx, by, w)
+      }
+      if (d < dist) {
+        dist = d
+        flux = world.flux[i]
+      }
+    }
+  }
+  if (dist > 1.15) return { ink: 0, stem: 0 }
+  const stem = Math.min(
+    1,
+    Math.max(0, Math.log(1 + Math.max(flux, RIVER_FLUX)) - Math.log(1 + RIVER_FLUX)) / 3.2,
+  )
+  const half = 0.08 + 0.18 * stem
+  const aa = 0.14
+  if (dist <= half) return { ink: 1, stem }
+  if (dist >= half + aa) return { ink: 0, stem }
+  const t = (dist - half) / aa
+  return { ink: 1 - t * t * (3 - 2 * t), stem }
+}
 
 function plateBoundaryCue(
   world: World,
@@ -551,17 +667,13 @@ function applyPaperLook(
     }
   }
 
-  // Rivers from flux (tributaries faint, mains brighter) — v1 network look.
-  if (showRivers && !ocean && layer !== 'plates' && layer !== 'temperature') {
-    const f = sampleScalar(world.flux, world, x, y)
-    const flagged = sampleScalar(world.rivers, world, x, y) >= 0.5
-    if (f >= RIVER_VISIBLE || flagged) {
-      const isMain = f >= RIVER_MAIN
-      const strength = isMain
-        ? Math.min(1, (f - RIVER_MAIN) / 40)
-        : Math.min(1, Math.max(0, f - RIVER_VISIBLE) / 20)
-      const t = (isMain ? 0.55 : flagged ? 0.42 : 0.32) + strength * 0.38
-      rgb = mix(rgb, isMain ? [45, 125, 185] : [70, 155, 195], Math.min(1, t))
+  // Rivers: engraved drainage strokes on Relief only. Tributaries are faint
+  // hairlines; only the trunk carries full ink. Flux width, not a cell blot.
+  if (showRivers && !ocean && layer === 'relief') {
+    const { ink, stem } = riverInk(world, x, y)
+    if (ink > 0.02) {
+      const water: [number, number, number] = mix([74, 106, 124], [34, 70, 98], stem)
+      rgb = mix(rgb, water, ink * (0.45 + 0.3 * stem))
     }
   }
 
@@ -715,6 +827,7 @@ function fbm2(x: number, y: number, seed: number): number {
 /**
  * Sketch-only paper look. Grass and soil from the mask, ragged inked shores —
  * never writes World. Geoform 1 greens, not a khaki sticker on the sea.
+ * Doodle notes bake as shaded land (ranges, cover, channels), not legend ticks.
  */
 export function bakeSketchMaskImageData(
   mask: Float32Array | null,
@@ -724,6 +837,7 @@ export function bakeSketchMaskImageData(
   outW: number,
   outH: number,
   seed: number,
+  notes: SketchNoteFields | null = null,
 ): ImageData {
   const w = width
   const h = height
@@ -746,10 +860,30 @@ export function bakeSketchMaskImageData(
     const v11 = mask[y1 * w + x1]
     return (v00 * (1 - fx) + v10 * fx) * (1 - fy) + (v01 * (1 - fx) + v11 * fx) * fy
   }
+  const sampleF = (field: Float32Array, xf: number, yf: number): number => {
+    const x0 = wrap(Math.floor(xf))
+    const y0 = Math.max(0, Math.min(h - 1, Math.floor(yf)))
+    const x1 = wrap(x0 + 1)
+    const y1 = Math.max(0, Math.min(h - 1, y0 + 1))
+    const fx = xf - Math.floor(xf)
+    const fy = yf - Math.floor(yf)
+    const v00 = field[y0 * w + x0]
+    const v10 = field[y0 * w + x1]
+    const v01 = field[y1 * w + x0]
+    const v11 = field[y1 * w + x1]
+    return (v00 * (1 - fx) + v10 * fx) * (1 - fy) + (v01 * (1 - fx) + v11 * fx) * fy
+  }
   const sand: [number, number, number] = [168, 176, 122]
   const grass: [number, number, number] = [92, 138, 72]
   const meadow: [number, number, number] = [58, 112, 58]
   const soil: [number, number, number] = [110, 118, 72]
+  const canopyA: [number, number, number] = [34, 78, 40]
+  const canopyB: [number, number, number] = [22, 56, 30]
+  const wetA: [number, number, number] = [52, 88, 60]
+  const wetB: [number, number, number] = [38, 70, 64]
+  const riverCol: [number, number, number] = [30, 84, 116]
+  const hamlet: [number, number, number] = [196, 176, 138]
+  const roof: [number, number, number] = [142, 108, 78]
   for (let py = 0; py < ch; py++) {
     const y0 = ((py + 0.5) * h) / ch
     for (let px = 0; px < cw; px++) {
@@ -782,6 +916,64 @@ export function bakeSketchMaskImageData(
         r = r + (8 + shimmer * 40 - r) * (1 - k)
         g = g + (28 + shimmer * 70 - g) * (1 - k)
         b = b + (48 + shimmer * 90 - b) * (1 - k)
+      }
+      if (notes) {
+        const vis = 0.22 + 0.78 * k
+        const rng = sampleF(notes.range, xf, yf)
+        const hil = sampleF(notes.hills, xf, yf)
+        const for_ = sampleF(notes.forest, xf, yf)
+        const swp = sampleF(notes.swamp, xf, yf)
+        const meander = (fbm2(xf * 0.9, yf * 0.9, seed + 21) - 0.5) * 0.45
+        const riv = sampleF(notes.river, xf + meander, yf + meander * 0.35)
+        const twn = sampleF(notes.town, xf, yf)
+        const wrinkle = (fbm2(xf * 0.4, yf * 0.4, seed + 11) - 0.5) * 0.16
+        const zHere = rng * 1.08 + hil * 0.42
+        const zNote = Math.max(0, zHere + wrinkle * (rng + hil))
+        if (zNote > 0.035) {
+          const zR = sampleF(notes.range, xf + 0.65, yf) * 1.08 + sampleF(notes.hills, xf + 0.65, yf) * 0.42
+          const zD = sampleF(notes.range, xf, yf + 0.65) * 1.08 + sampleF(notes.hills, xf, yf + 0.65) * 0.42
+          const nShade = clamp(0.78 + (zNote - zR) * 2.2 + (zNote - zD) * 1.7, 0.55, 1.16)
+          const mont = elevBandColor(180 + Math.min(1, zNote) * 3900, false)
+          const tCover = Math.max(0, Math.min(1, (zNote - 0.03) / 0.32))
+          const amt = tCover * tCover * (3 - 2 * tCover) * vis
+          r = r + (mont[0] * nShade - r) * amt
+          g = g + (mont[1] * nShade - g) * amt
+          b = b + (mont[2] * nShade - b) * amt
+        }
+        if (for_ > 0.06) {
+          const speckle = fbm2(xf * 2.1, yf * 2.1, seed + 13)
+          const canopy = mix(canopyA, canopyB, speckle)
+          const treeline = 1 - Math.min(0.82, rng * 0.9)
+          const cover = for_ * for_ * (3 - 2 * for_)
+          const amt = Math.min(1, cover * 1.2) * vis * treeline
+          r = r + (canopy[0] - r) * amt
+          g = g + (canopy[1] - g) * amt
+          b = b + (canopy[2] - b) * amt
+        }
+        if (swp > 0.06) {
+          const puddle = fbm2(xf * 1.15, yf * 1.15, seed + 17)
+          const wet = mix(wetA, mix(wetB, [36, 72, 78], puddle * 0.45), puddle)
+          const cover = swp * swp * (3 - 2 * swp)
+          const amt = Math.min(1, cover * 1.15) * vis * (1 - Math.min(0.65, rng * 0.75))
+          r = r + (wet[0] - r) * amt
+          g = g + (wet[1] - g) * amt
+          b = b + (wet[2] - b) * amt
+        }
+        if (riv > 0.08) {
+          const core = Math.min(1, (riv - 0.05) * 2.8)
+          const water = mix([42, 92, 108], riverCol, core)
+          const amt = core * (0.42 + 0.58 * k)
+          r = r + (water[0] - r) * amt
+          g = g + (water[1] - g) * amt
+          b = b + (water[2] - b) * amt
+        }
+        if (twn > 0.22 && k > 0.32) {
+          const patch = hash01(px, py, seed + 29) > 0.62 ? roof : hamlet
+          const amt = Math.min(1, (twn - 0.16) * 2.4) * 0.68
+          r = r + (patch[0] - r) * amt
+          g = g + (patch[1] - g) * amt
+          b = b + (patch[2] - b) * amt
+        }
       }
       if (k > 0.12 && k < 0.88) {
         const foam = 1 - Math.abs(k - 0.5) * 3.4
@@ -891,6 +1083,57 @@ export function bakeWorldImageDataSmooth(
   }
   if (options.bakeCities ?? true) stampCities(image, world, scale)
   if (options.vignette ?? true) applyVignette(image)
+  return image
+}
+
+/**
+ * Rasterise one visible window of the world at arbitrary pixel density.
+ *
+ * `win` is the visible region in fractional cell coordinates (x may run
+ * past the seam; sampling wraps). Used by the atlas zoom: when the user
+ * zooms past the baked resolution, the shell re-bakes just this window at
+ * screen density instead of CSS-scaling one blurry raster — so zooming in
+ * reveals the fields, not bigger pixels. Pure, allocation-light: one
+ * ImageData of exactly `outW × outH`.
+ */
+export function bakeWorldWindowImageData(
+  world: World,
+  season: Season,
+  layer: Layer,
+  win: { x0: number; y0: number; w: number; h: number },
+  outW: number,
+  outH: number,
+  options: { showRivers?: boolean; vignette?: boolean } = {},
+): ImageData {
+  const cw = Math.max(1, Math.round(outW))
+  const ch = Math.max(1, Math.round(outH))
+  const showRivers = options.showRivers ?? layer === 'relief'
+  const image = new ImageData(cw, ch)
+  const data = image.data
+  const smooth = layer !== 'plates'
+  const { width: w, height: h } = world.meta
+  for (let py = 0; py < ch; py++) {
+    const yf = win.y0 + ((py + 0.5) / ch) * win.h
+    for (let px = 0; px < cw; px++) {
+      const xf = win.x0 + ((px + 0.5) / cw) * win.w
+      const rgb = smooth
+        ? sampleBilinear(world, season, layer, xf, yf, showRivers)
+        : cellColor(
+            world,
+            season,
+            layer,
+            wrapX(xf | 0, w),
+            Math.max(0, Math.min(h - 1, yf | 0)),
+            showRivers,
+          )
+      const o = (py * cw + px) * 4
+      data[o] = rgb[0]
+      data[o + 1] = rgb[1]
+      data[o + 2] = rgb[2]
+      data[o + 3] = 255
+    }
+  }
+  if (options.vignette ?? false) applyVignette(image)
   return image
 }
 
@@ -1070,11 +1313,12 @@ export interface NormalisedPoint {
  * The bitmap is scaled to fit the rect while preserving its aspect
  * ratio; the unused space forms letterbox bars on the long axis.
  * Returns `null` when the click lands inside a letterbox bar (i.e. on
- * the rect but off the bitmap).
+ * the rect but off the bitmap), unless `clamp` is true — then the
+ * nearest bitmap edge is used so a stamp can drop at the poles.
  *
  * Example: a 400×200 bitmap (aspect 2:1) inside a 200×200 rect
  * (aspect 1:1) renders at 200×100 centred vertically — clicking in the
- * top 50 px of the rect returns `null`.
+ * top 50 px of the rect returns `null` (or `{ nx, ny: 0 }` when clamped).
  */
 export function clientToContainedBitmap(
   clientX: number,
@@ -1082,14 +1326,19 @@ export function clientToContainedBitmap(
   rect: ClientRect,
   bitmapWidth: number,
   bitmapHeight: number,
+  clamp = false,
 ): NormalisedPoint | null {
   if (rect.width <= 0 || rect.height <= 0) return null
   if (bitmapWidth <= 0 || bitmapHeight <= 0) return null
 
-  // Position relative to the rect (viewport → rect-local).
-  const lx = clientX - rect.left
-  const ly = clientY - rect.top
-  if (lx < 0 || ly < 0 || lx >= rect.width || ly >= rect.height) return null
+  let lx = clientX - rect.left
+  let ly = clientY - rect.top
+  if (clamp) {
+    lx = Math.min(rect.width - 1e-6, Math.max(0, lx))
+    ly = Math.min(rect.height - 1e-6, Math.max(0, ly))
+  } else if (lx < 0 || ly < 0 || lx >= rect.width || ly >= rect.height) {
+    return null
+  }
 
   const rectAspect = rect.width / rect.height
   const bitmapAspect = bitmapWidth / bitmapHeight
@@ -1112,9 +1361,17 @@ export function clientToContainedBitmap(
     bitmapY = (rect.height - bitmapH) / 2
   }
 
-  // Reject clicks that fall inside a letterbox bar.
-  if (lx < bitmapX || lx >= bitmapX + bitmapW) return null
-  if (ly < bitmapY || ly >= bitmapY + bitmapH) return null
+  if (clamp) {
+    lx = Math.min(bitmapX + bitmapW - 1e-6, Math.max(bitmapX, lx))
+    ly = Math.min(bitmapY + bitmapH - 1e-6, Math.max(bitmapY, ly))
+  } else if (
+    lx < bitmapX ||
+    lx >= bitmapX + bitmapW ||
+    ly < bitmapY ||
+    ly >= bitmapY + bitmapH
+  ) {
+    return null
+  }
 
   return {
     nx: (lx - bitmapX) / bitmapW,

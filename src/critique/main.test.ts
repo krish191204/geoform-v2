@@ -406,12 +406,13 @@ describe('critiqueWorld', () => {
   })
 
   it('flags flipped rain shadow as minor', () => {
-    // Build a clean single mountain with west-wind. Windward slice (x-4..x-1)
-    // is dry; lee slice (x+1..x+4) is wet. The west-east-dry-west layout is
-    // the classic flipped-rain-shadow.
+    // Build a clean single mountain in the westerlies band (row 11 on a
+    // 16-row grid is lat −42°, solidly 30°–60°, windward = WEST face).
+    // Windward slice (x-4..x-1) is dry; lee slice (x+1..x+4) is wet.
+    // That west-dry / east-wet layout is the classic flipped rain shadow.
     const w = makeWorld()
     const w_ = w.meta.width
-    const cy = 10
+    const cy = 11
     for (let dx = -10; dx <= 10; dx++) {
       const x = 16 + dx
       const k = cy * w_ + ((x + w_) % w_)

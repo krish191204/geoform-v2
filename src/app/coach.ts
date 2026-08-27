@@ -9,6 +9,7 @@
 
 import type { Issue, Stage, Tool } from '../world/types'
 import { gradeCaption, gradeFromScore } from '../critique/main'
+import type { SketchNoteTool } from './stages'
 
 /** Tone carried alongside the message in the CustomEvent detail. */
 export type CoachTone = 'info' | 'warn' | 'success' | 'error'
@@ -20,6 +21,10 @@ export type CoachTone = 'info' | 'warn' | 'success' | 'error'
 export type CoachEvent =
   /** Empty-ocean boot or after Clear sea. */
   | { kind: 'sketch.ready'; width: number; height: number; landCells: number }
+  /** First land on an empty ocean, or land after undo-to-empty then paint. */
+  | { kind: 'sketch.hasLand' }
+  /** Writer picked a decorate stamp. Notes are not geography. */
+  | { kind: 'sketch.decorate'; tool: SketchNoteTool }
   /** One brush dab on the sketch canvas. */
   | { kind: 'sketch.brushDab'; x: number; y: number; brushSize: number; maskDelta: number }
   /** A committed sketch mask. */
@@ -66,6 +71,16 @@ export function isCoachSilent(kind: CoachEvent['kind']): boolean {
   return COACH_SILENT_KINDS.has(kind)
 }
 
+export function decorateCoachCopy(tool: SketchNoteTool): string {
+  if (tool === 'draw-ridge') return 'Paint a mountain range — a note, not metres. Make sense still invents the relief.'
+  if (tool === 'mark-hills') return 'Paint rolling hills — a note, not metres.'
+  if (tool === 'mark-forest') return 'Paint forest cover — a note, not a biome. Make sense still invents the cover.'
+  if (tool === 'erase-channel') return 'Paint a river — a note, not hydrology yet. Make sense still invents the drainage.'
+  if (tool === 'mark-swamp') return 'Paint marsh — a note, not a biome.'
+  if (tool === 'mark-town') return 'Paint a town — a note, not a settlement yet.'
+  return 'Wipe notes. Land stays. Make sense still reads only the continent.'
+}
+
 /**
  * Render an event into a (tone, message) pair. Exhaustive — no `default` branch.
  * Each case builds its copy only from the event's own measurements.
@@ -75,8 +90,15 @@ export function renderCoach(event: CoachEvent): { tone: CoachTone; message: stri
     case 'sketch.ready':
       return {
         tone: 'info',
-        message: 'Empty ocean. Drag a picture onto the map, or paint land.',
+        message: 'Drop a continent, or paint land.',
       }
+    case 'sketch.hasLand':
+      return {
+        tone: 'info',
+        message: "That's a doodle, not geography yet. Make sense when the shape feels like yours.",
+      }
+    case 'sketch.decorate':
+      return { tone: 'info', message: decorateCoachCopy(event.tool) }
     case 'sketch.brushDab':
       return {
         tone: 'info',
@@ -90,7 +112,7 @@ export function renderCoach(event: CoachEvent): { tone: CoachTone; message: stri
     case 'sketch.clearSea':
       return {
         tone: 'info',
-        message: 'Empty ocean again. Paint land.',
+        message: 'Empty ocean again. Drop a continent, or paint land.',
       }
     case 'critique.grade': {
       const grade = gradeFromScore(event.score)
@@ -115,10 +137,9 @@ export function renderCoach(event: CoachEvent): { tone: CoachTone; message: stri
         message: `Make sense step ${event.stepIndex}/${event.totalSteps}: ${event.stepName} (${event.elapsedMs}ms)`,
       }
     case 'makeSense.complete': {
-      const grade = gradeFromScore(event.scoreAfter)
       return {
         tone: 'success',
-        message: `${grade} — ${gradeCaption(grade)}. Atlas grounded. Switch layers.`,
+        message: 'Same land, grounded. Switch layers. Hover a cell.',
       }
     }
     case 'makeSense.cancelled':
@@ -129,7 +150,7 @@ export function renderCoach(event: CoachEvent): { tone: CoachTone; message: stri
     case 'persist.saved':
       return {
         tone: 'success',
-        message: event.key === 'world' ? 'World saved.' : 'Sketch saved.',
+        message: event.key === 'world' ? 'World saved in this browser.' : 'Sketch saved in this browser.',
       }
     case 'persist.failed':
       return event.reason === 'quota'
@@ -180,7 +201,7 @@ export function announce(event: CoachEvent): void {
  * EXAMPLES
  *
  * announce({ kind: 'sketch.ready', width: 512, height: 256, landCells: 0 })
- *   -> { tone: 'info', message: 'Empty ocean. Drag a picture onto the map, or paint land.' }
+ *   -> { tone: 'info', message: 'Drop a continent, or paint land.' }
  *
  * announce({ kind: 'app.boot', stage: 'sketch', resumedFromMask: false, resumedFromWorld: false })
  *   -> silent (Coach panel unchanged)

@@ -6,24 +6,12 @@ import {
   shrinkLandBlob,
   stampLandform,
   stampLandformAt,
-  type LandformKind,
 } from './landforms'
 
 function empty(w = 96, h = 48) {
   const meta = { ...DEFAULT_META, width: w, height: h, seed: 7 }
   const mask = new Float32Array(w * h)
   return { meta, mask }
-}
-
-function polarLand(mask: Float32Array, w: number, h: number, threshold: number): number {
-  let n = 0
-  const lo = Math.floor(h * 0.08)
-  const hi = Math.ceil(h * 0.92)
-  for (let y = 0; y < h; y++) {
-    if (y >= lo && y < hi) continue
-    for (let x = 0; x < w; x++) if (mask[y * w + x] >= threshold) n++
-  }
-  return n
 }
 
 describe('LANDFORM_OPTIONS', () => {
@@ -87,16 +75,14 @@ describe('stampLandform', () => {
     expect(landformStats(mask, meta).landCells).toBeGreaterThan(1)
   })
 
-  it('keeps polar rows almost empty', () => {
-    const kinds: LandformKind[] = ['continents', 'elongated', 'peninsula', 'gulf', 'mixed', 'islands']
-    for (const kind of kinds) {
-      const { meta, mask } = empty()
-      stampLandform(mask, meta, kind, 5)
-      const polar = polarLand(mask, meta.width, meta.height, meta.threshold)
-      const land = landformStats(mask, meta).landCells
-      expect(land).toBeGreaterThan(0)
-      expect(polar / Math.max(1, land)).toBeLessThan(0.02)
+  it('a drop near the north edge paints land at the north edge', () => {
+    const { meta, mask } = empty(96, 48)
+    stampLandformAt(mask, meta, 'continents', 5, 48, 2)
+    let north = 0
+    for (let x = 0; x < meta.width; x++) {
+      if (mask[x] >= meta.threshold || mask[meta.width + x] >= meta.threshold) north++
     }
+    expect(north).toBeGreaterThan(0)
   })
 
   it('puts land at the drop cell instead of scattering it', () => {
@@ -174,6 +160,36 @@ describe('stampLandform', () => {
     const small = empty(96, 48)
     stampLandformAt(full.mask, full.meta, 'continents', 5, 48, 24, 1)
     stampLandformAt(small.mask, small.meta, 'continents', 5, 48, 24, 0.5)
+    expect(landformStats(small.mask, small.meta).landCells).toBeLessThan(
+      landformStats(full.mask, full.meta).landCells,
+    )
+  })
+
+  it('the same stamp seed keeps a gulf as a gulf when scaled down', () => {
+    const seed = 11
+    const full = empty(96, 48)
+    const small = empty(96, 48)
+    const frozen = 9041
+    stampLandformAt(full.mask, full.meta, 'gulf', seed, 48, 24, 1, frozen)
+    stampLandformAt(small.mask, small.meta, 'gulf', seed, 48, 24, 0.55, frozen)
+    const eastWest = (mask: Float32Array) => {
+      let east = 0
+      let west = 0
+      for (let i = 0; i < mask.length; i++) {
+        if (mask[i] < 0.5) continue
+        const x = i % 96
+        let dx = x - 48
+        if (dx > 48) dx -= 96
+        if (dx < -48) dx += 96
+        if (dx > 2) east++
+        else if (dx < -2) west++
+      }
+      return { east, west }
+    }
+    const a = eastWest(full.mask)
+    const b = eastWest(small.mask)
+    expect(a.east).toBeLessThan(a.west)
+    expect(b.east).toBeLessThan(b.west)
     expect(landformStats(small.mask, small.meta).landCells).toBeLessThan(
       landformStats(full.mask, full.meta).landCells,
     )

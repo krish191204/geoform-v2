@@ -342,7 +342,7 @@ export function suggestSettlementsCovering(
   seatCount = 1,
 ): City[] {
   const packed = capacity(world)
-  const thrones = Math.max(1, Math.min(12, Math.round(seatCount)))
+  const thrones = Math.max(1, Math.min(24, Math.round(seatCount)))
   const target = Math.max(
     Math.min(MIX_FLOOR + thrones - 1, packed),
     Math.round(Math.max(0, Math.min(1, coverage)) * packed),
@@ -431,7 +431,7 @@ export function suggestSettlementsCovering(
  * Keep at most `maxSeats` thrones. Extra seats become ordinary towns.
  */
 export function capSeats(cities: City[], world: World, maxSeats = 1): void {
-  const want = Math.max(1, Math.min(12, Math.round(maxSeats)))
+  const want = Math.max(1, Math.min(24, Math.round(maxSeats)))
   const view = { ...world, cities }
   const seats = cities.filter((c) => c.role === 'seat_of_power')
   if (seats.length > want) {
@@ -471,7 +471,7 @@ export function demoteExtraSeats(cities: City[], world: World, maxSeats = 1): vo
  * Promote or found seats until `want` thrones exist; demote extras.
  */
 export function ensureSeatCount(world: World, want: number): void {
-  const n = Math.max(1, Math.min(12, Math.round(want)))
+  const n = Math.max(1, Math.min(24, Math.round(want)))
   capSeats(world.cities, world, n)
   let seats = world.cities.filter((c) => c.role === 'seat_of_power')
   const w = world.meta.width

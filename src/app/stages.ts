@@ -13,7 +13,126 @@
  * before doing anything.
  */
 
-import type { EditorState, Layer, Stage } from '../world/types'
+import type { EditorState, Layer, Stage, Tool } from '../world/types'
+import type { PaintMode } from '../sketch/paintMask'
+import { hasAnyLand } from './canvas_paint'
+
+export type WriterStage = 'sketch' | 'make-sense' | 'worldbuild'
+
+/** Pages of the worldbuild atlas — one job each. */
+export type WorldbuildAct = 'land' | 'kingdoms' | 'towns' | 'trade'
+
+export const WORLDBUILD_ACT_ORDER: readonly WorldbuildAct[] = [
+  'land',
+  'kingdoms',
+  'towns',
+  'trade',
+]
+
+export const WORLDBUILD_ACT_LABEL: Readonly<Record<WorldbuildAct, string>> = {
+  land: 'Land',
+  kingdoms: 'Kingdoms',
+  towns: 'Towns',
+  trade: 'Trade',
+}
+
+export const WORLDBUILD_ACT_NUM: Readonly<Record<WorldbuildAct, string>> = {
+  land: 'I',
+  kingdoms: 'II',
+  towns: 'III',
+  trade: 'IV',
+}
+
+export const WORLDBUILD_ACT_NEXT: Readonly<
+  Record<WorldbuildAct, { readonly act: WorldbuildAct; readonly label: string } | null>
+> = {
+  land: { act: 'kingdoms', label: 'People this land' },
+  kingdoms: { act: 'towns', label: 'Found towns' },
+  towns: { act: 'trade', label: 'Open trade' },
+  trade: null,
+}
+
+export type SketchPlane = 'land' | 'notes'
+
+export type SketchNoteTool =
+  | 'draw-ridge'
+  | 'erase-channel'
+  | 'mark-hills'
+  | 'mark-forest'
+  | 'mark-swamp'
+  | 'mark-town'
+  | 'wipe-note'
+
+export function isSketchNoteTool(tool: Tool): tool is SketchNoteTool {
+  return (
+    tool === 'draw-ridge' ||
+    tool === 'erase-channel' ||
+    tool === 'mark-hills' ||
+    tool === 'mark-forest' ||
+    tool === 'mark-swamp' ||
+    tool === 'mark-town' ||
+    tool === 'wipe-note'
+  )
+}
+
+/** Glyph inside the brush ring so the doodle tool is visible before a stroke. */
+export function brushCursorGlyph(tool: Tool): string {
+  if (tool === 'draw-land') return '●'
+  if (tool === 'erase-land') return '≈'
+  if (tool === 'fill-mask') return '◌'
+  if (tool === 'draw-ridge') return '▲'
+  if (tool === 'mark-hills') return '∩'
+  if (tool === 'mark-forest') return '♣'
+  if (tool === 'erase-channel') return '∿'
+  if (tool === 'mark-swamp') return '≡'
+  if (tool === 'mark-town') return '◉'
+  if (tool === 'wipe-note') return '✕'
+  return ''
+}
+
+export function isSketchLandTool(tool: Tool): boolean {
+  return tool === 'draw-land' || tool === 'erase-land' || tool === 'fill-mask'
+}
+
+export function sketchPlaneForTool(tool: Tool): SketchPlane {
+  return isSketchNoteTool(tool) ? 'notes' : 'land'
+}
+
+export function isSketchInkTool(tool: Tool): boolean {
+  return tool === 'draw-land' || tool === 'erase-land' || isSketchNoteTool(tool)
+}
+
+export function isSketchMaskTool(tool: Tool): boolean {
+  return isSketchInkTool(tool) || tool === 'fill-mask'
+}
+
+export function isWorldbuildTool(tool: Tool): boolean {
+  return (
+    tool === 'place-city' ||
+    tool === 'remove-city' ||
+    tool === 'claim-land' ||
+    tool === 'trace-route' ||
+    tool === 'cut-route' ||
+    tool === 'inspect'
+  )
+}
+
+export function paintModeForTool(tool: Tool): PaintMode | null {
+  if (tool === 'draw-land') return 'draw-land'
+  if (tool === 'erase-land') return 'erase-land'
+  return null
+}
+
+export function presetBrushForTool(tool: Tool): number | null {
+  if (tool === 'draw-ridge') return 6
+  if (tool === 'mark-hills') return 7
+  if (tool === 'erase-channel') return 5
+  if (tool === 'mark-forest') return 8
+  if (tool === 'mark-swamp') return 7
+  if (tool === 'mark-town') return 3
+  if (tool === 'wipe-note') return 8
+  return null
+}
 
 /** Transition target. Same value space as `Stage`. */
 export type StageTransition = Stage
@@ -37,8 +156,12 @@ export interface ShellStateView extends EditorState {
   readonly score: number
   /** How many continent blobs a Full-continents stamp should drop, 1–7. */
   readonly continentCount: number
-  /** How many countries Worldbuild should grow, 1–12. */
+  /** How many countries Worldbuild should grow, 1–24. */
   readonly polityCount: number
+  /** Worldbuild atlas chapter. */
+  readonly worldbuildAct: WorldbuildAct
+  /** Last inspected cell, for gazetteer highlight. */
+  readonly focusCell: { readonly x: number; readonly y: number } | null
   /** Worldbuild ink overlay. */
   readonly worldOverlay: import('../world/types').WorldOverlay
   /** Atlas layer after Make sense. */
@@ -53,6 +176,14 @@ export interface ShellStateView extends EditorState {
   readonly viewMode: 'atlas' | 'planet'
   /** Working chrome vs full-page map. */
   readonly layoutMode: 'chrome' | 'view-map'
+  /** Sketch mask undo stack has a prior stroke. */
+  readonly canUndo: boolean
+  /** Sketch mask redo stack has a undone stroke. */
+  readonly canRedo: boolean
+  /** Sketch land vs note-only marks. Notes are ignored by Make sense. */
+  readonly sketchPlane: SketchPlane
+  /** True iff any decorate note is on the doodle. */
+  readonly hasSketchNotes: boolean
 }
 
 export interface StageGate {
@@ -68,9 +199,12 @@ const noop = (): void => {}
 /**
  * The 4-stage state machine.
  *
- *   sketch  ──commit──▶  critique  ──mask committed──▶  make-sense  ──complete──▶  worldbuild
- *     ▲                                                    │
- *     └──────────────── back-to-sketch ─────────────────────┘
+ *   sketch  ──land──▶  make-sense  ──complete──▶  worldbuild
+ *     ▲                       │
+ *     └──── back-to-sketch ───┘
+ *
+ * Critique remains in `STAGES` for tests and silent scoring; it is not
+ * on the writer rail.
  *
  * Each transition is gated by the source stage's `canLeave` and the
  * destination stage's `canEnter`. The shell consults both.
@@ -85,7 +219,8 @@ export const STAGES: Readonly<Record<Stage, StageGate>> = {
     canEnter: () => true,
     // Leave Sketch only after the user commits the mask AND no work is
     // running on the foreground.
-    canLeave: (state) => state.maskCommitted && state.isProcessing === false,
+    canLeave: (state) =>
+      hasAnyLand(state.mask, state.meta.threshold) && state.isProcessing === false,
     enter: noop,
     leave: noop,
   },
@@ -101,7 +236,8 @@ export const STAGES: Readonly<Record<Stage, StageGate>> = {
   'make-sense': {
     stage: 'make-sense',
     // Committed mask is enough. Score can be 0.
-    canEnter: (state) => state.maskCommitted && state.isProcessing === false,
+    canEnter: (state) =>
+      hasAnyLand(state.mask, state.meta.threshold) && state.isProcessing === false,
     // Make-sense holds the user until the derivation completes.
     canLeave: (state) => state.makeSenseComplete,
     enter: noop,
@@ -126,6 +262,13 @@ export const STAGE_ORDER: readonly Stage[] = [
   'worldbuild',
 ]
 
+/** Writer-facing rail — Critique is not a product step. */
+export const WRITER_STAGE_ORDER: readonly WriterStage[] = [
+  'sketch',
+  'make-sense',
+  'worldbuild',
+]
+
 /** Human-readable label for each stage button. */
 export const STAGE_LABEL: Readonly<Record<Stage, string>> = {
   sketch: 'Sketch',
@@ -135,11 +278,45 @@ export const STAGE_LABEL: Readonly<Record<Stage, string>> = {
 }
 
 /** Two-digit rail numbers, matching Geoform 1. */
-export const STAGE_NUM: Readonly<Record<Stage, string>> = {
-  sketch: '01',
-  critique: '02',
-  'make-sense': '03',
-  worldbuild: '04',
+export const STAGE_NUM: Readonly<Record<WriterStage, string>> = {
+  sketch: '1',
+  'make-sense': '2',
+  worldbuild: '3',
+}
+
+export function stageRailTitle(stage: WriterStage, state: ShellStateView): string {
+  if (stage === 'sketch') return 'Sketch — draw land'
+  if (stage === 'make-sense') {
+    return hasAnyLand(state.mask, state.meta.threshold)
+      ? 'Make sense — ground the doodle'
+      : 'Make sense — needs land'
+  }
+  return state.makeSenseComplete
+    ? 'Worldbuild — the atlas after geography'
+    : 'Worldbuild — after Make sense'
+}
+
+export function overlayForWorldbuildAct(
+  act: WorldbuildAct,
+  overlay: import('../world/types').WorldOverlay,
+): import('../world/types').WorldOverlay | null {
+  if (act === 'kingdoms') return 'countries'
+  if (act === 'trade') return overlay === 'sea-lanes' ? 'sea-lanes' : 'caravans'
+  return null
+}
+
+export function defaultToolForAct(act: WorldbuildAct): Tool {
+  if (act === 'land') return 'inspect'
+  if (act === 'kingdoms') return 'claim-land'
+  if (act === 'towns') return 'place-city'
+  return 'trace-route'
+}
+
+export function actStatusLine(act: WorldbuildAct): string {
+  if (act === 'land') return 'This is the plate. Wonders are grouped by how they formed.'
+  if (act === 'kingdoms') return 'Countries on the land you drew. Nested under each continent.'
+  if (act === 'towns') return 'Towns are a first guess — rename, found, or raze.'
+  return 'One overlay: caravans or sea lanes. Width is cargo, not GDP.'
 }
 
 /** The seven Make-sense pipeline steps shown in the progress bar. */
@@ -181,9 +358,10 @@ export const APP_EVENTS = {
   DOWNLOAD: 'app:download',
   /** Reset button click (Make-sense only). No detail. */
   RESET: 'app:reset',
+  RESET_ATLAS_VIEW: 'app:reset-atlas-view',
   /** Clear sea — wipe mask + world, back to empty ocean. */
   CLEAR_SEA: 'app:clear-sea',
-  /** Inspector toggle button click. No detail. */
+  /** Mobile sheet: Tools vs Coach. Detail: `{ sheet: 'tools' | 'inspect' }`. */
   TOGGLE_INSPECTOR: 'app:toggle-inspector',
   /** Atlas layer chip. Detail: `{ layer: Layer }`. */
   LAYER_CHANGE: 'app:layer-change',
@@ -211,14 +389,30 @@ export const APP_EVENTS = {
   BRUSH_CHANGE: 'app:brush-change',
   /** Brush strength slider change. Detail: `{ strength: number }`. */
   STRENGTH_CHANGE: 'app:strength-change',
+  /** Undo last sketch stroke. No detail. */
+  UNDO: 'app:undo',
+  /** Redo last undone sketch stroke. No detail. */
+  REDO: 'app:redo',
+  /** Rename a town or country. Detail: `RenamePlaceDetail`. */
+  RENAME_PLACE: 'app:rename-place',
+  /** Pan/zoom the atlas to a cell (wonder, town). Detail: `GotoCellDetail`. */
+  GOTO_CELL: 'app:goto-cell',
   /** Sketch landform drag. Detail: `LandformDragDetail`. */
   LANDFORM_DRAG: 'app:landform-drag',
   /** How many continent doodles to stamp. Detail: `{ count: number }`. */
   CONTINENT_COUNT_CHANGE: 'app:continent-count-change',
+  /** Sketch Land vs Notes chip. Detail: `{ plane: SketchPlane }`. */
+  SKETCH_PLANE_CHANGE: 'app:sketch-plane-change',
   /** How many countries to grow. Detail: `{ count: number }`. */
   POLITY_COUNT_CHANGE: 'app:polity-count-change',
+  /** Worldbuild chapter. Detail: `{ act: WorldbuildAct }`. */
+  WORLDBUILD_ACT_CHANGE: 'app:worldbuild-act-change',
   /** Worldbuild overlay. Detail: `{ overlay: WorldOverlay }`. */
   WORLD_OVERLAY_CHANGE: 'app:world-overlay-change',
+  /** Sign in / make account. Detail: `AccountSubmitDetail`. */
+  ACCOUNT_SUBMIT: 'app:account-submit',
+  /** Sign out. No detail. */
+  ACCOUNT_SIGN_OUT: 'app:account-sign-out',
 } as const
 
 /** Type-safe detail for `app:stage-transition`. */
@@ -244,6 +438,22 @@ export interface BrushChangeDetail {
 /** Type-safe detail for `app:strength-change`. */
 export interface StrengthChangeDetail {
   readonly strength: number
+}
+
+/** Type-safe detail for `app:rename-place`. */
+export interface RenamePlaceDetail {
+  /** Country name, folk name who call that country, or a town. */
+  readonly kind: 'city' | 'polity' | 'people'
+  readonly name: string
+  readonly x?: number
+  readonly y?: number
+  readonly id?: number
+}
+
+/** Type-safe detail for `app:goto-cell`. */
+export interface GotoCellDetail {
+  readonly x: number
+  readonly y: number
 }
 
 /** Type-safe detail for `app:layer-change`. */
@@ -276,6 +486,11 @@ export interface LandformDragDetail {
   readonly clientY: number
 }
 
+/** Type-safe detail for `app:sketch-plane-change`. */
+export interface SketchPlaneDetail {
+  readonly plane: SketchPlane
+}
+
 /** Type-safe detail for `app:continent-count-change`. */
 export interface ContinentCountDetail {
   readonly count: number
@@ -289,6 +504,23 @@ export interface PolityCountDetail {
 /** Type-safe detail for `app:world-overlay-change`. */
 export interface OverlayChangeDetail {
   readonly overlay: import('../world/types').WorldOverlay
+}
+
+/** Type-safe detail for `app:worldbuild-act-change`. */
+export interface WorldbuildActDetail {
+  readonly act: WorldbuildAct
+}
+
+/** Type-safe detail for `app:toggle-inspector`. */
+export interface InspectorSheetDetail {
+  readonly sheet: 'tools' | 'inspect'
+}
+
+/** Type-safe detail for `app:account-submit`. */
+export interface AccountSubmitDetail {
+  readonly mode: 'in' | 'up'
+  readonly email: string
+  readonly password: string
 }
 
 /** Coach message shape — the `coach:message` event detail. */

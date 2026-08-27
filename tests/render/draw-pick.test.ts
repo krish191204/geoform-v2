@@ -12,5 +12,6 @@ describe('clientToContainedBitmap', () => {
     const mapped = clientToContainedBitmap(100, 100, rect, 400, 200)
     expect(mapped).toEqual({ nx: 0.5, ny: 0.5 })
     expect(clientToContainedBitmap(100, 10, rect, 400, 200)).toBeNull()
+    expect(clientToContainedBitmap(100, 10, rect, 400, 200, true)).toEqual({ nx: 0.5, ny: 0 })
   })
 })

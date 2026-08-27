@@ -19,6 +19,7 @@ if (typeof (globalThis as { ImageData?: unknown }).ImageData === 'undefined') {
 import { describe, it, expect } from 'vitest'
 import { draw, inspectCell, screenToCell, bakeBumpImageData, bakeDisplacementImageData, bakeWorldImageDataSmooth, bakeSketchMaskImageData, polePinchFade } from './draw'
 import { biomeColor, emptyPolityState, type CellBiome, type World, type WorldMeta } from '../world/types'
+import { MARK_RANGE, buildSketchNoteFields, emptyMarks } from '../sketch/sketchMarks'
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -213,14 +214,56 @@ describe('draw', () => {
       height: 3,
       elev: (_x, _y) => 1500,
     })
-    // Place the river at the cell we're going to inspect (1, 1) —
-    // index 1*6+1 = 7, not 1 (which is (1, 0) on a 6-wide grid).
     world.rivers[1 * 6 + 1] = 1
+    world.flux[1 * 6 + 1] = 20
 
-    const withRivers = draw(world, 'summer', 'relief', { showRivers: true })
-    const withoutRivers = draw(world, 'summer', 'relief', { showRivers: false })
+    const withRivers = draw(world, 'summer', 'relief', { scale: 4, smooth: true, showRivers: true })
+    const withoutRivers = draw(world, 'summer', 'relief', { scale: 4, smooth: true, showRivers: false })
+    // Cell (1,1) centre at 4× is pixel (6, 6).
+    expect(pixel(withRivers, 6, 6)).not.toEqual(pixel(withoutRivers, 6, 6))
+  })
 
-    expect(pixel(withRivers, 1, 1)).not.toEqual(pixel(withoutRivers, 1, 1))
+  it('does not paint river blots onto temperature or biome', () => {
+    const world = makeWorld({ width: 6, height: 3, elev: () => 400 })
+    world.rivers[1 * 6 + 1] = 1
+    world.flux[1 * 6 + 1] = 80
+    const tempA = draw(world, 'summer', 'temperature', { scale: 4, smooth: true, showRivers: true })
+    const tempB = draw(world, 'summer', 'temperature', { scale: 4, smooth: true, showRivers: false })
+    expect(pixel(tempA, 6, 6)).toEqual(pixel(tempB, 6, 6))
+    const biomeA = draw(world, 'summer', 'biome', { scale: 4, smooth: true, showRivers: true })
+    const biomeB = draw(world, 'summer', 'biome', { scale: 4, smooth: true, showRivers: false })
+    expect(pixel(biomeA, 6, 6)).toEqual(pixel(biomeB, 6, 6))
+  })
+
+  it('keeps river ink on the flow line, not the whole cell', () => {
+    const world = makeWorld({
+      width: 8,
+      height: 4,
+      elev: (x) => 200 - x * 8,
+    })
+    world.rivers[1 * 8 + 3] = 1
+    world.rivers[1 * 8 + 4] = 1
+    world.flux[1 * 8 + 3] = 16
+    world.flux[1 * 8 + 4] = 32
+    const on = bakeWorldImageDataSmooth(world, 'summer', 'relief', 32, {
+      showRivers: true,
+      bakeCities: false,
+      vignette: false,
+    })
+    const off = bakeWorldImageDataSmooth(world, 'summer', 'relief', 32, {
+      showRivers: false,
+      bakeCities: false,
+      vignette: false,
+    })
+    const dist = (a: [number, number, number], b: [number, number, number]) =>
+      Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2])
+    // scale 32/8 = 4. Cell (3,1) centre → pixel (14, 6). Far land in the same row → (2, 6).
+    // Threshold sized for the engraved taper: tributaries are deliberately
+    // faint hairlines now; the invariant is ink at the core, none far away.
+    const core = dist(pixel(on, 14, 6), pixel(off, 14, 6))
+    const far = dist(pixel(on, 2, 6), pixel(off, 2, 6))
+    expect(core).toBeGreaterThan(14)
+    expect(core).toBeGreaterThan(far * 3)
   })
 
   it('up-scales with the scale option (nearest-neighbour)', () => {
@@ -546,6 +589,30 @@ describe('bakeSketchMaskImageData', () => {
     const o = (8 * img.width + 16) * 4
     expect(img.data[o + 1]).toBeGreaterThan(img.data[o])
     expect(img.data[o + 1]).toBeGreaterThan(img.data[o + 2])
+  })
+
+  it('paints doodle ranges as shaded rock, not a legend tick', () => {
+    const w = 24
+    const h = 12
+    const mask = new Float32Array(w * h)
+    for (let y = 3; y < 9; y++) {
+      for (let x = 6; x < 18; x++) mask[y * w + x] = 1
+    }
+    const marks = emptyMarks(w * h)
+    for (let y = 4; y < 8; y++) marks[y * w + 12] = MARK_RANGE
+    const fields = buildSketchNoteFields(marks, w, h)
+    const img = bakeSketchMaskImageData(mask, w, h, 0.5, 48, 24, 7, fields)
+    const plain = bakeSketchMaskImageData(mask, w, h, 0.5, 48, 24, 7, null)
+    const px = Math.round((12.5 / w) * 48)
+    const py = Math.round((6 / h) * 24)
+    const o = (py * 48 + px) * 4
+    const greenBias = (data: Uint8ClampedArray, at: number) =>
+      data[at + 1] - Math.max(data[at], data[at + 2])
+    expect(greenBias(img.data, o)).toBeLessThan(greenBias(plain.data, o) - 6)
+    const oSide = (py * 48 + px + 2) * 4
+    expect(greenBias(img.data, oSide)).toBeLessThan(greenBias(plain.data, oSide) - 2)
+    expect(img.data[o]).toBeLessThan(200)
+    expect(img.data[o] + img.data[o + 1] + img.data[o + 2]).toBeLessThan(540)
   })
 })
 

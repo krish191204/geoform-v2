@@ -70,7 +70,7 @@ export function isLandformKind(value: string): value is LandformKind {
 
 export function landformStampCopy(kind: LandformKind): string {
   void kind
-  return 'Placed. Doodle on it, or click it to shrink.'
+  return 'Placed. Click it to shrink the same shape.'
 }
 
 function wrapDx(dx: number, w: number): number {
@@ -86,8 +86,9 @@ function landCells(mask: Float32Array, threshold: number): number {
 }
 
 /**
- * Stamp one irregular land blob. Longitude wraps; polar bands stay ocean.
- * `shape` picks a silhouette; coast noise still raggeds the shore.
+ * Stamp one irregular land blob. Longitude wraps; the writer may drop at
+ * either pole — Make sense still grounds ice. `shape` picks a silhouette;
+ * coast noise still raggeds the shore.
  */
 function stampBlob(
   mask: Float32Array,
@@ -101,12 +102,10 @@ function stampBlob(
   gulfCut: number,
   shape: LandformKind = 'continents',
 ): void {
-  const polarLo = Math.floor(h * 0.08)
-  const polarHi = Math.ceil(h * 0.92)
   const padX = Math.ceil(rx * 2.4)
   const padY = Math.ceil(ry * 2.4)
-  const y0 = Math.max(polarLo, Math.floor(cy - padY))
-  const y1 = Math.min(polarHi, Math.ceil(cy + padY))
+  const y0 = Math.max(0, Math.floor(cy - padY))
+  const y1 = Math.min(h, Math.ceil(cy + padY))
   const cxr = Math.round(cx)
 
   for (let y = y0; y < y1; y++) {
@@ -176,7 +175,7 @@ function stampArchipelagoAround(
     const ang = (n / Math.max(1, count)) * Math.PI * 2 + rng() * 0.35
     const dist = ring * (0.85 + rng() * 0.45)
     const ix = ((cx + Math.cos(ang) * dist) % w + w) % w
-    const iy = Math.max(h * 0.12, Math.min(h * 0.88, cy + Math.sin(ang) * dist * 0.62))
+    const iy = Math.max(0, Math.min(h - 1, cy + Math.sin(ang) * dist * 0.62))
     const rx = minR + rng() * (maxR - minR)
     const ry = rx * (0.55 + rng() * 0.5)
     stampBlob(mask, w, h, ix, iy, rx, ry, seed + n * 917, 0.9, 'continents')
@@ -187,6 +186,11 @@ function stampArchipelagoAround(
  * Place one landform doodle at `(cx, cy)`. Math.max onto existing land.
  * Does not scatter masses around the globe — the writer chooses the spot.
  */
+/** Freeze the silhouette RNG so shrinking scale does not pick a new type. */
+export function landformStampSeed(mask: Float32Array, threshold: number, planetSeed: number): number {
+  return (planetSeed + landCells(mask, threshold) * 1009) | 0
+}
+
 export function stampLandformAt(
   mask: Float32Array,
   meta: WorldMeta,
@@ -195,13 +199,14 @@ export function stampLandformAt(
   cx: number,
   cy: number,
   scale = 1,
+  stampSeed?: number,
 ): void {
   const w = meta.width
   const h = meta.height
   if (mask.length !== w * h || w < 8 || h < 8) return
   const x = ((Math.round(cx) % w) + w) % w
   const y = Math.max(0, Math.min(h - 1, Math.round(cy)))
-  const s = (seed + landCells(mask, meta.threshold) * 1009) | 0
+  const s = stampSeed ?? landformStampSeed(mask, meta.threshold, seed)
   const rng = createRng(s + 71)
   const k = Math.max(0.28, Math.min(1.4, scale))
 
@@ -242,6 +247,44 @@ export function stampLandformAt(
   }
 
   stampArchipelagoAround(mask, w, h, s + 23, x, y, 6, 0.016 * w * k, 0.038 * w * k, 0.07 * w * k)
+}
+
+/** True if `(tx, ty)` sits in the same land blob as the click. */
+export function landBlobContains(
+  mask: Float32Array,
+  width: number,
+  height: number,
+  threshold: number,
+  sx: number,
+  sy: number,
+  tx: number,
+  ty: number,
+): boolean {
+  const w = width
+  const h = height
+  const start = ((Math.round(sx) % w) + w) % w + Math.max(0, Math.min(h - 1, Math.round(sy))) * w
+  const goal = ((Math.round(tx) % w) + w) % w + Math.max(0, Math.min(h - 1, Math.round(ty))) * w
+  if (start < 0 || start >= mask.length || mask[start] < threshold) return false
+  if (mask[goal] < threshold) return false
+  if (start === goal) return true
+  const seen = new Uint8Array(mask.length)
+  const queue = [start]
+  seen[start] = 1
+  while (queue.length) {
+    const i = queue.pop() as number
+    if (i === goal) return true
+    const x = i % w
+    const y = (i - x) / w
+    const nbrs = [y * w + ((x + 1) % w), y * w + ((x - 1 + w) % w)]
+    if (y > 0) nbrs.push((y - 1) * w + x)
+    if (y < h - 1) nbrs.push((y + 1) * w + x)
+    for (const j of nbrs) {
+      if (seen[j] || mask[j] < threshold) continue
+      seen[j] = 1
+      queue.push(j)
+    }
+  }
+  return false
 }
 
 /**

@@ -13,6 +13,9 @@
  *      when Make-sense commits. Loaded separately on boot, only if the user
  *      clicks "Resume".
  *
+ * Writer accounts (email / password) live in Supabase Auth + `profiles`.
+ * They are not this module. Do not put grids in Postgres.
+ *
  * On boot the mask loads first; the derived world is opt-in. The two stores
  * are independent — you can have a mask without a world (Sketch without
  * Make-sense) or a world without the original mask (re-imported).
@@ -49,6 +52,8 @@ export interface SavedMask {
   meta: WorldMeta
   /** Float32Array serialized as `number[]` because TypedArrays don't survive JSON.stringify. */
   mask: number[]
+  /** Sparse decorate notes (1 mountain … 6 town). Omitted when the sketch has none. */
+  signifiers?: { i: number; k: number }[]
 }
 
 /**
@@ -139,18 +144,52 @@ function validMeta(m: unknown): m is WorldMeta {
 // Mask layer — Sketch autosave
 // ---------------------------------------------------------------------------
 
+function packSignifiers(marks: Uint8Array | null | undefined): { i: number; k: number }[] | undefined {
+  if (!marks || marks.length === 0) return undefined
+  const out: { i: number; k: number }[] = []
+  for (let i = 0; i < marks.length; i++) {
+    const k = marks[i]
+    if (k >= 1 && k <= 6) out.push({ i, k })
+  }
+  return out.length ? out : undefined
+}
+
+function unpackSignifiers(
+  cells: unknown,
+  n: number,
+): Uint8Array | undefined {
+  if (!Array.isArray(cells) || cells.length === 0) return undefined
+  const marks = new Uint8Array(n)
+  for (const row of cells) {
+    if (!row || typeof row !== 'object') continue
+    const o = row as { i?: unknown; k?: unknown }
+    if (typeof o.i !== 'number' || !Number.isInteger(o.i) || o.i < 0 || o.i >= n) continue
+    if (typeof o.k !== 'number' || !Number.isInteger(o.k) || o.k < 1 || o.k > 6) continue
+    marks[o.i] = o.k
+  }
+  return marks
+}
+
 /** Build a JSON string `{version:2, meta, mask:number[]}` from in-memory state. */
-export function serializeMask(meta: WorldMeta, mask: Float32Array): string {
+export function serializeMask(
+  meta: WorldMeta,
+  mask: Float32Array,
+  marks?: Uint8Array | null,
+): string {
   const payload: SavedMask = {
     version: 2,
     meta,
     mask: Array.from(mask),
   }
+  const signifiers = packSignifiers(marks)
+  if (signifiers) payload.signifiers = signifiers
   return JSON.stringify(payload)
 }
 
 /** Parse a mask JSON string. Returns null on any failure (malformed, wrong version, shape mismatch). */
-export function deserializeMask(json: string): { meta: WorldMeta; mask: Float32Array } | null {
+export function deserializeMask(
+  json: string,
+): { meta: WorldMeta; mask: Float32Array; marks?: Uint8Array } | null {
   let parsed: unknown
   try {
     parsed = JSON.parse(json)
@@ -164,13 +203,18 @@ export function deserializeMask(json: string): { meta: WorldMeta; mask: Float32A
   if (!isNumberArray(o.mask)) return null
   const expected = o.meta.width * o.meta.height
   if (o.mask.length !== expected) return null
-  return { meta: o.meta, mask: Float32Array.from(o.mask) }
+  const marks = unpackSignifiers(o.signifiers, expected)
+  return { meta: o.meta, mask: Float32Array.from(o.mask), ...(marks ? { marks } : {}) }
 }
 
 /** Store as JSON string under `localStorage[MASK_SAVE_KEY]`. Returns false on quota exceeded. */
-export function saveMask(meta: WorldMeta, mask: Float32Array): boolean {
+export function saveMask(
+  meta: WorldMeta,
+  mask: Float32Array,
+  marks?: Uint8Array | null,
+): boolean {
   try {
-    localStorage.setItem(MASK_SAVE_KEY, serializeMask(meta, mask))
+    localStorage.setItem(MASK_SAVE_KEY, serializeMask(meta, mask, marks))
     return true
   } catch (err) {
     if (isQuotaError(err)) return false
@@ -518,8 +562,12 @@ export function downloadWorld(world: World): void {
 }
 
 /** Trigger a browser download of the mask + meta as `geoform-mask-{seed}.json`. */
-export function downloadMask(meta: WorldMeta, mask: Float32Array): void {
-  const blob = new Blob([serializeMask(meta, mask)], { type: 'application/json' })
+export function downloadMask(
+  meta: WorldMeta,
+  mask: Float32Array,
+  marks?: Uint8Array | null,
+): void {
+  const blob = new Blob([serializeMask(meta, mask, marks)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

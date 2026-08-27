@@ -5,14 +5,16 @@
  * Borders follow relief and water; goods and routes are guesses with reasons.
  */
 
-import type { City, Polity, TradeGood, TradeRoute, World } from '../world/types'
+import type { City, Polity, TradeGood, TradeRoute, World, WorldOverlay } from '../world/types'
 import { idx } from '../world/types'
 import { analogAt, analogForCells, PLACE_ANALOGS, TRADE_GOOD_LABEL } from './analogs'
 import { ensureSeatCount } from './settlements'
 import { gravityFlow } from '../science/gravity'
 
 export const MIN_POLITIES = 1
-export const MAX_POLITIES = 12
+export const MAX_POLITIES = 24
+/** Floor for the automatic country count so a continent is not a peninsula. */
+const DEFAULT_POLITY_FLOOR = 6
 
 export function clampPolityCount(n: number): number {
   if (!Number.isFinite(n)) return 4
@@ -28,7 +30,7 @@ export function defaultPolityCount(world: World): number {
     if (world.suitability[i] < 0.28) continue
     n++
   }
-  return clampPolityCount(Math.max(1, Math.round(n / 1800)))
+  return clampPolityCount(Math.max(DEFAULT_POLITY_FLOOR, Math.round(n / 900)))
 }
 
 function wrapX(x: number, w: number): number {
@@ -100,7 +102,7 @@ class MinHeap {
 
 function landStepCost(world: World, from: number, to: number): number {
   const de = Math.abs(world.elev[to] - world.elev[from])
-  let c = 1 + de / 480
+  let c = 1 + (Number.isFinite(de) ? de / 480 : 0)
   const b = world.biome[to]
   if (b === 'ice' || b === 'alpine') c += 7
   if (b === 'hot-desert' || b === 'polar-desert') c += 2.2
@@ -110,7 +112,7 @@ function landStepCost(world: World, from: number, to: number): number {
   const riverFrom = world.flux[from] > 12 || world.rivers[from] > 0
   if (world.flux[to] > 20 && !riverTo && !riverFrom) c += 1.3
   if (world.suitability[to] < 0.2) c += 0.8
-  return c
+  return Number.isFinite(c) && c >= 1 ? c : 1
 }
 
 function seatsOf(world: World): City[] {
@@ -129,7 +131,10 @@ export function growPolities(world: World): void {
     world.routes = []
     return
   }
-  const dist = new Float32Array(n).fill(1e9)
+  // Float64 + a visit cap: same reasons as `dijkstraPath`. Float32 rounding
+  // past cost ~17 exceeds the 1e-6 stale-entry slop, so the heap keeps
+  // pushing until `Array.push` throws RangeError: Invalid array length.
+  const dist = new Float64Array(n).fill(1e9)
   const heap = new MinHeap()
   seats.forEach((seat, id) => {
     const i = idx(w, seat.x, seat.y)
@@ -138,7 +143,9 @@ export function growPolities(world: World): void {
     seat.polityId = id
     heap.push(0, i)
   })
-  while (heap.size) {
+  let guard = 0
+  const cap = Math.min(n * 8, 1_200_000)
+  while (heap.size && guard++ < cap) {
     const item = heap.pop()
     if (!item) break
     const { key, val: i } = item
@@ -153,7 +160,7 @@ export function growPolities(world: World): void {
       const ni = ny * w + nx
       if (world.mask[ni] < threshold) continue
       const nd = key + landStepCost(world, i, ni)
-      if (nd + 1e-6 >= dist[ni]) continue
+      if (!Number.isFinite(nd) || nd + 1e-6 >= dist[ni]) continue
       dist[ni] = nd
       world.polityId[ni] = pid
       heap.push(nd, ni)
@@ -296,13 +303,15 @@ function summarizePolities(world: World): void {
       if (net[good] > 0) surplus += net[good]
     }
     const analog = analogForCells(world, sampleHinterland(world, id), landN[id])
+    const prev = world.polities.find((p) => p.id === id)
+    const peopleCustom = Boolean(prev && prev.tradition !== prev.analog.tradition)
     return {
       id,
-      name: seat.name,
+      name: prev?.name ?? seat.name,
       capitalX: seat.x,
       capitalY: seat.y,
       analog,
-      tradition: analog.tradition,
+      tradition: peopleCustom && prev ? prev.tradition : analog.tradition,
       exports: topGoods(net, 'hi'),
       imports: topGoods(net, 'lo'),
       meltingPot: 0,
@@ -383,7 +392,10 @@ function dijkstraPath(
   const n = w * h
   const start = idx(w, ax, ay)
   const goal = idx(w, bx, by)
-  const dist = new Float32Array(n).fill(1e9)
+  // Float64, not Float32: the stale-entry check compares stored distance
+  // against float64 heap keys, and float32 rounding beyond cost ~17
+  // exceeds the 1e-6 tolerance, silently discarding live heap entries.
+  const dist = new Float64Array(n).fill(1e9)
   const prev = new Int32Array(n).fill(-1)
   const heap = new MinHeap()
   dist[start] = 0
@@ -401,7 +413,7 @@ function dijkstraPath(
     return cabotage
   }
   let guard = 0
-  const cap = Math.min(n * 4, 400_000)
+  const cap = Math.min(n * 8, 1_200_000)
   while (heap.size && guard++ < cap) {
     const item = heap.pop()
     if (!item) break
@@ -420,15 +432,14 @@ function dijkstraPath(
       if (nd + 1e-6 >= dist[ni]) continue
       dist[ni] = nd
       prev[ni] = i
-      const hx = Math.min(Math.abs(nx - bx), w - Math.abs(nx - bx))
-      heap.push(nd + Math.hypot(hx, ny - by) * 0.15, ni)
+      heap.push(nd, ni)
     }
   }
   if (dist[goal] > 1e8) return null
   const path: { x: number; y: number }[] = []
   let cur = goal
   let hops = 0
-  while (cur >= 0 && hops++ < w + h) {
+  while (cur >= 0 && hops++ < n) {
     path.push({ x: cur % w, y: Math.floor(cur / w) })
     if (cur === start) break
     cur = prev[cur]
@@ -469,10 +480,47 @@ function pairVolume(
   return { v: Math.min(1, v), good: best }
 }
 
+function isSeaPort(city: City): boolean {
+  return city.port === 'sea'
+}
+
+function sameEndpoints(a: TradeRoute, b: TradeRoute): boolean {
+  if (a.kind !== b.kind) return false
+  return (
+    (a.ax === b.ax && a.ay === b.ay && a.bx === b.bx && a.by === b.by) ||
+    (a.ax === b.bx && a.ay === b.by && a.bx === b.ax && a.by === b.ay)
+  )
+}
+
+function cityAt(world: World, x: number, y: number): City | undefined {
+  return world.cities.find((c) => c.x === x && c.y === y)
+}
+
+function wrapDx(ax: number, bx: number, w: number): number {
+  return Math.min(Math.abs(ax - bx), w - Math.abs(ax - bx))
+}
+
+function hubPairOk(a: City, b: City): boolean {
+  return (
+    a.role === 'seat_of_power' ||
+    a.role === 'trade' ||
+    a.port === 'sea' ||
+    a.role === 'fishing' ||
+    b.role === 'seat_of_power' ||
+    b.role === 'trade' ||
+    b.port === 'sea' ||
+    b.role === 'fishing'
+  )
+}
+
 function buildRoutes(world: World): void {
+  const kept = (world.routes ?? []).filter((r) => r.author)
   world.routes = []
   const polities = world.polities
-  if (polities.length < 2) return
+  if (polities.length < 1) {
+    world.routes = kept
+    return
+  }
   const coast = coastDistField(world)
   const land = landDistField(world)
   const hubs = world.cities.filter(
@@ -484,43 +532,72 @@ function buildRoutes(world: World): void {
   )
   const landCand: TradeRoute[] = []
   const seaCand: TradeRoute[] = []
+  const { width: w } = world.meta
   for (let i = 0; i < hubs.length; i++) {
     for (let j = i + 1; j < hubs.length; j++) {
       const a = hubs[i]
       const b = hubs[j]
       if (a.polityId === undefined || b.polityId === undefined) continue
-      if (a.polityId === b.polityId) continue
       const pa = polities[a.polityId]
       const pb = polities[b.polityId]
       if (!pa || !pb) continue
-      const landPath = dijkstraPath(world, a.x, a.y, b.x, b.y, 'land', coast, land)
-      if (landPath) {
-        const { v, good } = pairVolume(pa, pb, a, b, landPath.cost, 'land')
-        if (v > 0.04) {
-          landCand.push({
-            kind: 'land',
-            ax: a.x,
-            ay: a.y,
-            bx: b.x,
-            by: b.y,
-            volume: v,
-            good,
-            path: landPath.path,
-          })
+      const same = a.polityId === b.polityId
+      const hop = Math.hypot(wrapDx(a.x, b.x, w), a.y - b.y)
+
+      if (!same) {
+        const landPath = dijkstraPath(world, a.x, a.y, b.x, b.y, 'land', coast, land)
+        if (landPath) {
+          const { v, good } = pairVolume(pa, pb, a, b, landPath.cost, 'land')
+          if (v > 0.04) {
+            landCand.push({
+              kind: 'land',
+              ax: a.x,
+              ay: a.y,
+              bx: b.x,
+              by: b.y,
+              volume: v,
+              good,
+              path: landPath.path,
+            })
+          }
+        }
+      } else if (hubPairOk(a, b) && hop >= 10 && (a.role === 'seat_of_power' || b.role === 'seat_of_power')) {
+        const landPath = dijkstraPath(world, a.x, a.y, b.x, b.y, 'land', coast, land)
+        if (landPath) {
+          const v = Math.min(1, gravityFlow(Math.max(0.25, pa.mass ?? 1), Math.max(0.2, pa.mass * 0.45), landPath.cost, 'land') * 0.55)
+          if (v > 0.05) {
+            landCand.push({
+              kind: 'land',
+              ax: a.x,
+              ay: a.y,
+              bx: b.x,
+              by: b.y,
+              volume: v,
+              good: pa.exports[0] ?? 'grain',
+              path: landPath.path,
+            })
+          }
         }
       }
-      if (a.port === 'sea' && b.port === 'sea') {
+
+      if (isSeaPort(a) && isSeaPort(b) && (!same || hop >= 14)) {
         const seaPath = dijkstraPath(world, a.x, a.y, b.x, b.y, 'sea', coast, land)
         if (seaPath) {
-          const { v, good } = pairVolume(pa, pb, a, b, seaPath.cost, 'sea')
-          if (v > 0.05) {
+          const { v, good } = same
+            ? {
+                v: Math.min(1, gravityFlow(Math.max(0.25, pa.mass ?? 1), Math.max(0.2, pa.mass * 0.4), seaPath.cost, 'sea') * 0.5),
+                good: 'fish' as const,
+              }
+            : pairVolume(pa, pb, a, b, seaPath.cost, 'sea')
+          const floor = same ? 0.03 : 0.03
+          if (v > floor) {
             seaCand.push({
               kind: 'sea',
               ax: a.x,
               ay: a.y,
               bx: b.x,
               by: b.y,
-              volume: v * 1.15,
+              volume: same ? v : v * 1.15,
               good,
               path: seaPath.path,
             })
@@ -534,7 +611,188 @@ function buildRoutes(world: World): void {
   const maxV = Math.max(0.001, landCand[0]?.volume ?? 0, seaCand[0]?.volume ?? 0)
   const pack = (list: TradeRoute[], cap: number): TradeRoute[] =>
     list.slice(0, cap).map((r) => ({ ...r, volume: Math.max(0.08, Math.min(1, r.volume / maxV)) }))
-  world.routes = [...pack(landCand, 24), ...pack(seaCand, 16)]
+  const generated = [...pack(landCand, 24), ...pack(seaCand, 20)]
+  const extra = generated.filter((g) => !kept.some((k) => sameEndpoints(k, g)))
+  world.routes = [...kept, ...extra]
+}
+
+export function tradeKindForOverlay(overlay: WorldOverlay): 'land' | 'sea' | null {
+  if (overlay === 'caravans') return 'land'
+  if (overlay === 'sea-lanes') return 'sea'
+  return null
+}
+
+export function isSeaPortCity(city: City): boolean {
+  return city.port === 'sea'
+}
+
+export function endpointName(world: World, x: number, y: number): string {
+  return cityAt(world, x, y)?.name ?? `${x}, ${y}`
+}
+
+/** East-west km per cell at the equator: cells are slices of the planet's circumference. */
+export function kmPerCell(world: World): number {
+  const r = world.meta.planetRadiusKm > 0 ? world.meta.planetRadiusKm : 6371
+  return (2 * Math.PI * r) / world.meta.width
+}
+
+/**
+ * Route length in km along its path. Equirectangular grid, so east-west
+ * cell width shrinks with cos(latitude); north-south stays constant.
+ */
+export function routeLengthKm(world: World, route: TradeRoute): number {
+  const { width: w, height: h } = world.meta
+  const k = kmPerCell(world)
+  let km = 0
+  for (let i = 1; i < route.path.length; i++) {
+    const a = route.path[i - 1]
+    const b = route.path[i]
+    const midY = (a.y + b.y) / 2
+    const lat = ((midY + 0.5) / h - 0.5) * Math.PI
+    const dx = wrapDx(a.x, b.x, w) * Math.cos(lat)
+    km += Math.hypot(dx, a.y - b.y) * k
+  }
+  return km
+}
+
+/** Historical overland caravan pace, km per day. */
+const CARAVAN_KM_PER_DAY = 30
+/** Coastal sailing pace with fair winds, km per day. */
+const SHIP_KM_PER_DAY = 120
+
+function fmtKm(km: number): string {
+  const rounded = km >= 100 ? Math.round(km / 10) * 10 : Math.round(km)
+  return `${rounded.toLocaleString('en-US')} km`
+}
+
+export function routeCaption(world: World, route: TradeRoute): string {
+  const good = TRADE_GOOD_LABEL[route.good]
+  const from = endpointName(world, route.ax, route.ay)
+  const to = endpointName(world, route.bx, route.by)
+  const kind = route.kind === 'sea' ? 'Sea lane' : 'Caravan'
+  const km = routeLengthKm(world, route)
+  if (km <= 0) return `${kind}: ${good}, ${from} → ${to}`
+  const days = Math.max(1, Math.ceil(km / (route.kind === 'sea' ? SHIP_KM_PER_DAY : CARAVAN_KM_PER_DAY)))
+  return `${kind}: ${good}, ${from} → ${to} · ${fmtKm(km)} · ${days} d`
+}
+
+/**
+ * Inspector dossier for a route: caption plus a short "why" — surplus,
+ * path cost, and writer vs auto provenance. Not GDP.
+ */
+export function routeDossier(world: World, route: TradeRoute): string {
+  const cap = routeCaption(world, route)
+  const vol = Math.round(Math.max(0, Math.min(1, route.volume)) * 100)
+  const pace = route.kind === 'sea' ? '~120 km/day by ship' : '~30 km/day by caravan'
+  if (route.author) {
+    return `${cap}. Writer-traced (${pace}). Width follows surplus and path cost, not GDP.`
+  }
+  return `${cap}. Auto trade at ${vol}% of the busiest lane (${pace}). Width is surplus × inverse path cost.`
+}
+
+function pathDist(world: World, route: TradeRoute, x: number, y: number): number {
+  const w = world.meta.width
+  let best = 1e9
+  for (const p of route.path) {
+    const d = Math.hypot(wrapDx(p.x, x, w), p.y - y)
+    if (d < best) best = d
+  }
+  return best
+}
+
+export function routeNearCell(
+  world: World,
+  x: number,
+  y: number,
+  kind?: 'land' | 'sea',
+  maxDist = 2.4,
+): TradeRoute | null {
+  let best: TradeRoute | null = null
+  let bestD = maxDist
+  for (const r of world.routes) {
+    if (kind && r.kind !== kind) continue
+    if (r.path.length < 2) continue
+    const d = pathDist(world, r, x, y)
+    if (d <= bestD) {
+      bestD = d
+      best = r
+    }
+  }
+  return best
+}
+
+export function removeRouteNearCell(
+  world: World,
+  x: number,
+  y: number,
+  kind?: 'land' | 'sea',
+): TradeRoute | null {
+  const hit = routeNearCell(world, x, y, kind, 4)
+  if (!hit) return null
+  world.routes = world.routes.filter((r) => r !== hit)
+  return hit
+}
+
+export function nearestTradeCity(world: World, x: number, y: number, maxChebyshev = 8): City | null {
+  const w = world.meta.width
+  let best: City | null = null
+  let bestD = maxChebyshev + 1
+  for (const c of world.cities) {
+    const d = Math.max(wrapDx(c.x, x, w), Math.abs(c.y - y))
+    if (d < bestD) {
+      bestD = d
+      best = c
+    }
+  }
+  return best
+}
+
+/** Writer overlay: path between two towns. Does not rewrite climate. */
+export function traceTradeRoute(
+  world: World,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  kind: 'land' | 'sea',
+): TradeRoute | null {
+  const coast = coastDistField(world)
+  const land = landDistField(world)
+  const found = dijkstraPath(world, ax, ay, bx, by, kind, coast, land)
+  if (!found) return null
+  const cityA = cityAt(world, ax, ay)
+  const cityB = cityAt(world, bx, by)
+  const pa = cityA?.polityId !== undefined ? world.polities[cityA.polityId] : undefined
+  const pb = cityB?.polityId !== undefined ? world.polities[cityB.polityId] : undefined
+  let volume = 0.42
+  let good: TradeGood = kind === 'sea' ? 'fish' : 'caravan'
+  if (pa && pb && cityA && cityB) {
+    if (pa.id === pb.id) {
+      volume = Math.min(
+        1,
+        gravityFlow(Math.max(0.25, pa.mass ?? 1), Math.max(0.2, pa.mass * 0.45), found.cost, kind) * 0.6,
+      )
+      good = kind === 'sea' ? 'fish' : (pa.exports[0] ?? 'grain')
+    } else {
+      const pv = pairVolume(pa, pb, cityA, cityB, found.cost, kind)
+      volume = Math.max(0.2, pv.v)
+      good = pv.good
+    }
+  }
+  const route: TradeRoute = {
+    kind,
+    ax,
+    ay,
+    bx,
+    by,
+    volume: Math.max(0.12, Math.min(1, volume)),
+    good,
+    path: found.path,
+    author: true,
+  }
+  world.routes = world.routes.filter((r) => !sameEndpoints(r, route))
+  world.routes.push(route)
+  return route
 }
 
 function scoreMeltingPots(world: World): void {

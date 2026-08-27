@@ -1,7 +1,8 @@
 /**
  * Foundation types for the mask-first pipeline.
  *
- * Pipeline: Sketch (mask) -> Critique (issues) -> Make-sense (world) -> Worldbuild (cities).
+ * Pipeline: Sketch (mask) -> Make-sense (world) -> Worldbuild (cities).
+ * Critique stays in the type union for tests; the writer path skips it.
  * Everything downstream of `Make-sense` reads `World`; everything before it reads `WorldMeta`.
  */
 
@@ -13,14 +14,34 @@
 export type Tool =
   /** Sketch: stamp soft mask value at brush center. */
   | 'draw-land'
+  /** Sketch: mountain ticks — a note, not metres. */
+  | 'draw-ridge'
   /** Sketch: subtract mask value at brush center. */
   | 'erase-land'
+  /** Sketch: river thread — a note, not hydrology. */
+  | 'erase-channel'
+  /** Sketch: hill marks — a note. */
+  | 'mark-hills'
+  /** Sketch: forest marks — a note, not a biome. */
+  | 'mark-forest'
+  /** Sketch: swamp / marsh marks — a note. */
+  | 'mark-swamp'
+  /** Sketch: town circle — a note, not a settlement yet. */
+  | 'mark-town'
+  /** Sketch: erase notes without touching land. */
+  | 'wipe-note'
+  /** Sketch: flip a land blob or a lake. Still a mask. */
+  | 'fill-mask'
   /** Worldbuild: place a city. */
   | 'place-city'
   /** Worldbuild: remove nearest city. */
   | 'remove-city'
   /** Worldbuild: paint a country onto land. */
   | 'claim-land'
+  /** Worldbuild: click two towns to draw a caravan or sea lane. */
+  | 'trace-route'
+  /** Worldbuild: remove the nearest caravan or sea lane. */
+  | 'cut-route'
   /** All stages: read the inspector. */
   | 'inspect'
   /** Default cursor. */
@@ -154,6 +175,8 @@ export interface TradeRoute {
   volume: number
   good: TradeGood
   path: { x: number; y: number }[]
+  /** Writer-traced overlay. Survives country rebuild; not climate. */
+  author?: boolean
 }
 
 export interface Polity {
@@ -162,6 +185,7 @@ export interface Polity {
   capitalX: number
   capitalY: number
   analog: PlaceAnalog
+  /** Folk name who call this country. Writer-editable. Not an ethnicity. */
   tradition: string
   exports: TradeGood[]
   imports: TradeGood[]
