@@ -86,8 +86,9 @@ function landCells(mask: Float32Array, threshold: number): number {
 }
 
 /**
- * Stamp one irregular land blob. Longitude wraps; polar bands stay ocean.
- * `shape` picks a silhouette; coast noise still raggeds the shore.
+ * Stamp one irregular land blob. Longitude wraps; the writer may drop at
+ * either pole — Make sense still grounds ice. `shape` picks a silhouette;
+ * coast noise still raggeds the shore.
  */
 function stampBlob(
   mask: Float32Array,
@@ -101,12 +102,10 @@ function stampBlob(
   gulfCut: number,
   shape: LandformKind = 'continents',
 ): void {
-  const polarLo = Math.floor(h * 0.08)
-  const polarHi = Math.ceil(h * 0.92)
   const padX = Math.ceil(rx * 2.4)
   const padY = Math.ceil(ry * 2.4)
-  const y0 = Math.max(polarLo, Math.floor(cy - padY))
-  const y1 = Math.min(polarHi, Math.ceil(cy + padY))
+  const y0 = Math.max(0, Math.floor(cy - padY))
+  const y1 = Math.min(h, Math.ceil(cy + padY))
   const cxr = Math.round(cx)
 
   for (let y = y0; y < y1; y++) {
@@ -176,7 +175,7 @@ function stampArchipelagoAround(
     const ang = (n / Math.max(1, count)) * Math.PI * 2 + rng() * 0.35
     const dist = ring * (0.85 + rng() * 0.45)
     const ix = ((cx + Math.cos(ang) * dist) % w + w) % w
-    const iy = Math.max(h * 0.12, Math.min(h * 0.88, cy + Math.sin(ang) * dist * 0.62))
+    const iy = Math.max(0, Math.min(h - 1, cy + Math.sin(ang) * dist * 0.62))
     const rx = minR + rng() * (maxR - minR)
     const ry = rx * (0.55 + rng() * 0.5)
     stampBlob(mask, w, h, ix, iy, rx, ry, seed + n * 917, 0.9, 'continents')

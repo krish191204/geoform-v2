@@ -48,13 +48,17 @@ export function getAccountClient(): SupabaseClient | null {
     client = null
     return null
   }
-  client = createClient(cfg.url, cfg.key, {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: true,
-    },
-  })
+  try {
+    client = createClient(cfg.url, cfg.key, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    })
+  } catch {
+    client = null
+  }
   return client
 }
 

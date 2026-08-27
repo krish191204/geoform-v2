@@ -13,18 +13,27 @@ import {
   type Season,
 } from '../render/draw'
 import { drawIssueOverlays } from '../critique/preview'
+import { buildSketchNoteFields } from '../sketch/sketchMarks'
+import { TRADE_GOOD_LABEL } from '../sketch/analogs'
 
 export type { Season }
 
-export const LAYER_CHIPS: readonly { id: Layer; label: string; title: string }[] = [
-  { id: 'relief', label: 'Relief', title: 'Landform, hillshade, and rivers' },
-  { id: 'biome', label: 'Biome', title: 'Climate class, grouped' },
-  { id: 'moisture', label: 'Moisture', title: 'Precipitation, 0–1' },
-  { id: 'temperature', label: 'Temperature', title: 'Mean temperature, °C' },
-  { id: 'suitability', label: 'Settle', title: 'Where people can live' },
-  { id: 'plates', label: 'Plates', title: 'Tectonic plates' },
-  { id: 'elevation', label: 'Height', title: 'Elevation in metres' },
+export const LAYER_CHIPS: readonly { id: Layer; label: string; title: string; caption: string }[] = [
+  { id: 'relief', label: 'Relief', title: 'Landform, hillshade, and rivers', caption: 'Hillshade and rivers on the grounded land.' },
+  { id: 'biome', label: 'Biome', title: 'Climate class, grouped', caption: 'Climate class, grouped. Ocean is not a land class.' },
+  { id: 'moisture', label: 'Moisture', title: 'Precipitation, 0–1', caption: '0 dry, 1 wet — not millimetres of rain.' },
+  { id: 'temperature', label: 'Temperature', title: 'Mean temperature, °C', caption: 'Air temperature in Celsius.' },
+  { id: 'suitability', label: 'Settle', title: 'Where people can live', caption: 'How livable the cell is for towns, 0–1.' },
+  { id: 'plates', label: 'Plates', title: 'Tectonic plates', caption: 'Crust pieces. Colour is an id, not height.' },
+  { id: 'elevation', label: 'Height', title: 'Elevation in metres', caption: 'Elevation in metres above the reference surface.' },
 ]
+
+export const SEASON_LAYERS: ReadonlySet<Layer> = new Set([
+  'relief',
+  'biome',
+  'moisture',
+  'temperature',
+])
 
 const SEA_FILL = '#163a44'
 
@@ -89,6 +98,8 @@ export interface AtlasPaintOpts {
    * Pan/zoom is CSS and must not change it.
    */
   sketchEpoch?: number
+  /** Sketch decorate notes. Doodle only — never on a grounded atlas. */
+  marks?: Uint8Array | null
 }
 
 export interface SizeCanvasOpts {
@@ -97,6 +108,11 @@ export interface SizeCanvasOpts {
    * of the 4× paper bake is wasted work; pointer mapping uses the CSS rect.
    */
   sketch?: boolean
+}
+
+/** Doodle ticks stay on Sketch. After Make sense the relief is the map. */
+export function paintSketchNotesOnAtlas(world: World | null | undefined): boolean {
+  return world == null
 }
 
 /**
@@ -167,13 +183,14 @@ export function createIdleBakeScheduler(
   }
 }
 
-/** Map a pointer onto a grid cell, rejecting letterbox clicks. */
+/** Map a pointer onto a grid cell, rejecting letterbox clicks unless `clamp`. */
 export function cellFromPointer(
   canvas: HTMLCanvasElement,
   clientX: number,
   clientY: number,
   gridW: number,
   gridH: number,
+  clamp = false,
 ): { x: number; y: number } | null {
   const hit = clientToContainedBitmap(
     clientX,
@@ -181,6 +198,7 @@ export function cellFromPointer(
     canvas.getBoundingClientRect(),
     gridW,
     gridH,
+    clamp,
   )
   if (!hit) return null
   const x = Math.min(gridW - 1, Math.max(0, Math.floor(hit.nx * gridW)))
@@ -219,7 +237,7 @@ function cachedWorldBake(
   layer: Layer,
   bakeW: number,
 ): ImageData {
-  const showRivers = layer === 'relief' || layer === 'biome'
+  const showRivers = layer === 'relief'
   const key = `${season}|${layer}|${bakeW}|${showRivers ? 1 : 0}`
   const hit = worldBakeCache.get(world)
   if (hit && hit.key === key) return hit.image
@@ -250,6 +268,10 @@ function cachedSketchBake(
   const key = sketchBakeKey(opts, bakeW, bakeH)
   if (sketchBakeCache && sketchBakeCache.key === key) return sketchBakeCache.image
   const { meta } = opts
+  const notes =
+    paintSketchNotesOnAtlas(opts.world) && opts.marks
+      ? buildSketchNoteFields(opts.marks, meta.width, meta.height)
+      : null
   const image = bakeSketchMaskImageData(
     opts.mask,
     meta.width,
@@ -258,6 +280,7 @@ function cachedSketchBake(
     bakeW,
     bakeH,
     meta.seed,
+    notes,
   )
   sketchBakeCount++
   sketchBakeCache = { key, image }
@@ -332,7 +355,8 @@ function letterbox(cw: number, ch: number, aspect: number): BlitBox {
   }
 }
 
-function paintCities(
+/** Exported for the zoom overlay, which repaints markers over its HD window. */
+export function paintCities(
   ctx: CanvasRenderingContext2D,
   world: World,
   box: BlitBox,
@@ -377,7 +401,8 @@ function wrapX(x: number, w: number): number {
   return ((x % w) + w) % w
 }
 
-function paintWorldOverlay(
+/** Exported for the zoom overlay, which repaints worldbuild ink over its HD window. */
+export function paintWorldOverlay(
   ctx: CanvasRenderingContext2D,
   world: World,
   box: BlitBox,
@@ -428,6 +453,19 @@ function paintCountryInk(ctx: CanvasRenderingContext2D, world: World, box: BlitB
     }
   }
   ctx.stroke()
+  ctx.globalAlpha = 0.95
+  ctx.fillStyle = '#f4efe4'
+  ctx.strokeStyle = 'rgba(12, 16, 14, 0.85)'
+  ctx.lineWidth = 3
+  ctx.font = `600 ${Math.max(10, Math.min(14, cellW * 3.2))}px Outfit, system-ui, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  for (const p of world.polities) {
+    const lx = box.x + (p.capitalX + 0.5) * cellW
+    const ly = box.y + (p.capitalY + 0.5) * cellH
+    ctx.strokeText(p.name, lx, ly)
+    ctx.fillText(p.name, lx, ly)
+  }
   ctx.restore()
 }
 
@@ -440,12 +478,12 @@ function paintTradeInk(
   const { width: w, height: h } = world.meta
   const cellW = box.w / w
   const cellH = box.h / h
+  const routes = world.routes.filter((r) => r.kind === kind && r.path.length >= 2)
   ctx.save()
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   ctx.strokeStyle = kind === 'sea' ? 'rgba(36, 92, 128, 0.88)' : 'rgba(92, 58, 32, 0.82)'
-  for (const route of world.routes) {
-    if (route.kind !== kind || route.path.length < 2) continue
+  for (const route of routes) {
     ctx.lineWidth = Math.max(1.2, Math.min(cellW, cellH) * (0.18 + route.volume * 0.7))
     ctx.beginPath()
     let pen = false
@@ -470,5 +508,53 @@ function paintTradeInk(
     }
     ctx.stroke()
   }
+
+  const terminals = new Map<string, { x: number; y: number }>()
+  for (const route of routes) {
+    terminals.set(`${route.ax},${route.ay}`, { x: route.ax, y: route.ay })
+    terminals.set(`${route.bx},${route.by}`, { x: route.bx, y: route.by })
+  }
+  const r = Math.max(2.4, Math.min(cellW, cellH) * 0.55)
+  ctx.lineWidth = 1.4
+  ctx.strokeStyle = '#1c221c'
+  for (const t of terminals.values()) {
+    const px = box.x + (t.x + 0.5) * cellW
+    const py = box.y + (t.y + 0.5) * cellH
+    ctx.beginPath()
+    ctx.fillStyle = kind === 'sea' ? '#d7e7ef' : '#efe4d2'
+    if (kind === 'sea') ctx.arc(px, py, r, 0, Math.PI * 2)
+    else ctx.rect(px - r, py - r, r * 2, r * 2)
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  const labelled: { x: number; y: number }[] = []
+  const ranked = [...routes].sort((a, b) => b.volume - a.volume).slice(0, 4)
+  ctx.font = `600 ${Math.max(9, Math.min(12, cellW * 2.6))}px Outfit, system-ui, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.lineWidth = 3
+  ctx.strokeStyle = 'rgba(244, 239, 228, 0.92)'
+  ctx.fillStyle = kind === 'sea' ? '#1d3f52' : '#4a321c'
+  for (const route of ranked) {
+    const mid = route.path[Math.floor(route.path.length / 2)]
+    const lx = box.x + (mid.x + 0.5) * cellW
+    const ly = box.y + (mid.y + 0.5) * cellH
+    if (labelled.some((p) => Math.hypot(p.x - lx, p.y - ly) < 36)) continue
+    labelled.push({ x: lx, y: ly })
+    const label = TRADE_GOOD_LABEL[route.good]
+    ctx.strokeText(label, lx, ly)
+    ctx.fillText(label, lx, ly)
+  }
+
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'bottom'
+  ctx.font = '500 11px Outfit, system-ui, sans-serif'
+  ctx.lineWidth = 3
+  ctx.strokeStyle = 'rgba(244, 239, 228, 0.9)'
+  ctx.fillStyle = '#2a2620'
+  const legend = kind === 'sea' ? 'Sea lanes · width ∝ cargo volume' : 'Caravans · width ∝ cargo volume'
+  ctx.strokeText(legend, box.x + 8, box.y + box.h - 8)
+  ctx.fillText(legend, box.x + 8, box.y + box.h - 8)
   ctx.restore()
 }

@@ -41,7 +41,8 @@ import {
   makePolarStripWorld,
 } from './fixtures'
 import type { TestWorld } from './fixtures'
-import { bigComponentsMask } from '../helpers'
+import { bigComponentsMask, latRad } from '../helpers'
+import { rowWindDir } from '../seasonalClimate'
 
 // ---------------------------------------------------------------------------
 // Coast-distance helper (BFS over the mask, no World type needed)
@@ -373,22 +374,25 @@ describe('Donald bar: rain shadow', () => {
     let leeSum = 0
     let leeN = 0
     for (let y = 0; y < h; y++) {
+      // Winds are latitude-banded: the windward face is upstream along
+      // the row's own prevailing wind, not a fixed "west".
+      const dir = rowWindDir(latRad(y, h))
       for (let x = 1; x < w - 1; x++) {
         const i = y * w + x
         if (elev[i] < seaLevel) continue
         const isRidge = elev[i] > elev[i - 1] + 50 && elev[i] > elev[i + 1] + 50
         if (!isRidge) continue
-        // The windward slice is the 4 cells to the west.
+        // The windward slice is the 4 cells upstream (upwind).
         for (let dx = 1; dx <= 4; dx++) {
-          const j = y * w + ((x - dx + w) % w)
+          const j = y * w + ((x - dir * dx + w) % w)
           if (elev[j] >= seaLevel) {
             windwardSum += moist[j]
             windwardN++
           }
         }
-        // The lee slice is the 4 cells to the east.
+        // The lee slice is the 4 cells downstream.
         for (let dx = 1; dx <= 4; dx++) {
-          const j = y * w + ((x + dx) % w)
+          const j = y * w + ((x + dir * dx + w) % w)
           if (elev[j] >= seaLevel) {
             leeSum += moist[j]
             leeN++
@@ -418,22 +422,23 @@ describe('Donald bar: rain shadow', () => {
     let leeSum = 0
     let leeN = 0
     for (let y = 0; y < h; y++) {
+      // The row's prevailing wind decides which face is windward.
+      const dir = rowWindDir(latRad(y, h))
       for (let x = 2; x < w - 2; x++) {
         const i = y * w + x
         if (elev[i] < seaLevel + 100) continue
         const west = elev[y * w + ((x - 2 + w) % w)]
         const east = elev[y * w + ((x + 2) % w)]
         if (elev[i] < west + 100 || elev[i] < east + 100) continue
-        // Prevailing west wind: windward is the western slope, lee is east.
         for (let dx = 1; dx <= 2; dx++) {
-          const j = y * w + ((x - dx + w) % w) // west face — windward
+          const j = y * w + ((x - dir * dx + w) % w) // upwind face — windward
           if (elev[j] >= seaLevel) {
             windwardSum += moist[j]
             windwardN++
           }
         }
         for (let dx = 1; dx <= 2; dx++) {
-          const j = y * w + ((x + dx) % w) // east face — lee
+          const j = y * w + ((x + dir * dx + w) % w) // downwind face — lee
           if (elev[j] >= seaLevel) {
             leeSum += moist[j]
             leeN++

@@ -1,5 +1,5 @@
 /**
- * DOM scaffolding for the 4-stage shell — Geoform 1 chrome, v2 state.
+ * DOM scaffolding for the writer shell. Sketch → Make sense → Worldbuild.
  *
  * Persistent regions (mounted once by the shell):
  *   chrome overlays the atlas
@@ -10,14 +10,16 @@
  * work block. Buttons dispatch `app:*` events; the shell owns state.
  */
 
-import type { City, Layer, Stage, Tool } from '../world/types'
+import type { City, Layer, Tool } from '../world/types'
 import { DEFAULT_META, groupedBiomeLegend } from '../world/types'
 import {
   APP_EVENTS,
-  MAKE_SENSE_STEPS,
   STAGE_LABEL,
   STAGE_NUM,
-  STAGE_ORDER,
+  WRITER_STAGE_ORDER,
+  isSketchNoteTool,
+  stageRailTitle,
+  type WriterStage,
   STAGES,
   type BrushChangeDetail,
   type LandformDragDetail,
@@ -32,15 +34,21 @@ import {
   type PolityCountDetail,
   type ViewChangeDetail,
   type AccountSubmitDetail,
+  type InspectorSheetDetail,
+  type StrengthChangeDetail,
+  type RenamePlaceDetail,
+  type GotoCellDetail,
 } from './stages'
 import { accountsConfigured } from '../auth/account'
 import type { Account } from '../auth/account'
-import { LAYER_CHIPS } from './atlas'
+import { LAYER_CHIPS, SEASON_LAYERS } from './atlas'
 import { SETTLEMENT_PORT_LABEL, SETTLEMENT_RANK_LABEL, SETTLEMENT_ROLE_LABEL } from '../sketch/settlements'
-import { economyLine, meltingPotLabel } from '../sketch/polities'
+import { routeCaption, tradeKindForOverlay, TRADE_GOOD_LABEL } from '../sketch/polities'
+import { wondersFor } from './wondersCache'
 import { LANDFORM_OPTIONS, stampLandformAt, type LandformKind } from '../sketch/landforms'
 import { hasAnyLand } from './canvas_paint'
-import { gradeCaption, gradeFromScore } from '../critique/main'
+import { analogStillDataUri, ANALOG_STILL_CAPTION } from './analogStills'
+import { decorateCoachCopy } from './coach'
 
 // ---------------------------------------------------------------------------
 // DOM helpers
@@ -135,12 +143,81 @@ export function paintLandformThumb(
 }
 
 // ---------------------------------------------------------------------------
+// Keys sheet — shortcuts live on a reference card, not in the writer's head
+// ---------------------------------------------------------------------------
+
+const KEYS_DRAW: readonly [string, string][] = [
+  ['1', 'Land'],
+  ['2', 'Ocean'],
+  ['3', 'Mountain'],
+  ['4', 'Fill'],
+  ['5', 'River'],
+  ['6', 'Hills'],
+  ['7', 'Forest'],
+  ['8', 'Swamp'],
+  ['9', 'Town'],
+  ['0', 'Wipe'],
+]
+
+const KEYS_GENERAL: readonly [string, string][] = [
+  ['I', 'Inspect a cell'],
+  ['[ ]', 'Brush smaller · larger'],
+  ['Shift-drag', 'Straight stroke'],
+  ['Scroll', 'Zoom the atlas'],
+  ['Space-drag', 'Pan the atlas'],
+  ['Drag coach', 'Title moves · left edge resizes · double-click docks'],
+  ['⌘Z · ⇧⌘Z', 'Undo · redo'],
+  ['Esc', 'Cancel a drop · close · reset view'],
+]
+
+function mountKeysSheet(): HTMLElement {
+  const drawGrid = el('dl', { class: 'keys-grid keys-grid-tools' })
+  for (const [key, what] of KEYS_DRAW) {
+    drawGrid.append(el('dt', {}, el('kbd', {}, key)), el('dd', {}, what))
+  }
+  const generalGrid = el('dl', { class: 'keys-grid' })
+  for (const [key, what] of KEYS_GENERAL) {
+    generalGrid.append(el('dt', {}, el('kbd', {}, key)), el('dd', {}, what))
+  }
+  const dismiss = el('button', { type: 'button', class: 'keys-dismiss action-btn' }, 'Close')
+  const card = el(
+    'div',
+    { class: 'keys-card', role: 'document' },
+    el('h2', {}, 'Keys'),
+    el('p', { class: 'keys-lede' }, 'The pen stays on the map. The other hand does this.'),
+    el('h3', {}, 'Sketch tools'),
+    drawGrid,
+    el('h3', {}, 'Anywhere'),
+    generalGrid,
+    dismiss,
+  )
+  const sheet = el(
+    'div',
+    {
+      class: 'keys-sheet',
+      hidden: true,
+      role: 'dialog',
+      'aria-modal': 'true',
+      'aria-label': 'Keyboard shortcuts',
+    },
+    card,
+  )
+  dismiss.addEventListener('click', () => {
+    sheet.hidden = true
+  })
+  sheet.addEventListener('click', (ev) => {
+    if (ev.target === sheet) sheet.hidden = true
+  })
+  return sheet
+}
+
+// ---------------------------------------------------------------------------
 // Chrome (brand + actions + stage rail)
 // ---------------------------------------------------------------------------
 
 export interface ChromeRefs {
   readonly root: HTMLElement
-  readonly stageButtons: Record<Stage, HTMLButtonElement>
+  readonly stageButtons: Record<WriterStage, HTMLButtonElement>
   readonly saveBtn: HTMLButtonElement
   readonly downloadBtn: HTMLButtonElement
   readonly clearSeaBtn: HTMLButtonElement
@@ -177,7 +254,7 @@ export function mountChrome(): ChromeRefs {
   downloadBtn.addEventListener('click', () => fire(APP_EVENTS.DOWNLOAD))
   const clearSeaBtn = el(
     'button',
-    { type: 'button', class: 'primary', title: 'Wipe the canvas back to empty ocean' },
+    { type: 'button', class: 'action-btn', title: 'Wipe the canvas back to empty ocean' },
     'Clear sea',
   )
   clearSeaBtn.addEventListener('click', () => fire(APP_EVENTS.CLEAR_SEA))
@@ -234,7 +311,17 @@ export function mountChrome(): ChromeRefs {
     accountStatus,
     el('button', { type: 'button', class: 'account-dismiss' }, 'Close'),
   )
-  const accountSheet = el('div', { class: 'account-sheet', hidden: true, role: 'dialog', 'aria-label': 'Sign in' }, card)
+  const accountSheet = el(
+    'div',
+    {
+      class: 'account-sheet',
+      hidden: true,
+      role: 'dialog',
+      'aria-modal': 'true',
+      'aria-label': 'Sign in',
+    },
+    card,
+  )
 
   let mode: AccountSubmitDetail['mode'] = 'in'
 
@@ -244,6 +331,12 @@ export function mountChrome(): ChromeRefs {
     modeUp.classList.toggle('active', next === 'up')
     accountSubmit.textContent = next === 'in' ? 'Sign in' : 'Make account'
     passwordInput.autocomplete = next === 'in' ? 'current-password' : 'new-password'
+  }
+
+  function focusables(): HTMLElement[] {
+    return Array.from(
+      accountSheet.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])'),
+    ).filter((node) => !node.hidden && node.closest('[hidden]') == null)
   }
 
   function openSheet(): void {
@@ -263,6 +356,20 @@ export function mountChrome(): ChromeRefs {
   accountSheet.addEventListener('click', (ev) => {
     if (ev.target === accountSheet) closeSheet()
   })
+  accountSheet.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Tab' || accountSheet.hidden) return
+    const nodes = focusables()
+    if (nodes.length === 0) return
+    const first = nodes[0]
+    const last = nodes[nodes.length - 1]
+    if (ev.shiftKey && document.activeElement === first) {
+      ev.preventDefault()
+      last.focus()
+    } else if (!ev.shiftKey && document.activeElement === last) {
+      ev.preventDefault()
+      first.focus()
+    }
+  })
   accountForm.addEventListener('submit', (ev) => {
     ev.preventDefault()
     const detail: AccountSubmitDetail = {
@@ -273,16 +380,39 @@ export function mountChrome(): ChromeRefs {
     fire(APP_EVENTS.ACCOUNT_SUBMIT, detail)
   })
 
+  const keysBtn = el(
+    'button',
+    { type: 'button', class: 'action-btn keys-btn', title: 'Keyboard shortcuts' },
+    'Keys',
+  )
+  const keysSheet = mountKeysSheet()
+  keysBtn.addEventListener('click', () => {
+    keysSheet.hidden = false
+    ;(keysSheet.querySelector('.keys-dismiss') as HTMLElement | null)?.focus()
+  })
+  // Capture phase so an open Keys sheet swallows Escape before the shell's
+  // view-map / stamp handlers see it.
+  window.addEventListener(
+    'keydown',
+    (ev) => {
+      if (ev.key !== 'Escape' || keysSheet.hidden) return
+      ev.stopPropagation()
+      keysSheet.hidden = true
+      keysBtn.focus()
+    },
+    true,
+  )
+
   const topnav = el(
     'nav',
     { class: 'topnav', 'aria-label': 'Geoform' },
     brand,
-    el('p', { class: 'tagline' }, 'Draw land. We ground it in geography.'),
-    el('div', { class: 'nav-trailing' }, accountBtn, saveBtn, downloadBtn, clearSeaBtn, saveMeta),
+    el('p', { class: 'tagline' }, 'Draw land. We turn it into a planet you could point at.'),
+    el('div', { class: 'nav-trailing' }, saveBtn, clearSeaBtn, downloadBtn, keysBtn, accountBtn, saveMeta),
   )
 
   const rail = el('nav', { class: 'ux-stage-rail', 'aria-label': 'Worldbuilding stages' })
-  for (const stage of STAGE_ORDER) {
+  for (const stage of WRITER_STAGE_ORDER) {
     const btn = el(
       'button',
       { type: 'button', class: 'ux-stage-btn', 'data-stage': stage },
@@ -297,7 +427,7 @@ export function mountChrome(): ChromeRefs {
     rail.append(btn)
   }
 
-  const root = el('header', { class: 'chrome' }, topnav, rail)
+  const root = el('header', { class: 'chrome' }, topnav, rail, keysSheet)
   if (!accountsConfigured()) unwired.hidden = false
   else unwired.hidden = true
   accountForm.hidden = !accountsConfigured()
@@ -319,17 +449,21 @@ export function mountChrome(): ChromeRefs {
 }
 
 export function updateChrome(refs: ChromeRefs, state: ShellStateView): void {
-  for (const stage of STAGE_ORDER) {
+  for (const stage of WRITER_STAGE_ORDER) {
     const btn = refs.stageButtons[stage]
-    const isActive = state.stage === stage
+    const isActive = state.stage === stage || (stage === 'sketch' && state.stage === 'critique')
     const reachable = isActive || STAGES[stage].canEnter(state)
     btn.classList.toggle('active', isActive)
     btn.disabled = !reachable
+    btn.title = stageRailTitle(stage, state)
     if (isActive) btn.setAttribute('aria-current', 'step')
     else btn.removeAttribute('aria-current')
   }
   refs.clearSeaBtn.disabled = state.isProcessing
-  refs.downloadBtn.disabled = !state.world && !state.mask
+  const canDownload = Boolean(state.world || state.mask)
+  refs.downloadBtn.disabled = !canDownload
+  refs.downloadBtn.hidden = !canDownload
+  refs.saveMeta.hidden = refs.saveMeta.textContent === 'No save yet'
 }
 
 export function updateAccountChrome(refs: ChromeRefs, view: AccountChromeView): void {
@@ -365,12 +499,19 @@ export interface MapShellRefs {
   readonly seasonBar: HTMLElement
   readonly viewAtlas: HTMLButtonElement
   readonly viewPlanet: HTMLButtonElement
-  readonly layoutBtn: HTMLButtonElement
+  readonly viewReset: HTMLButtonElement
   readonly viewEsc: HTMLElement
+  readonly layoutBtn: HTMLButtonElement
   readonly stampCursor: HTMLImageElement
   readonly stampHint: HTMLElement
+  readonly brushCursor: HTMLElement
   readonly loading: HTMLElement
   readonly hint: HTMLElement
+  readonly cartouche: HTMLElement
+  /** Zoom-aware km scale bar next to the cartouche. */
+  readonly scaleBar: HTMLElement
+  readonly zoomCanvas: HTMLCanvasElement
+  readonly labelLayer: HTMLElement
 }
 
 export function mountMapShell(): MapShellRefs {
@@ -396,7 +537,13 @@ export function mountMapShell(): MapShellRefs {
     const detail: ViewChangeDetail = { view: 'planet' }
     fire(APP_EVENTS.VIEW_CHANGE, detail)
   })
-  const hud = el('div', { class: 'map-hud' }, viewAtlas, viewPlanet)
+  const viewReset = el(
+    'button',
+    { type: 'button', class: 'view-toggle', hidden: true, title: 'Reset atlas pan and zoom' },
+    'Reset view',
+  )
+  viewReset.addEventListener('click', () => fire(APP_EVENTS.RESET_ATLAS_VIEW))
+  const hud = el('div', { class: 'map-hud' }, viewAtlas, viewPlanet, viewReset)
   const layoutBtn = el(
     'button',
     {
@@ -414,32 +561,77 @@ export function mountMapShell(): MapShellRefs {
     fire(APP_EVENTS.LAYOUT_CHANGE, detail)
   })
   const viewEsc = el('div', { class: 'map-view-esc', hidden: true }, 'Esc to return')
+  // Zoom populating: HD window re-bake sits over the CSS-scaled base canvas;
+  // labelLayer carries town names and wonder marks that appear as you zoom.
+  const zoomCanvas = el('canvas', { class: 'map-zoom-canvas', 'aria-hidden': 'true', hidden: true }) as HTMLCanvasElement
+  const labelLayer = el('div', { class: 'map-labels', 'aria-hidden': 'true' })
   const stampCursor = el('img', {
     class: 'stamp-cursor',
     hidden: true,
     alt: '',
     draggable: 'false',
   }) as HTMLImageElement
-  const stampHint = el('div', { class: 'stamp-hint', hidden: true }, 'Empty sea until you drop · click the picture to shrink · Esc to cancel')
-  const loading = el('div', { class: 'loading', id: 'loading', hidden: true }, 'Grounding the doodle…')
+  const stampHint = el('div', { class: 'stamp-hint', hidden: true }, 'Drop anywhere on the map · click the picture to shrink · Esc to cancel')
+  const brushCursor = el('div', { class: 'brush-cursor', hidden: true, 'aria-hidden': 'true' })
+  const toolsSheetBtn = el('button', { type: 'button', class: 'sheet-dock-btn', 'data-sheet': 'tools' }, 'Tools')
+  const inspectSheetBtn = el('button', { type: 'button', class: 'sheet-dock-btn', 'data-sheet': 'inspect' }, 'Coach')
+  toolsSheetBtn.addEventListener('click', () => {
+    const detail: InspectorSheetDetail = { sheet: 'tools' }
+    fire(APP_EVENTS.TOGGLE_INSPECTOR, detail)
+  })
+  inspectSheetBtn.addEventListener('click', () => {
+    const detail: InspectorSheetDetail = { sheet: 'inspect' }
+    fire(APP_EVENTS.TOGGLE_INSPECTOR, detail)
+  })
+  const sheetDock = el('div', { class: 'sheet-dock', 'aria-label': 'Panels' }, toolsSheetBtn, inspectSheetBtn)
+  const loading = el(
+    'div',
+    { class: 'loading', id: 'loading', hidden: true },
+    el(
+      'div',
+      { class: 'loading-card' },
+      el('p', { class: 'loading-kicker' }, 'Make sense'),
+      el('p', { class: 'loading-title' }, 'Grounding the doodle…'),
+      el('p', { class: 'loading-note' }, 'Same continents. The geography is being invented.'),
+    ),
+  )
+  const cartouche = el(
+    'aside',
+    { class: 'map-cartouche', hidden: true, 'aria-label': 'World plate' },
+    el('p', { class: 'cartouche-kicker' }, 'Geoform'),
+    el('h2', { class: 'cartouche-title' }, 'Working sketch'),
+    el('dl', { class: 'cartouche-data' }),
+  )
+  const scaleBar = el(
+    'div',
+    { class: 'map-scale', hidden: true, 'aria-label': 'Map scale' },
+    el('div', { class: 'map-scale-rule' }),
+    el('span', { class: 'map-scale-label' }, ''),
+  )
   const hint = el(
     'div',
     { class: 'map-hint', id: 'mapHint' },
-    'Drag a picture onto the map. Click it to make it smaller.',
+    'Drag a picture onto the map. The continent follows. Click it to make it smaller.',
   )
+
+  const plateDock = el('div', { class: 'map-plate-dock' }, cartouche, scaleBar, layoutBtn)
 
   const root = el(
     'section',
     { class: 'map-shell' },
     canvas,
+    zoomCanvas,
+    labelLayer,
     globe,
     overlay,
     seasonBar,
     hud,
-    layoutBtn,
+    plateDock,
     viewEsc,
     stampCursor,
     stampHint,
+    brushCursor,
+    sheetDock,
     loading,
     hint,
   )
@@ -451,13 +643,41 @@ export function mountMapShell(): MapShellRefs {
     seasonBar,
     viewAtlas,
     viewPlanet,
+    viewReset,
     layoutBtn,
     viewEsc,
     stampCursor,
     stampHint,
+    brushCursor,
     loading,
     hint,
+    cartouche,
+    scaleBar,
+    zoomCanvas,
+    labelLayer,
   }
+}
+
+/**
+ * Pick a round kilometre length whose on-screen bar is ~80–120 px at the
+ * current zoom. Pure helper so shell can call it without remounting chrome.
+ */
+export function niceScaleKm(pxPerKm: number, targetPx = 96): { km: number; px: number } {
+  const candidates = [25, 50, 100, 200, 250, 500, 750, 1000, 1500, 2000, 5000, 10000]
+  let best = candidates[0]
+  let bestErr = Infinity
+  for (const km of candidates) {
+    const px = km * pxPerKm
+    if (px < 36 || px > 200) continue
+    const err = Math.abs(px - targetPx)
+    if (err < bestErr) {
+      bestErr = err
+      best = km
+    }
+  }
+  const px = best * pxPerKm
+  if (px < 28 || !Number.isFinite(px)) return { km: best, px: 48 }
+  return { km: best, px: Math.min(200, Math.max(36, px)) }
 }
 
 /** Atlas layers / inspector climate exist only after Make sense, never on Sketch. */
@@ -467,65 +687,87 @@ export function showingDerivedWorld(state: Pick<ShellStateView, 'world' | 'stage
 
 export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void {
   const derived = showingDerivedWorld(state)
-  refs.overlay.replaceChildren()
-  for (const chip of LAYER_CHIPS) {
-    const btn = el(
-      'button',
-      {
-        type: 'button',
-        class: 'chip' + (derived && state.layer === chip.id ? ' active' : ''),
-        'data-look': chip.id,
-        title: chip.title,
-        disabled: !derived,
-      },
-      chip.label,
-    )
-    btn.addEventListener('click', () => {
-      if (!derived) return
-      const detail: LayerChangeDetail = { layer: chip.id }
-      fire(APP_EVENTS.LAYER_CHANGE, detail)
-    })
-    refs.overlay.append(btn)
-  }
+  const hud = refs.viewAtlas.parentElement
+  if (hud) hud.hidden = !derived
+  refs.viewReset.hidden = true
 
-  if (derived && state.layer === 'biome' && state.world) {
-    const groups = groupedBiomeLegend(state.world.biome)
-    if (groups.length) {
-      const legend = el('div', { class: 'biome-legend', 'aria-label': 'Biome legend' })
-      for (const group of groups) {
-        const row = el('div', { class: 'biome-legend-group' }, el('span', {}, group.label))
-        for (const entry of group.entries) {
-          row.append(
-            el('span', {
-              class: 'biome-swatch',
-              title: entry.label,
-              style: `background:${entry.color}`,
-            }),
-          )
-        }
-        legend.append(row)
+  if (!derived) {
+    refs.overlay.replaceChildren()
+    refs.seasonBar.replaceChildren()
+    refs.scaleBar.hidden = true
+  } else {
+    const existing = refs.overlay.querySelectorAll<HTMLButtonElement>('[data-look]')
+    if (existing.length !== LAYER_CHIPS.length) {
+      refs.overlay.replaceChildren()
+      for (const chip of LAYER_CHIPS) {
+        const btn = el(
+          'button',
+          {
+            type: 'button',
+            class: 'chip' + (state.layer === chip.id ? ' active' : ''),
+            'data-look': chip.id,
+            title: chip.title,
+          },
+          chip.label,
+        )
+        btn.addEventListener('click', () => {
+          const detail: LayerChangeDetail = { layer: chip.id }
+          fire(APP_EVENTS.LAYER_CHANGE, detail)
+        })
+        refs.overlay.append(btn)
       }
-      refs.overlay.append(legend)
+    } else {
+      for (const btn of Array.from(existing)) {
+        btn.classList.toggle('active', btn.dataset.look === state.layer)
+      }
+      refs.overlay.querySelector('.biome-legend')?.remove()
+      refs.overlay.querySelector('.layer-caption')?.remove()
     }
-  }
 
-  refs.seasonBar.replaceChildren()
-  for (const season of ['summer', 'winter'] as const) {
-    const btn = el(
-      'button',
-      {
-        type: 'button',
-        class: 'chip' + (derived && state.season === season ? ' active' : ''),
-        disabled: !derived,
-      },
-      season === 'summer' ? 'Summer' : 'Winter',
-    )
-    btn.addEventListener('click', () => {
-      if (!derived) return
-      const detail: SeasonChangeDetail = { season }
-      fire(APP_EVENTS.SEASON_CHANGE, detail)
-    })
-    refs.seasonBar.append(btn)
+    const chip = LAYER_CHIPS.find((c) => c.id === state.layer)
+    if (chip) {
+      refs.overlay.append(el('p', { class: 'layer-caption' }, chip.caption))
+    }
+
+    if (state.layer === 'biome' && state.world) {
+      const groups = groupedBiomeLegend(state.world.biome)
+      if (groups.length) {
+        const legend = el('div', { class: 'biome-legend', 'aria-label': 'Biome legend' })
+        for (const group of groups) {
+          const row = el('div', { class: 'biome-legend-group' }, el('span', {}, group.label))
+          for (const entry of group.entries) {
+            row.append(
+              el('span', {
+                class: 'biome-swatch',
+                title: entry.label,
+                style: `background:${entry.color}`,
+              }),
+            )
+          }
+          legend.append(row)
+        }
+        refs.overlay.append(legend)
+      }
+    }
+
+    refs.seasonBar.replaceChildren()
+    if (SEASON_LAYERS.has(state.layer)) {
+      for (const season of ['summer', 'winter'] as const) {
+        const btn = el(
+          'button',
+          {
+            type: 'button',
+            class: 'chip' + (state.season === season ? ' active' : ''),
+          },
+          season === 'summer' ? 'Summer' : 'Winter',
+        )
+        btn.addEventListener('click', () => {
+          const detail: SeasonChangeDetail = { season }
+          fire(APP_EVENTS.SEASON_CHANGE, detail)
+        })
+        refs.seasonBar.append(btn)
+      }
+    }
   }
 
   refs.viewAtlas.classList.toggle('active', state.viewMode === 'atlas')
@@ -535,7 +777,7 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
   const canViewMap = state.makeSenseComplete && !state.isProcessing
   refs.layoutBtn.setAttribute('data-layout', state.layoutMode)
   refs.layoutBtn.textContent = 'View map'
-  refs.layoutBtn.hidden = viewing
+  refs.layoutBtn.hidden = viewing || !canViewMap
   refs.layoutBtn.disabled = !canViewMap
   refs.layoutBtn.title = canViewMap
     ? 'Full-screen map. Press Escape to return.'
@@ -544,8 +786,54 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
   refs.canvas.hidden = derived && state.viewMode === 'planet'
   refs.globe.hidden = !(derived && state.viewMode === 'planet')
   refs.loading.hidden = !state.isProcessing
+
+  // Cartouche — the atlas plate. Drafting facts on Sketch; the plate legend
+  // once the world is grounded. Hidden on empty ocean so first-run stays calm.
+  const landCells = landCellCount(state.mask, state.meta.threshold)
+  const totalCells = state.meta.width * state.meta.height
+  const landPct = totalCells > 0 ? Math.round((landCells / totalCells) * 100) : 0
+  const showCartouche = derived || landCells > 0
+  refs.cartouche.hidden = !showCartouche
+  if (showCartouche) {
+    const title = refs.cartouche.querySelector('.cartouche-title')
+    if (title) title.textContent = derived ? 'Grounded world' : 'Working sketch'
+    const cellKm = (2 * Math.PI * (state.meta.planetRadiusKm > 0 ? state.meta.planetRadiusKm : 6371)) / state.meta.width
+    const rows: [string, string][] = [['Land', `${landPct}%`]]
+    rows.push(['Cell', `≈${Math.round(cellKm)} km`])
+    if (derived) {
+      const chipNow = LAYER_CHIPS.find((c) => c.id === state.layer)
+      if (chipNow) {
+        rows.push([
+          'Layer',
+          SEASON_LAYERS.has(state.layer) ? `${chipNow.label} · ${state.season}` : chipNow.label,
+        ])
+      }
+      const countries = Array.isArray(state.world?.polities) ? state.world!.polities.length : null
+      const towns = Array.isArray(state.world?.cities) ? state.world!.cities.length : null
+      if (countries != null && towns != null && (countries > 0 || towns > 0)) {
+        rows.push(['Peopled', `${countries} ctry · ${towns} towns`])
+      }
+      rows.push(['Seed', String(state.meta.seed)])
+    } else {
+      rows.push(['Seed', String(state.meta.seed)])
+      rows.push(['Radius', `${state.meta.planetRadiusKm} km`])
+      rows.push(['Tilt', `${state.meta.obliquityDeg}°`])
+    }
+    const data = refs.cartouche.querySelector('.cartouche-data')
+    if (data) {
+      data.replaceChildren()
+      for (const [k, v] of rows) data.append(el('dt', {}, k), el('dd', {}, v))
+    }
+  }
+
   const empty = !hasAnyLand(state.mask, state.meta.threshold)
-  refs.hint.hidden = !empty || state.stage !== 'sketch'
+  const showEmptyHint =
+    state.stage === 'sketch' && empty && !state.hasSketchNotes && !isSketchNoteTool(state.tool)
+  refs.hint.hidden = !showEmptyHint
+  if (showEmptyHint) {
+    refs.hint.textContent =
+      'Drag a picture onto the map. The continent follows. Click it to make it smaller.'
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -560,21 +848,295 @@ export interface InspectorRefs {
   readonly status: HTMLElement
 }
 
+const COACH_TONES = ['coach-info', 'coach-success', 'coach-warn', 'coach-error'] as const
+const COACH_SIZE_KEY = 'geoform:coachSize:v1'
+const COACH_MIN_W = 240
+const COACH_MIN_H = 180
+
+function loadCoachSize(): { width: number; height: number } | null {
+  try {
+    const raw = localStorage.getItem(COACH_SIZE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { width?: unknown; height?: unknown }
+    const width = typeof parsed.width === 'number' ? parsed.width : NaN
+    const height = typeof parsed.height === 'number' ? parsed.height : NaN
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return null
+    return { width, height }
+  } catch {
+    return null
+  }
+}
+
+function saveCoachSize(width: number, height: number): void {
+  try {
+    localStorage.setItem(COACH_SIZE_KEY, JSON.stringify({ width, height }))
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function applyCoachSize(panel: HTMLElement, width: number, height: number): void {
+  const maxW = Math.max(COACH_MIN_W, window.innerWidth - 24)
+  const maxH = Math.max(COACH_MIN_H, window.innerHeight - 24)
+  const w = Math.min(maxW, Math.max(COACH_MIN_W, Math.round(width)))
+  const h = Math.min(maxH, Math.max(COACH_MIN_H, Math.round(height)))
+  panel.style.width = `${w}px`
+  panel.style.height = `${h}px`
+  panel.style.maxHeight = 'none'
+}
+
+/** Drag the left or bottom edge to resize; double-click an edge to reset. */
+function attachCoachResize(panel: HTMLElement): void {
+  const saved = loadCoachSize()
+  if (saved) applyCoachSize(panel, saved.width, saved.height)
+
+  const edge = el('button', {
+    type: 'button',
+    class: 'inspector-resize inspector-resize-x',
+    'aria-label': 'Resize coach width',
+    title: 'Drag to change width · double-click to reset',
+  })
+  const foot = el('button', {
+    type: 'button',
+    class: 'inspector-resize inspector-resize-y',
+    'aria-label': 'Resize coach height',
+    title: 'Drag to change height · double-click to reset',
+  })
+  const corner = el('button', {
+    type: 'button',
+    class: 'inspector-resize inspector-resize-xy',
+    'aria-label': 'Resize coach',
+    title: 'Drag to change size · double-click to reset',
+  })
+  panel.append(edge, foot, corner)
+
+  let mode: 'x' | 'y' | 'xy' | null = null
+  let pointerId: number | null = null
+  let startX = 0
+  let startY = 0
+  let startW = 0
+  let startH = 0
+  let startLeft = 0
+  let grab: HTMLElement | null = null
+
+  const onDown = (which: 'x' | 'y' | 'xy') => (e: PointerEvent) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    const r = panel.getBoundingClientRect()
+    mode = which
+    pointerId = e.pointerId
+    startX = e.clientX
+    startY = e.clientY
+    startW = r.width
+    startH = r.height
+    startLeft = r.left
+    grab = e.currentTarget as HTMLElement
+    panel.classList.add('is-resizing')
+    try {
+      grab.setPointerCapture(e.pointerId)
+    } catch {
+      /* jsdom / unsupported */
+    }
+  }
+
+  const onMove = (e: PointerEvent) => {
+    if (!mode || e.pointerId !== pointerId) return
+    const dx = e.clientX - startX
+    const dy = e.clientY - startY
+    const w = mode === 'y' ? startW : startW - dx
+    const h = mode === 'x' ? startH : startH + dy
+    applyCoachSize(panel, w, h)
+    if (panel.classList.contains('is-floating') && mode !== 'y') {
+      const applied = parseFloat(panel.style.width) || w
+      panel.style.left = `${startLeft + startW - applied}px`
+      panel.style.right = 'auto'
+    }
+  }
+
+  const onUp = (e: PointerEvent) => {
+    if (!mode || e.pointerId !== pointerId) return
+    mode = null
+    pointerId = null
+    panel.classList.remove('is-resizing')
+    if (grab) {
+      try {
+        grab.releasePointerCapture(e.pointerId)
+      } catch {
+        /* already released */
+      }
+    }
+    grab = null
+    const w = parseFloat(panel.style.width)
+    const h = parseFloat(panel.style.height)
+    if (Number.isFinite(w) && Number.isFinite(h)) saveCoachSize(w, h)
+  }
+
+  edge.addEventListener('pointerdown', onDown('x'))
+  foot.addEventListener('pointerdown', onDown('y'))
+  corner.addEventListener('pointerdown', onDown('xy'))
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+  window.addEventListener('pointercancel', onUp)
+
+  const reset = (e: Event) => {
+    e.preventDefault()
+    e.stopPropagation()
+    panel.style.width = ''
+    panel.style.height = ''
+    panel.style.maxHeight = ''
+    try {
+      localStorage.removeItem(COACH_SIZE_KEY)
+    } catch {
+      /* private mode */
+    }
+  }
+  for (const node of [edge, foot, corner]) node.addEventListener('dblclick', reset)
+}
+
+/** Drag the Coach panel; double-click the title or grip to dock it. */
+function attachCoachDrag(coach: HTMLElement, dock: HTMLElement, panel: HTMLElement): void {
+  void dock
+  const handle = el('button', {
+    type: 'button',
+    class: 'coach-handle',
+    'aria-label': 'Drag coach',
+    title: 'Drag to move · double-click to dock',
+  })
+  coach.prepend(handle)
+  const title = panel.querySelector('h2')
+  if (title) {
+    title.classList.add('coach-title-drag')
+    title.title = 'Drag to move · double-click to dock'
+  }
+
+  let floating = false
+  let dragging = false
+  let pointerId: number | null = null
+  let startX = 0
+  let startY = 0
+  let origLeft = 0
+  let origTop = 0
+  let grab: HTMLElement | null = null
+
+  const clamp = (left: number, top: number) => {
+    const pad = 8
+    const r = panel.getBoundingClientRect()
+    const maxL = Math.max(pad, window.innerWidth - r.width - pad)
+    const maxT = Math.max(pad, window.innerHeight - r.height - pad)
+    return {
+      left: Math.max(pad, Math.min(maxL, left)),
+      top: Math.max(pad, Math.min(maxT, top)),
+    }
+  }
+
+  const floatAt = (left: number, top: number) => {
+    if (!floating) {
+      const r = panel.getBoundingClientRect()
+      origLeft = r.left
+      origTop = r.top
+      panel.classList.add('is-floating')
+      floating = true
+    }
+    const p = clamp(left, top)
+    panel.style.left = `${p.left}px`
+    panel.style.right = 'auto'
+    panel.style.top = `${p.top}px`
+  }
+
+  const dockBack = () => {
+    if (!floating) return
+    panel.classList.remove('is-floating', 'is-dragging')
+    panel.style.left = ''
+    panel.style.right = ''
+    panel.style.top = ''
+    floating = false
+  }
+
+  const onDown = (e: PointerEvent) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    grab = e.currentTarget as HTMLElement
+    try {
+      grab.setPointerCapture(e.pointerId)
+    } catch {
+      /* jsdom / unsupported */
+    }
+    pointerId = e.pointerId
+    dragging = true
+    const r = panel.getBoundingClientRect()
+    startX = e.clientX
+    startY = e.clientY
+    origLeft = r.left
+    origTop = r.top
+    panel.classList.add('is-dragging')
+  }
+
+  const onMove = (e: PointerEvent) => {
+    if (!dragging || e.pointerId !== pointerId) return
+    const dx = e.clientX - startX
+    const dy = e.clientY - startY
+    if (!floating && Math.hypot(dx, dy) < 4) return
+    floatAt(origLeft + dx, origTop + dy)
+  }
+
+  const onUp = (e: PointerEvent) => {
+    if (!dragging || e.pointerId !== pointerId) return
+    dragging = false
+    pointerId = null
+    panel.classList.remove('is-dragging')
+    if (grab) {
+      try {
+        grab.releasePointerCapture(e.pointerId)
+      } catch {
+        /* already released */
+      }
+    }
+    grab = null
+  }
+
+  const onDbl = (e: Event) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dockBack()
+  }
+
+  const grips: HTMLElement[] = [handle]
+  if (title) grips.push(title)
+  for (const node of grips) {
+    node.addEventListener('pointerdown', onDown)
+    node.addEventListener('pointermove', onMove)
+    node.addEventListener('pointerup', onUp)
+    node.addEventListener('pointercancel', onUp)
+    node.addEventListener('dblclick', onDbl)
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+}
+
 export function mountInspector(): InspectorRefs {
-  const coach = el('div', { id: 'coach', class: 'coach-card', role: 'status', 'aria-live': 'polite' })
+  const coach = el('div', {
+    id: 'coach',
+    class: 'coach-card coach-info',
+    role: 'status',
+    'aria-live': 'polite',
+  })
   coach.append(
     el(
       'p',
       { class: 'coach-empty' },
-      'Empty ocean. Drag a picture onto the map, or paint land.',
+      'Drop a continent, or paint land.',
     ),
   )
+  const coachDock = el('div', { class: 'coach-dock' }, coach)
   const workHost = el('div', { id: 'stageWork', class: 'stage-work' })
   const inspect = el('div', { id: 'inspect' })
   inspect.append(
     el('p', { class: 'hint' }, 'Hover the map. After Make sense, this cell is real geography.'),
   )
   const status = el('div', { class: 'status', id: 'status' }, 'Empty ocean.')
+  const inspectHead = el('h2', { class: 'inspect-head-label' }, 'Inspector')
 
   window.addEventListener('coach:message', (ev) => {
     const detail = (ev as CustomEvent).detail as
@@ -582,37 +1144,59 @@ export function mountInspector(): InspectorRefs {
       | undefined
     const tone = detail?.tone ?? 'info'
     const text = detail?.message ?? detail?.text ?? ''
-    coach.className = `coach-card coach-${tone}`
-    coach.replaceChildren(el('p', { class: 'coach-body' }, text))
+    for (const t of COACH_TONES) coach.classList.remove(t)
+    coach.classList.add(`coach-${tone}`)
+    // Keep the grip; replace only the body copy.
+    const handle = coach.querySelector('.coach-handle')
+    coach.replaceChildren(handle ?? document.createDocumentFragment(), el('p', { class: 'coach-body' }, text))
   })
+
+  const inspectBlock = el('div', { class: 'inspect-block' }, inspectHead, inspect, status)
 
   const root = el(
     'aside',
     { class: 'panel inspector' },
     el('h2', {}, 'Coach'),
-    coach,
+    coachDock,
     workHost,
-    el('h2', {}, 'Inspector'),
-    inspect,
-    status,
+    inspectBlock,
   )
+  attachCoachDrag(coach, coachDock, root)
+  attachCoachResize(root)
   return { root, coach, workHost, inspect, status }
 }
 
 export function updateInspector(refs: InspectorRefs, state: ShellStateView): void {
   const derived = showingDerivedWorld(state)
-  if (state.inspectHtml) {
+  const inspectBlock = refs.root.querySelector('.inspect-block') as HTMLElement | null
+  const land = landCellCount(state.mask, state.meta.threshold)
+  const sketchReadout =
+    state.stage === 'sketch' &&
+    (land > 0 || state.hasSketchNotes || isSketchNoteTool(state.tool))
+  if (inspectBlock) inspectBlock.hidden = !(derived || sketchReadout)
+  if (
+    state.stage === 'sketch' &&
+    isSketchNoteTool(state.tool) &&
+    (!state.inspectHtml || state.inspectHtml.includes('Hover the map'))
+  ) {
+    refs.inspect.innerHTML = `<p class="hint">${decorateCoachCopy(state.tool)}</p>`
+  } else if (state.inspectHtml) {
     refs.inspect.innerHTML = state.inspectHtml
   }
-  const land = landCellCount(state.mask, state.meta.threshold)
   const total = state.meta.width * state.meta.height
   const pct = total > 0 ? Math.round((land / total) * 100) : 0
   if (derived) {
-    refs.status.textContent = `Grounded world · ${pct}% land · ${gradeFromScore(state.score)}`
-  } else if (land > 0) {
-    refs.status.textContent = `Sketch · ${land} land cells (${pct}%) · not geography yet`
+    refs.status.textContent = `Grounded world · ${pct}% land`
+    refs.status.hidden = false
+  } else if (sketchReadout) {
+    refs.status.textContent =
+      land > 0
+        ? `Sketch · ${land} land cells (${pct}%) · not geography yet`
+        : 'Sketch notes — not geography yet'
+    refs.status.hidden = false
   } else {
-    refs.status.textContent = `Empty ocean · ${state.meta.width}×${state.meta.height}`
+    refs.status.textContent = 'Empty ocean.'
+    refs.status.hidden = true
   }
 }
 
@@ -627,28 +1211,41 @@ export function landCellCount(mask: Float32Array | null, threshold: number): num
 // Left tools (per stage)
 // ---------------------------------------------------------------------------
 
-const SKETCH_TOOLS: readonly { id: Tool; label: string; desc: string }[] = [
-  { id: 'draw-land', label: 'Land', desc: 'Paint continent blobs' },
-  { id: 'erase-land', label: 'Ocean', desc: 'Erase land back to sea' },
-  { id: 'inspect', label: 'Inspect', desc: 'Read the cell under the cursor' },
+const SKETCH_LAND_TOOLS: readonly { id: Tool; label: string; glyph: string; desc: string; keys?: string }[] = [
+  { id: 'draw-land', label: 'Land', glyph: '●', desc: 'Paint continent blobs', keys: '1' },
+  { id: 'erase-land', label: 'Ocean', glyph: '≈', desc: 'Erase land back to sea', keys: '2' },
+  { id: 'fill-mask', label: 'Fill', glyph: '◌', desc: 'Flip a blob or a lake — not the open ocean', keys: '4' },
+]
+
+const SKETCH_NOTE_TOOLS: readonly { id: Tool; label: string; glyph: string; desc: string; keys?: string }[] = [
+  { id: 'draw-ridge', label: 'Mountain', glyph: '▲', desc: 'Paint a mountain range — a note, not metres', keys: '3' },
+  { id: 'mark-hills', label: 'Hills', glyph: '∩', desc: 'Paint rolling hills — a note, not metres', keys: '6' },
+  { id: 'mark-forest', label: 'Forest', glyph: '♣', desc: 'Paint forest cover — a note, not a biome', keys: '7' },
+  { id: 'erase-channel', label: 'River', glyph: '∿', desc: 'Paint a river — a note, not a river yet', keys: '5' },
+  { id: 'mark-swamp', label: 'Swamp', glyph: '≡', desc: 'Paint marsh — a note, not a biome', keys: '8' },
+  { id: 'mark-town', label: 'Town', glyph: '◉', desc: 'Paint a town — a note, not a settlement yet', keys: '9' },
+  { id: 'wipe-note', label: 'Wipe', glyph: '✕', desc: 'Erase notes. Land stays.', keys: '0' },
 ]
 
 const WORLDBUILD_TOOLS: readonly { id: Tool; label: string; desc: string }[] = [
   { id: 'place-city', label: 'Place city', desc: 'Found a settlement on suitable land' },
   { id: 'remove-city', label: 'Remove city', desc: 'Remove nearest settlement' },
   { id: 'claim-land', label: 'Paint border', desc: 'Claim land for the nearest country' },
+  { id: 'trace-route', label: 'Trace route', desc: 'Click two towns. Overlay picks caravan or sea lane' },
+  { id: 'cut-route', label: 'Cut route', desc: 'Remove the nearest caravan or sea lane' },
   { id: 'inspect', label: 'Inspect', desc: 'Read the cell under the cursor' },
 ]
 
 export interface ToolsRefs {
   readonly root: HTMLElement
   readonly stage: ShellStateView['stage']
+  readonly plane?: ShellStateView['sketchPlane']
 }
 
 export function mountStageTools(state: ShellStateView): ToolsRefs {
   switch (state.stage) {
     case 'sketch':
-      return { root: mountSketchTools(state), stage: 'sketch' }
+      return { root: mountSketchTools(state), stage: 'sketch', plane: state.sketchPlane }
     case 'critique':
       return { root: mountCritiqueTools(), stage: 'critique' }
     case 'make-sense':
@@ -658,25 +1255,37 @@ export function mountStageTools(state: ShellStateView): ToolsRefs {
   }
 }
 
-function mountSketchTools(state: ShellStateView): HTMLElement {
-  const toolGrid = el('div', { class: 'tool-grid' })
-  for (const tool of SKETCH_TOOLS) {
+function appendToolButtons(
+  grid: HTMLElement,
+  tools: readonly { id: Tool; label: string; glyph: string; desc: string; keys?: string }[],
+  active: Tool,
+): void {
+  for (const tool of tools) {
     const btn = el(
       'button',
       {
         type: 'button',
-        class: 'tool' + (state.tool === tool.id ? ' active' : ''),
+        class: 'tool tool-icon' + (active === tool.id ? ' active' : ''),
         'data-tool': tool.id,
+        title: tool.keys ? `${tool.desc} (${tool.keys})` : tool.desc,
+        'aria-label': tool.desc,
       },
+      el('span', { class: 'tool-glyph', 'aria-hidden': 'true' }, tool.glyph),
       tool.label,
-      el('small', {}, tool.desc),
     )
     btn.addEventListener('click', () => {
       const detail: ToolChangeDetail = { tool: tool.id }
       fire(APP_EVENTS.TOOL_CHANGE, detail)
     })
-    toolGrid.append(btn)
+    grid.append(btn)
   }
+}
+
+function mountSketchTools(state: ShellStateView): HTMLElement {
+  const landGrid = el('div', { class: 'tool-grid tool-grid-icons' })
+  appendToolButtons(landGrid, SKETCH_LAND_TOOLS, state.tool)
+  const decorateGrid = el('div', { class: 'tool-grid tool-grid-icons' })
+  appendToolButtons(decorateGrid, SKETCH_NOTE_TOOLS, state.tool)
 
   const brushVal = el('span', { id: 'brushVal' }, String(state.brushSize))
   const brushSlider = el('input', {
@@ -684,12 +1293,55 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
     min: 2,
     max: 48,
     value: state.brushSize,
+    title: 'Brush size. [ smaller, ] larger. Shift-drag a straight stroke.',
   }) as HTMLInputElement
   brushSlider.addEventListener('input', () => {
     const detail: BrushChangeDetail = { size: Number(brushSlider.value) }
     fire(APP_EVENTS.BRUSH_CHANGE, detail)
     brushVal.textContent = String(brushSlider.value)
   })
+
+  const strengthPct = Math.round(state.strength * 100)
+  const strengthVal = el('span', { id: 'strengthVal' }, `${strengthPct}%`)
+  const strengthSlider = el('input', {
+    type: 'range',
+    id: 'brushStrength',
+    min: 20,
+    max: 100,
+    step: 5,
+    value: strengthPct,
+    title: 'How hard the ink writes 0–1. Not metres.',
+  }) as HTMLInputElement
+  strengthSlider.addEventListener('input', () => {
+    const detail: StrengthChangeDetail = { strength: Number(strengthSlider.value) / 100 }
+    fire(APP_EVENTS.STRENGTH_CHANGE, detail)
+    strengthVal.textContent = `${strengthSlider.value}%`
+  })
+
+  const undoBtn = el(
+    'button',
+    {
+      type: 'button',
+      class: 'action-btn',
+      id: 'undoBtn',
+      title: 'Undo the last stroke (Ctrl/⌘ Z)',
+      disabled: !state.canUndo,
+    },
+    'Undo',
+  )
+  undoBtn.addEventListener('click', () => fire(APP_EVENTS.UNDO))
+  const redoBtn = el(
+    'button',
+    {
+      type: 'button',
+      class: 'action-btn',
+      id: 'redoBtn',
+      title: 'Redo (Ctrl/⌘ Shift Z)',
+      disabled: !state.canRedo,
+    },
+    'Redo',
+  )
+  redoBtn.addEventListener('click', () => fire(APP_EVENTS.REDO))
 
   const radiusVal = el('span', { id: 'planetRadiusVal' }, String(state.meta.planetRadiusKm))
   const radiusSlider = el('input', {
@@ -706,6 +1358,40 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
     radiusVal.textContent = String(radiusSlider.value)
   })
 
+  const tiltVal = el('span', { id: 'planetTiltVal' }, String(state.meta.obliquityDeg))
+  const tiltSlider = el('input', {
+    type: 'range',
+    id: 'planetTilt',
+    min: 0,
+    max: 45,
+    step: 0.5,
+    value: state.meta.obliquityDeg,
+    title: 'Axial tilt. 0 is no seasons. Earth is 23.5°.',
+  }) as HTMLInputElement
+  tiltSlider.addEventListener('input', () => {
+    const detail: MetaChangeDetail = { meta: { obliquityDeg: Number(tiltSlider.value) } }
+    fire(APP_EVENTS.META_CHANGE, detail)
+    tiltVal.textContent = String(tiltSlider.value)
+  })
+
+  const seedVal = el('span', { id: 'planetSeedVal' }, String(state.meta.seed))
+  const shuffleSeed = el(
+    'button',
+    {
+      type: 'button',
+      class: 'action-btn',
+      id: 'shuffleSeed',
+      title: 'Same doodle, different plates and climate after Make sense',
+    },
+    'Shuffle seed',
+  )
+  shuffleSeed.addEventListener('click', () => {
+    const seed = 1 + Math.floor(Math.random() * 999998)
+    const detail: MetaChangeDetail = { meta: { seed } }
+    fire(APP_EVENTS.META_CHANGE, detail)
+    seedVal.textContent = String(seed)
+  })
+
   const landformGrid = el('div', { class: 'style-grid', 'aria-label': 'Landform pictures. Drag onto the map.' })
   for (const opt of LANDFORM_OPTIONS) {
     const thumb = el('img', {
@@ -720,10 +1406,11 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
         type: 'button',
         class: 'style-chip',
         'data-landform': opt.id,
-        'aria-label': `Drag this shape onto the map`,
-        title: 'Drag onto empty ocean. Click the picture to shrink the same shape.',
+        'aria-label': `Drag ${opt.label} onto the map`,
+        title: `${opt.label}. ${opt.desc}. Drag onto the map — the land follows the pointer. Click the picture to shrink the same shape.`,
       },
       thumb,
+      el('span', { class: 'style-chip-label' }, opt.label),
     )
     let dragging = false
     const drag = (phase: LandformDragDetail['phase'], e: PointerEvent) => {
@@ -757,31 +1444,52 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
     landformGrid.append(btn)
   }
 
-  const critiqueBtn = el('button', { type: 'button', class: 'primary' }, 'Critique')
-  critiqueBtn.disabled = state.isProcessing || !hasAnyLand(state.mask, state.meta.threshold)
-  critiqueBtn.addEventListener('click', () => fire(APP_EVENTS.COMMIT_SKETCH))
-
+  const planet = el(
+    'details',
+    { class: 'planet-size' },
+    el('summary', {}, 'Planet size'),
+    el(
+      'div',
+      { class: 'slider-row' },
+      el('label', {}, 'Radius · ', radiusVal, ' km'),
+      radiusSlider,
+    ),
+    el(
+      'div',
+      { class: 'slider-row' },
+      el('label', {}, 'Tilt · ', tiltVal, '°'),
+      tiltSlider,
+    ),
+    el('p', { class: 'seed-row' }, el('span', {}, 'Seed · ', seedVal), shuffleSeed),
+    el(
+      'p',
+      { class: 'hint' },
+      'Radius sets how big a cell is. Tilt makes seasons. Shuffle seed keeps your land and invents a different neighbour.',
+    ),
+  )
+  const brushes = el(
+    'div',
+    {},
+    landGrid,
+    el('h3', {}, 'Decorate'),
+    el(
+      'p',
+      { class: 'hint' },
+      'Mountains, forest, rivers, towns — notes, not geography. Make sense still invents the planet.',
+    ),
+    decorateGrid,
+    el('div', { class: 'tool-row' }, undoBtn, redoBtn),
+    el('div', { class: 'slider-row' }, el('label', {}, 'Brush · ', brushVal), brushSlider),
+    el('div', { class: 'slider-row' }, el('label', {}, 'Ink · ', strengthVal), strengthSlider),
+  )
   return el(
     'div',
     { class: 'tools-inner' },
     el('h2', {}, 'Draw'),
-    toolGrid,
     el('h3', {}, 'Landforms'),
-    el('p', { class: 'hint' }, 'Drag a picture onto the map. Click the land to make it smaller.'),
     landformGrid,
-    el('div', { class: 'slider-row' }, el('label', {}, 'Brush · ', brushVal), brushSlider),
-    el(
-      'div',
-      { class: 'slider-row' },
-      el('label', {}, 'Planet radius · ', radiusVal, ' km'),
-      radiusSlider,
-    ),
-    el(
-      'p',
-      { class: 'hint' },
-      'Make sense derives mountains — do not paint them.',
-    ),
-    critiqueBtn,
+    brushes,
+    planet,
   )
 }
 
@@ -789,12 +1497,8 @@ function mountCritiqueTools(): HTMLElement {
   return el(
     'div',
     { class: 'tools-inner' },
-    el('h2', {}, 'Critique'),
-    el(
-      'p',
-      { class: 'hint' },
-      'This is what is wrong with the doodle. Overlays mark the cells. Make sense will ground the shape, not keep the geology you imagined.',
-    ),
+    el('h2', {}, 'Make sense'),
+    el('p', { class: 'hint' }, 'Ground the doodle from the Coach panel.'),
   )
 }
 
@@ -807,7 +1511,7 @@ function mountMakeSenseTools(state: ShellStateView): HTMLElement {
       'p',
       { class: 'hint' },
       state.makeSenseComplete
-        ? 'This atlas is the closest geographically honest planet to your sketch. Switch layers. Hover a cell.'
+        ? 'Same land, grounded. Switch layers. Hover a cell.'
         : 'Deriving plates, mountains, seasons, rivers, and biomes from the land you painted.',
     ),
   )
@@ -822,6 +1526,11 @@ function mountWorldbuildTools(state: ShellStateView): HTMLElement {
         type: 'button',
         class: 'tool' + (state.tool === tool.id ? ' active' : ''),
         'data-tool': tool.id,
+        title:
+          tool.id === 'claim-land' && state.viewMode === 'planet'
+            ? 'Paint borders on the atlas'
+            : tool.desc,
+        disabled: tool.id === 'claim-land' && state.viewMode === 'planet',
       },
       tool.label,
       el('small', {}, tool.desc),
@@ -850,8 +1559,8 @@ function mountWorldbuildTools(state: ShellStateView): HTMLElement {
 
   const overlays: readonly { id: ShellStateView['worldOverlay']; label: string; title: string }[] = [
     { id: 'countries', label: 'Countries', title: 'Borders grown from seats of power' },
-    { id: 'caravans', label: 'Caravans', title: 'Overland trade, width is volume' },
-    { id: 'sea-lanes', label: 'Sea lanes', title: 'Port-to-port sea trade' },
+    { id: 'caravans', label: 'Caravans', title: 'Overland travel and trade. Width is cargo volume.' },
+    { id: 'sea-lanes', label: 'Sea lanes', title: 'Port-to-port travel. Width is cargo volume.' },
   ]
   const overlayRow = el('div', { class: 'overlay-row', 'aria-label': 'Worldbuild overlay' })
   for (const o of overlays) {
@@ -884,7 +1593,7 @@ function mountWorldbuildTools(state: ShellStateView): HTMLElement {
     el(
       'p',
       { class: 'hint' },
-      'Drag the slider to split the land. Overlay is one message: countries, caravans, or sea lanes. Trade ink is surplus and path cost, not GDP. Paint a border to claim. Click a capital to read if it is a melting pot.',
+      'Drag the slider to split the land. Overlay is one message: countries, caravans, or sea lanes. Trace a route between two towns. Width is surplus and path cost, not GDP. Rename countries and towns in Coach.',
     ),
     backBtn,
   )
@@ -894,21 +1603,36 @@ export function updateStageTools(refs: ToolsRefs, state: ShellStateView): void {
   if (refs.stage !== state.stage) return
   for (const btn of Array.from(refs.root.querySelectorAll<HTMLButtonElement>('[data-tool]'))) {
     btn.classList.toggle('active', btn.dataset.tool === state.tool)
+    if (btn.dataset.tool === 'claim-land' || btn.dataset.tool === 'trace-route' || btn.dataset.tool === 'cut-route') {
+      btn.disabled = state.viewMode === 'planet'
+      if (state.viewMode === 'planet') btn.title = 'Use the atlas for routes and borders'
+    }
   }
   const brushVal = refs.root.querySelector('#brushVal')
   if (brushVal) brushVal.textContent = String(state.brushSize)
+  const strengthVal = refs.root.querySelector('#strengthVal')
+  if (strengthVal) strengthVal.textContent = `${Math.round(state.strength * 100)}%`
+  const strengthSlider = refs.root.querySelector('#brushStrength') as HTMLInputElement | null
+  if (strengthSlider) strengthSlider.value = String(Math.round(state.strength * 100))
+  const undoBtn = refs.root.querySelector('#undoBtn') as HTMLButtonElement | null
+  if (undoBtn) undoBtn.disabled = !state.canUndo
+  const redoBtn = refs.root.querySelector('#redoBtn') as HTMLButtonElement | null
+  if (redoBtn) redoBtn.disabled = !state.canRedo
   const radiusVal = refs.root.querySelector('#planetRadiusVal')
   if (radiusVal) radiusVal.textContent = String(state.meta.planetRadiusKm)
-  const critiqueBtn = Array.from(refs.root.querySelectorAll('button')).find((b) => b.textContent === 'Critique')
-  if (critiqueBtn) {
-    critiqueBtn.disabled = state.isProcessing || !hasAnyLand(state.mask, state.meta.threshold)
-  }
+  const tiltVal = refs.root.querySelector('#planetTiltVal')
+  if (tiltVal) tiltVal.textContent = String(state.meta.obliquityDeg)
+  const seedVal = refs.root.querySelector('#planetSeedVal')
+  if (seedVal) seedVal.textContent = String(state.meta.seed)
   const polityVal = refs.root.querySelector('#polityCountVal')
   if (polityVal) polityVal.textContent = String(state.polityCount)
   const politySlider = refs.root.querySelector('#polityCount') as HTMLInputElement | null
   if (politySlider) politySlider.value = String(state.polityCount)
   for (const btn of Array.from(refs.root.querySelectorAll<HTMLButtonElement>('[data-overlay]'))) {
     btn.classList.toggle('active', btn.dataset.overlay === state.worldOverlay)
+  }
+  for (const btn of Array.from(refs.root.querySelectorAll<HTMLButtonElement>('[data-sketch-plane]'))) {
+    btn.classList.toggle('active', btn.dataset.sketchPlane === state.sketchPlane)
   }
 }
 
@@ -919,13 +1643,8 @@ export function updateStageTools(refs: ToolsRefs, state: ShellStateView): void {
 export function mountStageWork(state: ShellStateView): HTMLElement {
   switch (state.stage) {
     case 'sketch':
-      return el(
-        'div',
-        {},
-        el('p', { class: 'hint' }, 'Drag a picture onto the map. Click the land to shrink it. Critique when the coast looks right.'),
-      )
     case 'critique':
-      return mountCritiqueWork(state)
+      return mountSketchAdvance(state)
     case 'make-sense':
       return mountMakeSenseWork(state)
     case 'worldbuild':
@@ -933,37 +1652,29 @@ export function mountStageWork(state: ShellStateView): HTMLElement {
   }
 }
 
-function mountCritiqueWork(state: ShellStateView): HTMLElement {
-  const grade = gradeFromScore(state.score)
-  const scoreEl = el('div', { class: 'score' }, grade)
-  const caption = el('p', { class: 'score-caption' }, gradeCaption(grade))
-  const issueList = el('ul', { class: 'issue-list' })
-  renderIssues(issueList, state.issues)
-  const makeSenseBtn = el('button', { type: 'button', class: 'primary' }, 'Make sense')
-  makeSenseBtn.disabled = state.isProcessing || !state.maskCommitted
+function mountSketchAdvance(state: ShellStateView): HTMLElement {
+  const makeSenseBtn = el('button', { type: 'button', class: 'primary', id: 'makeSenseBtn' }, 'Make sense')
+  const can = hasAnyLand(state.mask, state.meta.threshold) && !state.isProcessing
+  makeSenseBtn.disabled = !can
+  makeSenseBtn.title = can ? 'Ground the doodle. Same continents, invented geography.' : 'Paint some land first'
   makeSenseBtn.addEventListener('click', () => fire(APP_EVENTS.MAKE_SENSE))
-  return el(
-    'div',
-    {},
-    el('h3', {}, 'Grade'),
-    scoreEl,
-    caption,
-    el('h3', {}, 'Issues'),
-    issueList,
-    makeSenseBtn,
-  )
+  return el('div', {}, makeSenseBtn)
 }
 
 function mountMakeSenseWork(state: ShellStateView): HTMLElement {
-  const progressList = el('ol', { class: 'progress-list' })
-  renderProgress(progressList, state.pipelineStep)
   const worldbuildBtn = el('button', { type: 'button', class: 'primary' }, 'Worldbuild')
   worldbuildBtn.disabled = !state.makeSenseComplete || state.isProcessing
   worldbuildBtn.addEventListener('click', () => fire(APP_EVENTS.WORLDBUILD))
-  return el('div', {}, el('h3', {}, 'Pipeline'), progressList, worldbuildBtn)
+  const cancelBtn = el('button', { type: 'button', class: 'action-btn' }, 'Cancel')
+  cancelBtn.hidden = !state.isProcessing
+  cancelBtn.addEventListener('click', () => fire(APP_EVENTS.CANCEL_MAKE_SENSE))
+  return el('div', {}, cancelBtn, worldbuildBtn)
 }
 
 function cityListBlurb(city: City, state: ShellStateView): string {
+  // Compact on purpose: the country card already carries the landscape
+  // analog, and the map carries the location — repeating them here was
+  // pure noise in a narrow column.
   const bits: string[] = []
   if (city.role) bits.push(SETTLEMENT_ROLE_LABEL[city.role])
   if (city.port && city.port !== 'none') {
@@ -976,9 +1687,7 @@ function cityListBlurb(city: City, state: ShellStateView): string {
   if (city.role === 'seat_of_power' && city.meltingPot !== undefined) {
     bits.push(city.meltingPot >= 0.55 ? 'melting pot' : 'provincial')
   }
-  const polity = state.world?.polities.find((p) => p.id === city.polityId)
-  if (polity) bits.push(polity.analog.label)
-  bits.push(`${city.x}, ${city.y}`)
+  void state
   return bits.join(' · ')
 }
 
@@ -987,72 +1696,134 @@ function mountWorldbuildWork(state: ShellStateView): HTMLElement {
   const list = el('ul', { class: 'city-list' })
   if (state.world) {
     for (const p of state.world.polities) {
+      const country = el('input', {
+        type: 'text',
+        class: 'place-name',
+        value: p.name,
+        maxlength: 40,
+        'aria-label': 'Country name',
+        title: 'The state. Independent of the people who live there.',
+      }) as HTMLInputElement
+      country.addEventListener('change', () => {
+        const detail: RenamePlaceDetail = { kind: 'polity', id: p.id, name: country.value }
+        fire(APP_EVENTS.RENAME_PLACE, detail)
+      })
+      const people = el('input', {
+        type: 'text',
+        class: 'place-name place-name-people',
+        value: p.tradition,
+        maxlength: 60,
+        'aria-label': 'People name',
+        title: 'Who names this country. Landscape analog stays climate, not an ethnicity.',
+      }) as HTMLInputElement
+      people.addEventListener('change', () => {
+        const detail: RenamePlaceDetail = { kind: 'people', id: p.id, name: people.value }
+        fire(APP_EVENTS.RENAME_PLACE, detail)
+      })
+      const sells = p.exports.map((g) => TRADE_GOOD_LABEL[g]).join(', ') || 'little surplus'
+      const wants = p.imports.map((g) => TRADE_GOOD_LABEL[g]).join(', ') || 'little want'
       list.append(
         el(
           'li',
-          {},
-          el('span', {}, p.name),
-          el('span', {}, `${p.analog.label}. ${economyLine(p)} ${meltingPotLabel(p.meltingPot)}`),
+          { class: 'country-block' },
+          el('div', { class: 'place-fields' },
+            el('label', {}, 'Country', country),
+            el('label', {}, 'People', people),
+          ),
+          el(
+            'div',
+            { class: 'polity-dossier' },
+            el('span', { class: 'dossier-chip dossier-land' }, p.analog.label),
+            el('span', { class: 'dossier-chip' }, `Sells ${sells}`),
+            el('span', { class: 'dossier-chip' }, `Wants ${wants}`),
+          ),
         ),
       )
     }
+    list.append(el('li', { class: 'route-head' }, 'Towns'))
     for (const city of state.world.cities) {
-      if (city.role === 'seat_of_power') continue
+      const name = el('input', {
+        type: 'text',
+        class: 'place-name',
+        value: city.name,
+        maxlength: 40,
+        'aria-label': 'Town name',
+        title: 'Rename this town. Auto-placed towns are a first guess.',
+      }) as HTMLInputElement
+      name.addEventListener('change', () => {
+        const detail: RenamePlaceDetail = { kind: 'city', x: city.x, y: city.y, name: name.value }
+        fire(APP_EVENTS.RENAME_PLACE, detail)
+      })
       list.append(
         el(
           'li',
           {},
-          el('span', {}, city.name),
+          name,
           el('span', {}, cityListBlurb(city, state)),
         ),
       )
     }
   }
   if (n === 0) list.append(el('li', {}, 'No cities yet — land may be too harsh to settle.'))
+  if (state.world) {
+    const wonders = wondersFor(state.world)
+    if (wonders.length > 0) {
+      list.append(el('li', { class: 'route-head' }, 'Natural wonders'))
+      for (const w of wonders) {
+        const goBtn = el(
+          'button',
+          { type: 'button', class: 'wonder-goto', title: 'Zoom the atlas to this wonder' },
+          w.name,
+        )
+        goBtn.addEventListener('click', () => {
+          const detail: GotoCellDetail = { x: w.x, y: w.y }
+          fire(APP_EVENTS.GOTO_CELL, detail)
+        })
+        list.append(
+          el(
+            'li',
+            { class: 'wonder-line' },
+            goBtn,
+            el('span', { class: 'wonder-blurb' }, `${w.blurb} ${w.futures}`),
+            el('span', { class: 'wonder-earth' }, `On Earth: ${w.earthCousin}`),
+          ),
+        )
+      }
+    }
+  }
+  const kind = tradeKindForOverlay(state.worldOverlay)
+  if (kind && state.world) {
+    const routes = state.world.routes.filter((r) => r.kind === kind && r.path.length >= 2)
+    if (routes.length) {
+      list.append(el('li', { class: 'route-head' }, kind === 'sea' ? 'Sea lanes' : 'Caravans'))
+      const ranked = [...routes].sort((a, b) => b.volume - a.volume).slice(0, 8)
+      for (const r of ranked) {
+        list.append(el('li', { class: 'route-line' }, routeCaption(state.world, r)))
+      }
+    } else {
+      list.append(
+        el(
+          'li',
+          { class: 'route-line' },
+          kind === 'sea'
+            ? 'No sea lanes yet — Trace route between two ports, or found a coastal town.'
+            : 'No caravans yet — Trace route between two towns.',
+        ),
+      )
+    }
+  }
   const countries = state.world?.polities.length ?? 0
   return el(
     'div',
     {},
     el('p', { class: 'cities-count' }, `Countries: ${countries} · Towns: ${n}`),
+    el(
+      'p',
+      { class: 'hint' },
+      'Towns are a first guess — rename, found, or remove. Country is the state. People is who names it. Landscape is climate, not an ethnicity.',
+    ),
     list,
   )
-}
-
-function renderIssues(
-  list: HTMLElement,
-  issues: readonly { id: string; severity: string; title: string; critique?: string }[],
-): void {
-  list.innerHTML = ''
-  if (issues.length === 0) {
-    list.append(el('li', { class: 'issue-empty' }, 'No land/water issues. This is still not a geography grade — run Make sense.'))
-    return
-  }
-  for (const issue of issues) {
-    list.append(
-      el(
-        'li',
-        { class: `issue issue-${issue.severity}` },
-        el('span', { class: 'issue-title' }, issue.title),
-        issue.critique
-          ? el('span', { class: 'issue-critique' }, issue.critique)
-          : '',
-        el('span', { class: 'issue-id' }, issue.id),
-      ),
-    )
-  }
-}
-
-function renderProgress(list: HTMLElement, completedCount: number): void {
-  list.innerHTML = ''
-  MAKE_SENSE_STEPS.forEach((step, idx) => {
-    const cls =
-      idx < completedCount
-        ? 'progress-step done'
-        : idx === completedCount
-          ? 'progress-step active'
-          : 'progress-step'
-    list.append(el('li', { class: cls }, `${idx + 1}. ${step}`))
-  })
 }
 
 // ---------------------------------------------------------------------------
@@ -1069,13 +1840,17 @@ export function sketchInspectHtml(
   x: number,
   y: number,
   land: boolean,
+  mark?: string | null,
 ): string {
+  const note = mark
+    ? `<p class="hint">${mark.charAt(0).toUpperCase()}${mark.slice(1)} note — you placed this. Make sense still invents the geography.</p>`
+    : `<p class="hint">Sketch only — elevation and climate do not exist until Make sense.</p>`
   return `
     <div class="inspect-head">
       <strong>${x}, ${y}</strong>
       <span class="pill ${land ? 'land' : 'sea'}">${land ? 'Land' : 'Ocean'}</span>
     </div>
-    <p class="hint">Sketch only — elevation and climate do not exist until Make sense.</p>
+    ${note}
   `
 }
 
@@ -1090,6 +1865,7 @@ export function worldInspectHtml(
     moistWinter: string
     biome: string
     ocean?: string
+    settle?: string
   },
   x: number,
   y: number,
@@ -1097,40 +1873,97 @@ export function worldInspectHtml(
   lore?: {
     polity?: string
     analog?: string
+    analogId?: import('../world/types').PlaceAnalogId
     because?: string
     tradition?: string
     economy?: string
     mix?: string
+    route?: string
+    /** Town dossier headline, e.g. "Harbour — sea port, market town". */
+    town?: string
+    /** Population band, e.g. "≈12,000 people". */
+    townPeople?: string
+    /** Trade partners line, e.g. "Trades with Seat, Fisherton". */
+    townPartners?: string
+    /** A natural wonder at this cell. */
+    wonder?: string
+    /** Real Earth place that formed the same way. */
+    wonderEarth?: string
   },
+  layer: Layer = 'relief',
 ): string {
   const oceanRow =
     !land && display.ocean && display.ocean !== '—'
-      ? `
-      <dt>Ocean</dt><dd>${display.ocean}</dd>`
+      ? `<dt>Ocean</dt><dd>${display.ocean}</dd>`
       : ''
-  const loreRows = lore
-    ? `${lore.polity ? `<dt>Country</dt><dd>${lore.polity}</dd>` : ''}
-      ${lore.analog ? `<dt>Feels like</dt><dd>${lore.analog}</dd>` : ''}
-      ${lore.because ? `<dt>Why</dt><dd>${lore.because}</dd>` : ''}
-      ${lore.tradition ? `<dt>People</dt><dd>${lore.tradition}</dd>` : ''}
-      ${lore.economy ? `<dt>Trade</dt><dd>${lore.economy}</dd>` : ''}
-      ${lore.mix ? `<dt>Capital</dt><dd>${lore.mix}</dd>` : ''}`
+  const still =
+    land && lore?.analogId
+      ? `<figure class="analog-still">
+          <img src="${analogStillDataUri(lore.analogId)}" alt="" width="160" height="72"/>
+          <figcaption>${lore.analog ?? ''}. ${ANALOG_STILL_CAPTION}</figcaption>
+        </figure>`
+      : ''
+  const lead: [string, string][] =
+    layer === 'temperature'
+      ? [
+          ['Summer', display.tempSummer],
+          ['Winter', display.tempWinter],
+          ['Range', display.tempRange],
+        ]
+      : layer === 'moisture'
+        ? [
+            ['Summer moisture', display.moistSummer],
+            ['Winter moisture', display.moistWinter],
+          ]
+        : layer === 'plates'
+          ? [['Plate', display.plateId]]
+          : layer === 'suitability'
+            ? [['Settle', display.settle ?? '—']]
+            : layer === 'biome'
+              ? [['Biome', display.biome]]
+              : [['Elevation', display.elev]]
+
+  const loreRows = [
+    lore?.polity ? `<dt>Country</dt><dd>${lore.polity}</dd>` : '',
+    lore?.tradition ? `<dt>People</dt><dd>${lore.tradition}</dd>` : '',
+    lore?.economy ? `<dt>Trade</dt><dd>${lore.economy}</dd>` : '',
+    lore?.mix ? `<dt>Capital</dt><dd>${lore.mix}</dd>` : '',
+  ].join('')
+
+  const moistNote =
+    layer === 'moisture' ? `<p class="layer-gloss">0 dry, 1 wet; not millimetres.</p>` : ''
+  const leadDl = lead.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')
+  const analogLine = lore?.analog
+    ? `<p class="analog-line"><strong>Feels like</strong> ${lore.analog}${lore.because ? ` — ${lore.because}` : ''}</p>`
     : ''
+  const routeLine = lore?.route ? `<p class="route-line"><strong>${lore.route}</strong></p>` : ''
+  const townBlock = lore?.town
+    ? `<div class="town-dossier">
+        <p class="town-head"><strong>${lore.town}</strong></p>
+        ${lore.townPeople ? `<p class="town-line">${lore.townPeople}</p>` : ''}
+        ${lore.townPartners ? `<p class="town-line">${lore.townPartners}</p>` : ''}
+      </div>`
+    : ''
+  const wonderLine = lore?.wonder
+    ? `<p class="wonder-inspect"><span class="wonder-mark">✦</span> ${lore.wonder}</p>`
+    : ''
+  const wonderEarth = lore?.wonderEarth
+    ? `<p class="wonder-earth">On Earth this is ${lore.wonderEarth}.</p>`
+    : ''
+
   return `
     <div class="inspect-head">
       <strong>${x}, ${y}</strong>
       <span class="pill ${land ? 'land' : 'sea'}">${land ? 'Land' : 'Ocean'}</span>
     </div>
-    <dl>
-      <dt>Elevation</dt><dd>${display.elev}</dd>
-      <dt>Plate</dt><dd>${display.plateId}</dd>
-      <dt>Summer</dt><dd>${display.tempSummer}</dd>
-      <dt>Winter</dt><dd>${display.tempWinter}</dd>
-      <dt>Range</dt><dd>${display.tempRange}</dd>
-      <dt>Summer moisture</dt><dd>${display.moistSummer}</dd>
-      <dt>Winter moisture</dt><dd>${display.moistWinter}</dd>
-      <dt>Biome</dt><dd>${display.biome}</dd>${oceanRow}${loreRows}
-    </dl>
+    ${still}
+    ${townBlock}
+    ${wonderLine}
+    ${wonderEarth}
+    ${routeLine}
+    ${analogLine}
+    ${moistNote}
+    <dl>${leadDl}${oceanRow}${loreRows}</dl>
   `
 }
 

@@ -16,7 +16,7 @@ if (typeof (globalThis as { ImageData?: unknown }).ImageData === 'undefined') {
 }
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { DEFAULT_META } from '../world/types'
+import { DEFAULT_META, groupedBiomeLegend } from '../world/types'
 import {
   atlasBakeWidth,
   atlasSketchBakeCount,
@@ -24,11 +24,11 @@ import {
   createIdleBakeScheduler,
   LAYER_CHIPS,
   paintAtlas,
+  paintSketchNotesOnAtlas,
   resetAtlasSketchBakeCache,
   sizeCanvas,
   SKETCH_HD_IDLE_MS,
 } from './atlas'
-import { groupedBiomeLegend } from '../world/types'
 
 const TINY_META = { ...DEFAULT_META, width: 8, height: 4, seed: 7, threshold: 0.5 }
 
@@ -183,6 +183,27 @@ describe('sketch bake cache', () => {
     paintAtlas(canvas, { ...base, preview: false })
     expect(atlasSketchBakeCount()).toBe(2)
   })
+
+  it('bakes doodle notes through the cache without losing raster reuse', () => {
+    const canvas = stubPaintCanvas()
+    const mask = new Float32Array(TINY_META.width * TINY_META.height)
+    mask[10] = 1
+    const marks = new Uint8Array(TINY_META.width * TINY_META.height)
+    marks[10] = 1
+    const opts = {
+      world: null,
+      mask,
+      meta: TINY_META,
+      layer: 'relief' as const,
+      season: 'summer' as const,
+      preview: true,
+      sketchEpoch: 4,
+      marks,
+    }
+    paintAtlas(canvas, opts)
+    paintAtlas(canvas, opts)
+    expect(atlasSketchBakeCount()).toBe(1)
+  })
 })
 
 describe('createIdleBakeScheduler', () => {
@@ -232,6 +253,13 @@ describe('createIdleBakeScheduler', () => {
   })
 })
 
+describe('sketch notes vs grounded atlas', () => {
+  it('keeps doodle ticks off the derived world', () => {
+    expect(paintSketchNotesOnAtlas(null)).toBe(true)
+    expect(paintSketchNotesOnAtlas({} as import('../world/types').World)).toBe(false)
+  })
+})
+
 describe('LAYER_CHIPS', () => {
   it('states one message per layer so chips do not hide climate under prettier green', () => {
     expect(LAYER_CHIPS.map((c) => c.id)).toEqual([
@@ -245,6 +273,7 @@ describe('LAYER_CHIPS', () => {
     ])
     for (const chip of LAYER_CHIPS) {
       expect(chip.title.length).toBeGreaterThan(8)
+      expect(chip.caption.length).toBeGreaterThan(8)
     }
     expect(LAYER_CHIPS.find((c) => c.id === 'temperature')?.title).toMatch(/temperature/i)
     expect(LAYER_CHIPS.find((c) => c.id === 'elevation')?.title).toMatch(/metres/i)

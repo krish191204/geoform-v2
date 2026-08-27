@@ -155,7 +155,7 @@ export class PlanetView {
     const bakeScale = Math.max(2, Math.round(texW / width))
     this.colorTex = imageDataToTexture(
       bakeWorldImageDataSmooth(world, season, layer, texW, {
-        showRivers: layer === 'relief' || layer === 'biome',
+        showRivers: layer === 'relief',
         bakeCities: true,
         vignette: false,
       }),

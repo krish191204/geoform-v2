@@ -13,6 +13,8 @@
 
 import type { World, Issue } from '../world/types'
 import { idx } from '../world/types'
+import { latRad } from '../pipeline/helpers'
+import { rowWindDir } from '../pipeline/seasonalClimate'
 
 // ---------------------------------------------------------------------------
 // 1. Severity weights and score aggregation.
@@ -202,14 +204,16 @@ export function checkIceDesertDualism(world: World): Issue[] {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Rain-shadow check: prevailing west wind, windward must be wetter.
+// 5. Rain-shadow check: windward (upwind, per latitude band) must be wetter.
 // ---------------------------------------------------------------------------
 
 /**
- * Heuristic: assume west-to-east prevailing wind. For every row, locate
- * ridge candidates (cells visibly higher than both their upwind and
- * downwind neighbours). Compare moistMean upwind vs. leeward. Any ridge
- * with windward.mean < lee.mean is reported.
+ * Winds are latitude-banded (trade easterlies below 30°, westerlies
+ * 30°–60°, polar easterlies above 60°), so each row has its own upwind
+ * direction. For every row, locate ridge candidates (cells visibly
+ * higher than both their upwind and downwind neighbours). Compare
+ * moistMean upwind vs. leeward. Any ridge with windward.mean <
+ * lee.mean is reported.
  */
 export function checkRainShadow(world: World): Issue[] {
   const { elev, moistMean } = world
@@ -221,27 +225,28 @@ export function checkRainShadow(world: World): Issue[] {
   let violationCount = 0
 
   for (let y = 1; y < h - 1; y++) {
+    const dir = rowWindDir(latRad(y, h))
     for (let x = 4; x < w - 4; x++) {
       const i = idx(w, x, y)
       if (elev[i] < seaLevel + 0.15) continue // only consider real ridges
-      const westE = elev[idx(w, x - 4, y)]
-      const eastE = elev[idx(w, x + 4, y)]
-      if (elev[i] < westE + 0.15 || elev[i] < eastE + 0.15) continue // not a local high
+      const upE = elev[idx(w, x - dir * 4, y)]
+      const downE = elev[idx(w, x + dir * 4, y)]
+      if (elev[i] < upE + 0.15 || elev[i] < downE + 0.15) continue // not a local high
 
-      // Windward slice: x-4..x-1. Lee slice: x+1..x+4. Land only.
+      // Windward slice: 4 cells upwind. Lee slice: 4 cells downwind. Land only.
       let wSum = 0
       let wN = 0
       let eSum = 0
       let eN = 0
-      for (let dx = -4; dx <= -1; dx++) {
-        const j = idx(w, x + dx, y)
+      for (let d = 1; d <= 4; d++) {
+        const j = idx(w, x - dir * d, y)
         if (elev[j] >= seaLevel) {
           wSum += moistMean[j]
           wN++
         }
       }
-      for (let dx = 1; dx <= 4; dx++) {
-        const j = idx(w, x + dx, y)
+      for (let d = 1; d <= 4; d++) {
+        const j = idx(w, x + dir * d, y)
         if (elev[j] >= seaLevel) {
           eSum += moistMean[j]
           eN++
@@ -266,9 +271,9 @@ export function checkRainShadow(world: World): Issue[] {
       severity: 'minor',
       title: 'Rain shadow flipped',
       critique: `${violationCount} ridge${violationCount === 1 ? '' : 's'} ` +
-        `${violationCount === 1 ? 'has' : 'have'} a drier windward (west) ` +
-        `face than lee. With prevailing west wind, upwind flanks should be ` +
-        `wetter.`,
+        `${violationCount === 1 ? 'has' : 'have'} a drier windward (upwind) ` +
+        `face than lee for ${violationCount === 1 ? 'its' : 'their'} latitude ` +
+        `band. Upwind flanks should be wetter.`,
       fix: 'Moisten upwind slopes, dry the lee, or change prevailing wind.',
       evidence,
     })

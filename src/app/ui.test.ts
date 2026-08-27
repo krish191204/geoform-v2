@@ -10,11 +10,14 @@ import {
   mountInspector,
   mountMapShell,
   mountStageTools,
+  mountStageWork,
+  niceScaleKm,
   showingDerivedWorld,
   updateChrome,
   updateInspector,
   updateMapShell,
 } from './ui'
+import { paintModeForTool } from './stages'
 import { mountApp } from './shell'
 
 function view(over: Partial<ShellStateView> = {}): ShellStateView {
@@ -41,28 +44,35 @@ function view(over: Partial<ShellStateView> = {}): ShellStateView {
     continentCount: 4,
     polityCount: 4,
     worldOverlay: 'countries',
+    canUndo: false,
+    canRedo: false,
+    sketchPlane: 'land',
+    hasSketchNotes: false,
     ...over,
   }
 }
 
 describe('updateChrome aria-current', () => {
-  it('marks only the active stage as current', () => {
+  it('marks only the active writer stage as current and skips Critique', () => {
     const chrome = mountChrome()
-    updateChrome(chrome, view({ stage: 'critique', maskCommitted: true }))
-    expect(chrome.stageButtons.critique.getAttribute('aria-current')).toBe('step')
-    expect(chrome.stageButtons.sketch.hasAttribute('aria-current')).toBe(false)
+    expect(chrome.root.querySelector('[data-stage="critique"]')).toBeNull()
+    expect(Object.keys(chrome.stageButtons).sort()).toEqual(['make-sense', 'sketch', 'worldbuild'])
+    updateChrome(chrome, view({ stage: 'sketch' }))
+    expect(chrome.stageButtons.sketch.getAttribute('aria-current')).toBe('step')
     expect(chrome.stageButtons['make-sense'].hasAttribute('aria-current')).toBe(false)
     expect(chrome.stageButtons.worldbuild.hasAttribute('aria-current')).toBe(false)
   })
 
-  it('offers Download JSON and disables it on empty ocean', () => {
+  it('offers Download JSON after land exists, not on empty ocean', () => {
     const chrome = mountChrome()
     expect(chrome.downloadBtn.textContent).toMatch(/Download JSON/)
     updateChrome(chrome, view())
-    expect(chrome.downloadBtn.disabled).toBe(true)
+    expect(chrome.downloadBtn.hidden).toBe(true)
+    expect(chrome.saveMeta.hidden).toBe(true)
     const mask = new Float32Array(DEFAULT_META.width * DEFAULT_META.height)
     mask[0] = 1
     updateChrome(chrome, view({ mask }))
+    expect(chrome.downloadBtn.hidden).toBe(false)
     expect(chrome.downloadBtn.disabled).toBe(false)
   })
 
@@ -78,7 +88,133 @@ describe('updateChrome aria-current', () => {
   })
 })
 
+describe('inspector first-run', () => {
+  it('hides Inspector geography on empty ocean, then shows a sketch readout', () => {
+    const inspector = mountInspector()
+    updateInspector(inspector, view())
+    expect((inspector.root.querySelector('.inspect-block') as HTMLElement).hidden).toBe(true)
+    const mask = new Float32Array(DEFAULT_META.width * DEFAULT_META.height)
+    mask[0] = 1
+    updateInspector(inspector, view({ mask }))
+    expect((inspector.root.querySelector('.inspect-block') as HTMLElement).hidden).toBe(false)
+    expect(inspector.status.textContent).toContain('not geography yet')
+    updateInspector(inspector, view({ tool: 'draw-ridge' }))
+    expect((inspector.root.querySelector('.inspect-block') as HTMLElement).hidden).toBe(false)
+    expect(inspector.inspect.textContent).toMatch(/mountain range/i)
+    updateInspector(
+      inspector,
+      view({
+        world: { biome: ['ocean'] } as unknown as World,
+        stage: 'worldbuild',
+        makeSenseComplete: true,
+      }),
+    )
+    expect((inspector.root.querySelector('.inspect-block') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('lets the coach panel float from its title and dock on double-click', () => {
+    const app = document.createElement('div')
+    app.className = 'app'
+    document.body.append(app)
+    const inspector = mountInspector()
+    app.append(inspector.root)
+    const title = inspector.root.querySelector('h2') as HTMLElement
+    expect(title).toBeTruthy()
+
+    title.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        clientX: 100,
+        clientY: 100,
+        pointerId: 7,
+        button: 0,
+        bubbles: true,
+      }),
+    )
+    window.dispatchEvent(
+      new PointerEvent('pointermove', {
+        clientX: 160,
+        clientY: 140,
+        pointerId: 7,
+        bubbles: true,
+      }),
+    )
+    expect(inspector.root.classList.contains('is-floating')).toBe(true)
+    expect(inspector.root.style.left).toMatch(/px/)
+
+    window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 7, bubbles: true }))
+    title.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    expect(inspector.root.classList.contains('is-floating')).toBe(false)
+    app.remove()
+  })
+
+  it('lets the coach panel be resized from the left edge', () => {
+    localStorage.removeItem('geoform:coachSize:v1')
+    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
+    const app = document.createElement('div')
+    app.className = 'app'
+    document.body.append(app)
+    const inspector = mountInspector()
+    app.append(inspector.root)
+    inspector.root.getBoundingClientRect = () =>
+      ({
+        x: 700,
+        y: 80,
+        left: 700,
+        top: 80,
+        width: 276,
+        height: 400,
+        right: 976,
+        bottom: 480,
+        toJSON: () => ({}),
+      }) as DOMRect
+    const grip = inspector.root.querySelector('.inspector-resize-x') as HTMLElement
+    expect(grip).toBeTruthy()
+    grip.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        clientX: 700,
+        clientY: 200,
+        pointerId: 9,
+        button: 0,
+        bubbles: true,
+      }),
+    )
+    window.dispatchEvent(
+      new PointerEvent('pointermove', {
+        clientX: 620,
+        clientY: 200,
+        pointerId: 9,
+        bubbles: true,
+      }),
+    )
+    window.dispatchEvent(
+      new PointerEvent('pointerup', {
+        clientX: 620,
+        clientY: 200,
+        pointerId: 9,
+        bubbles: true,
+      }),
+    )
+    expect(inspector.root.style.width).toBe('356px')
+    expect(JSON.parse(localStorage.getItem('geoform:coachSize:v1') ?? '{}').width).toBe(356)
+    grip.dispatchEvent(new Event('dblclick', { bubbles: true }))
+    expect(inspector.root.style.width).toBe('')
+    expect(localStorage.getItem('geoform:coachSize:v1')).toBeNull()
+    app.remove()
+  })
+})
+
 describe('updateMapShell hint and HUD', () => {
+  it('picks a round km length whose bar sits near the target width', () => {
+    const a = niceScaleKm(0.2) // 5 px/km → ~500 km at 100 px
+    expect(a.km).toBeGreaterThanOrEqual(100)
+    expect(a.px).toBeGreaterThanOrEqual(36)
+    expect(a.px).toBeLessThanOrEqual(200)
+    const map = mountMapShell()
+    expect(map.scaleBar.classList.contains('map-scale')).toBe(true)
+    expect(map.scaleBar.hidden).toBe(true)
+  })
+
   it('hides the empty-ocean hint once land exists', () => {
     const map = mountMapShell()
     updateMapShell(map, view())
@@ -89,6 +225,22 @@ describe('updateMapShell hint and HUD', () => {
     mask[1000] = 1
     updateMapShell(map, view({ mask }))
     expect(map.hint.hidden).toBe(true)
+  })
+
+  it('hides the empty-ocean hint for decorate tools and existing notes', () => {
+    const map = mountMapShell()
+    updateMapShell(map, view({ tool: 'draw-ridge' }))
+    expect(map.hint.hidden).toBe(true)
+    updateMapShell(map, view({ hasSketchNotes: true }))
+    expect(map.hint.hidden).toBe(true)
+  })
+
+  it('hides layer chips and Planet HUD on empty Sketch', () => {
+    const map = mountMapShell()
+    updateMapShell(map, view())
+    expect(map.overlay.querySelector('[data-look]')).toBeNull()
+    expect(map.seasonBar.children.length).toBe(0)
+    expect(map.viewAtlas.parentElement?.hidden).toBe(true)
   })
 
   it('HUD is Atlas | Planet only', () => {
@@ -109,7 +261,7 @@ describe('sketch tools', () => {
     expect(radius.value).toBe('6371')
   })
 
-  it('offers continent and island doodle chips', () => {
+  it('shows continent stamps and decorate symbols on one Draw panel', () => {
     const tools = mountStageTools(view())
     const chips = Array.from(tools.root.querySelectorAll('[data-landform]'))
     expect(chips.map((el) => el.getAttribute('data-landform'))).toEqual([
@@ -123,16 +275,62 @@ describe('sketch tools', () => {
     expect(chips.every((el) => el.querySelector('.style-chip-copy'))).toBe(false)
     const thumbs = chips.map((el) => el.querySelector('img.landform-thumb') as HTMLImageElement)
     expect(thumbs.every((img) => img && img.src.startsWith('data:image/png'))).toBe(true)
-    expect(tools.root.textContent).toMatch(/Drag a picture onto the map/i)
+    expect(tools.root.textContent).toMatch(/Compact/)
+    expect(tools.root.textContent).toMatch(/Islands/)
+    expect(tools.root.querySelector('[data-tool="draw-land"]')).toBeTruthy()
+    expect(tools.root.querySelector('[data-tool="fill-mask"]')).toBeTruthy()
+    expect(tools.root.querySelector('[data-tool="draw-ridge"]')).toBeTruthy()
+    expect(tools.root.querySelector('[data-tool="mark-forest"]')).toBeTruthy()
+    expect(tools.root.querySelector('[data-tool="mark-town"]')).toBeTruthy()
+    expect(tools.root.querySelector('[data-tool="inspect"]')).toBeNull()
+    expect(tools.root.querySelector('[data-sketch-plane]')).toBeNull()
+    expect(tools.root.textContent).toMatch(/Mountain/)
+    expect(tools.root.textContent).toMatch(/Forest/)
+    expect(tools.root.textContent).toMatch(/Decorate/)
+    const html = tools.root.innerHTML
+    expect(html.indexOf('data-landform=')).toBeLessThan(html.indexOf('data-tool="draw-land"'))
+    expect(tools.root.querySelector('#undoBtn')).toBeTruthy()
+    expect(tools.root.querySelector('#brushStrength')).toBeTruthy()
+    expect(tools.root.querySelector('#planetTilt')).toBeTruthy()
+    expect(tools.root.querySelector('#shuffleSeed')).toBeTruthy()
     expect(tools.root.querySelector('#continentCountVal')).toBeNull()
+    expect(tools.root.querySelector('small')).toBeNull()
+    expect(paintModeForTool('draw-ridge')).toBeNull()
+    expect(paintModeForTool('mark-forest')).toBeNull()
+    expect(paintModeForTool('draw-land')).toBe('draw-land')
+  })
+
+  it('puts Make sense in the inspector, gated on land', () => {
+    const empty = mountStageWork(view())
+    const emptyBtn = empty.querySelector('#makeSenseBtn') as HTMLButtonElement
+    expect(emptyBtn).toBeTruthy()
+    expect(emptyBtn.disabled).toBe(true)
+    expect(emptyBtn.title).toMatch(/Paint some land first/)
+    const mask = new Float32Array(DEFAULT_META.width * DEFAULT_META.height)
+    mask[0] = 1
+    const ready = mountStageWork(view({ mask }))
+    const readyBtn = ready.querySelector('#makeSenseBtn') as HTMLButtonElement
+    expect(readyBtn.disabled).toBe(false)
+  })
+
+  it('never shows the Make-sense pipeline list', () => {
+    const work = mountStageWork(view({ stage: 'make-sense', makeSenseComplete: true, pipelineStep: 7 }))
+    expect(work.textContent).not.toMatch(/pipeline/i)
+    expect(work.textContent).not.toMatch(/freeze intent/i)
+    expect(work.querySelector('.progress-list')).toBeNull()
+    expect(work.querySelector('button.primary')?.textContent).toBe('Worldbuild')
+    const map = mountMapShell()
+    expect(map.loading.textContent).not.toMatch(/pipeline/i)
+    expect(map.loading.querySelector('.loading-ticks')).toBeNull()
+    expect(map.loading.querySelector('.loading-step')).toBeNull()
   })
 })
 
 describe('stamp preview copy', () => {
-  it('tells the writer the map stays empty sea until drop', () => {
+  it('tells the writer the continent follows and can drop anywhere', () => {
     const map = mountMapShell()
-    expect(map.stampHint.textContent).toMatch(/empty sea/i)
-    expect(map.stampHint.textContent).toMatch(/same|shrink/i)
+    expect(map.stampHint.textContent).toMatch(/drop anywhere/i)
+    expect(map.stampHint.textContent).toMatch(/shrink/i)
   })
 })
 
@@ -144,7 +342,8 @@ describe('worldbuild tools', () => {
     expect(tools.root.querySelector('[data-overlay="caravans"]')).toBeTruthy()
     expect(tools.root.querySelector('[data-overlay="sea-lanes"]')).toBeTruthy()
     expect(tools.root.querySelector('[data-tool="claim-land"]')).toBeTruthy()
-    expect(tools.root.textContent).not.toMatch(/ethnicity|race|tribe of/i)
+    expect(tools.root.querySelector('[data-tool="trace-route"]')).toBeTruthy()
+    expect(tools.root.textContent).not.toMatch(/\bethnicity\b|\brace\b|\btribe of\b/i)
   })
 })
 
@@ -157,12 +356,9 @@ describe('sketch vs leftover grounded world', () => {
     const mask = new Float32Array(DEFAULT_META.width * DEFAULT_META.height).fill(1)
     const map = mountMapShell()
     updateMapShell(map, view({ world, stage: 'sketch', layer: 'biome', mask }))
-    const biome = map.overlay.querySelector('[data-look="biome"]') as HTMLButtonElement
-    expect(biome.title).toMatch(/climate/i)
-    expect(biome.disabled).toBe(true)
-    expect(biome.classList.contains('active')).toBe(false)
+    expect(map.overlay.querySelector('[data-look]')).toBeNull()
     expect(map.overlay.querySelector('.biome-legend')).toBeNull()
-    expect(map.viewPlanet.disabled).toBe(true)
+    expect(map.viewAtlas.parentElement?.hidden).toBe(true)
 
     const inspector = mountInspector()
     updateInspector(
@@ -288,6 +484,38 @@ describe('full-page atlas', () => {
   })
 })
 
+describe('worldbuild names', () => {
+  it('exposes country and town name fields the writer can edit', () => {
+    const world = {
+      cities: [
+        { x: 2, y: 2, name: 'Harbour', role: 'fishing' },
+        { x: 1, y: 1, name: 'Seat', role: 'seat_of_power' },
+      ],
+      polities: [
+        {
+          id: 0,
+          name: 'Northland',
+          capitalX: 1,
+          capitalY: 1,
+          analog: { id: 'tundra-edge', label: 'Tundra edge', because: 'Cold', tradition: 'Herders' },
+          tradition: 'Herders',
+          exports: ['grain'],
+          imports: ['timber'],
+          meltingPot: 0.2,
+          mass: 1,
+        },
+      ],
+    } as unknown as World
+    const work = mountStageWork(view({ stage: 'worldbuild', world, tool: 'place-city' }))
+    const names = Array.from(work.querySelectorAll('.place-name')) as HTMLInputElement[]
+    expect(names.map((el) => el.value)).toEqual(['Northland', 'Herders', 'Harbour', 'Seat'])
+    expect(work.textContent).toMatch(/Tundra edge/)
+    expect(work.textContent).toMatch(/Country is the state/)
+    expect(work.querySelector('[aria-label="People name"]')).toBeTruthy()
+    expect(work.textContent).toMatch(/Towns are a first guess/)
+  })
+})
+
 describe('worldbuild tools', () => {
   it('offers a country slider, one overlay at a time, and paint-border', () => {
     const tools = mountStageTools(
@@ -299,6 +527,8 @@ describe('worldbuild tools', () => {
     expect(slider.max).toBe('12')
     expect(slider.value).toBe('5')
     expect(tools.root.querySelector('[data-tool="claim-land"]')).toBeTruthy()
+    expect(tools.root.querySelector('[data-tool="trace-route"]')).toBeTruthy()
+    expect(tools.root.querySelector('[data-tool="cut-route"]')).toBeTruthy()
     const overlays = Array.from(tools.root.querySelectorAll('[data-overlay]')).map((el) =>
       el.getAttribute('data-overlay'),
     )

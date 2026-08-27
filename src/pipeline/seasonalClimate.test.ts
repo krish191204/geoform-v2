@@ -10,10 +10,12 @@
  *   2. Lapse rate — high cells are colder than low cells at the same
  *      latitude.
  *   3. Continentality — inland cells have a larger annual range than
- *      coastal cells at the same latitude.
- *   4. Rain shadow — windward (western, upstream) side of an N-S
- *      ridge is measurably wetter than the lee (eastern, downstream)
- *      side.
+ *      coastal cells at the same latitude, and the effect scales
+ *      with planet radius (coast distance is measured in km).
+ *   4. Rain shadow — the windward (upwind) side of an N-S ridge is
+ *      measurably wetter than the lee. Windward depends on the wind
+ *      band: EAST face in the trade easterlies (|lat| < 30°), WEST
+ *      face in the westerlies (30°–60°).
  *   5. Conservation — no cell's moisture index exceeds 1.0.
  *
  * Plus robustness checks:
@@ -106,8 +108,8 @@ function continentWorld(elevFn?: (x: number, y: number) => number): TestWorld {
 /**
  * A ridgeline test world: a triangular mountain range with its peak
  * at `peakX` and elevation falling off linearly to 0 m at the row's
- * edges. All cells are land so the windward (east) and lee (west)
- * sides are both reachable in the precipitation march.
+ * edges. All cells are land so both flanks of the ridge are
+ * reachable in the precipitation march.
  */
 function ridgelineWorld(
   width: number,
@@ -230,17 +232,38 @@ describe('computeSeasonalClimate', () => {
     const rangeI = result.summer[iInland] - result.winter[iInland]
     // Inland range must exceed coastal range.
     expect(rangeI).toBeGreaterThan(rangeC)
-    // Inland continentality delta at coastDist ≈ 20 is roughly
-    // 20/(80 + 20) * 35 ≈ 7 °C; coastal delta at coastDist = 1 is
-    // ≈ 0.4 °C. Assert at least 3 °C of asymmetry so the test is
-    // robust against small numerical drift.
+    // At Earth radius on a 64-wide grid, one cell ≈ 625 km. The
+    // continent centre sits ~20 cells ≈ 12 500 km from the sea
+    // (coastality ≈ 0.11) while the coastal cell is ~625 km out
+    // (coastality ≈ 0.71) — several °C of annual-range asymmetry.
+    // Assert at least 3 °C so the test is robust to numerical drift.
     expect(rangeI - rangeC).toBeGreaterThan(3)
   })
 
-  it('puts measurable rain on the windward (east) side of a ridge and dry on the lee (west)', () => {
-    // A triangular ridge with its peak at x = peakX. Wind blows
-    // east (west wind), so x < peakX is the windward side and
-    // x > peakX is the lee side.
+  it('gives a deep-inland cell a wider annual range on a larger planet', () => {
+    // Same grid, same mask — only the planet radius changes. On the
+    // bigger planet each cell spans more km, so the continent centre
+    // is physically further from the sea and reads more continental.
+    const y = 16
+    const xInland = 32
+    const small = continentWorld()
+    small.planetRadiusKm = 3000
+    const big = continentWorld()
+    big.planetRadiusKm = 12000
+    const rSmall = run(small)
+    const rBig = run(big)
+    const i = y * small.width + xInland
+    expect(small.mask[i]).toBeGreaterThan(THRESHOLD)
+    const rangeSmall = rSmall.summer[i] - rSmall.winter[i]
+    const rangeBig = rBig.summer[i] - rBig.winter[i]
+    expect(rangeBig).toBeGreaterThan(rangeSmall)
+  })
+
+  it('puts rain on the windward (east) face and a shadow on the lee (west) in the trades', () => {
+    // A triangular ridge with its peak at x = peakX. The middle row
+    // of an 8-tall grid sits at |lat| ≈ 13° — trade easterlies, so
+    // the air marches east→west: x > peakX is the windward side and
+    // x < peakX is the lee side.
     const w = 16
     const h = 8
     const peakX = 8
@@ -265,7 +288,42 @@ describe('computeSeasonalClimate', () => {
     }
     expect(eastN).toBeGreaterThan(0)
     expect(westN).toBeGreaterThan(0)
-    expect(west / westN).toBeGreaterThan(east / eastN + 0.05)
+    expect(east / eastN).toBeGreaterThan(west / westN + 0.05)
+  })
+
+  it('flips the wet face of a ridge between the trade and westerly bands', () => {
+    // One ridge, two latitudes. In a 16-tall grid, y = 4 sits at
+    // 42° N (westerlies: windward = WEST face) and y = 7 sits at
+    // 6° N (trade easterlies: windward = EAST face).
+    const w = 16
+    const h = 16
+    const peakX = 8
+    const world = ridgelineWorld(w, h, peakX, 3000)
+    const result = run(world)
+
+    const sideMeans = (y: number): { west: number; east: number } => {
+      let west = 0
+      let east = 0
+      let westN = 0
+      let eastN = 0
+      for (let x = 0; x < w; x++) {
+        const precip = result.summerMoist[y * w + x]
+        if (x < peakX) {
+          west += precip
+          westN++
+        } else if (x > peakX) {
+          east += precip
+          eastN++
+        }
+      }
+      return { west: west / westN, east: east / eastN }
+    }
+
+    const midLat = sideMeans(4) // 42° N — westerlies
+    expect(midLat.west).toBeGreaterThan(midLat.east)
+
+    const tropical = sideMeans(7) // 6° N — trade easterlies
+    expect(tropical.east).toBeGreaterThan(tropical.west)
   })
 
   it('conserves moisture: no cell exceeds 1.0 in summer or winter', () => {
@@ -390,9 +448,35 @@ describe('computeSeasonalClimate', () => {
     const peakElevM = 3000
     const world = ridgelineWorld(16, 8, peakX, peakElevM)
     const result = run(world)
+    // y = 4 of an 8-tall grid is |lat| ≈ 13° — trade easterlies, so
+    // the windward slope is the EAST face: peakX + 1.
     const y = 4
     const i = y * 16 + (peakX + 1)
     expect(result.winterMoist[i]).toBeGreaterThan(0)
     expect(result.winterMoist[i]).toBeLessThan(result.summerMoist[i])
+  })
+
+  it('shifts the ITCZ with the seasons: wet summer / drier winter near 10° latitude', () => {
+    // Flat all-land world, 19 rows → lat(y) = 90 − 10y degrees. No
+    // orography and no ocean, so moisture is the latitude baseline
+    // alone. The ITCZ centre sits at +8° |lat| in summer and −8° in
+    // winter, so a cell near 10° |lat| must read a strong wet-summer
+    // / drier-winter (monsoon-like) asymmetry while a storm-track
+    // cell at 50° |lat| stays season-balanced.
+    const w = 8
+    const h = 19
+    const world = flatWorld(w, h, () => true)
+    const result = run(world)
+
+    const asymmetryAt = (y: number): number => {
+      const i = y * w + (w >> 1)
+      return result.summerMoist[i] - result.winterMoist[i]
+    }
+
+    const tropical = asymmetryAt(8) // 10° N
+    const stormTrack = asymmetryAt(4) // 50° N
+    expect(tropical).toBeGreaterThan(0.15)
+    expect(Math.abs(stormTrack)).toBeLessThan(0.1)
+    expect(tropical).toBeGreaterThan(Math.abs(stormTrack) + 0.1)
   })
 })

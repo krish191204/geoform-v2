@@ -7,6 +7,18 @@ import type { WorldMeta } from './types'
 export interface MaskSnapshot {
   meta: WorldMeta
   mask: Float32Array
+  /** Range / river notes. Same length as mask; optional on old snapshots. */
+  marks?: Uint8Array
+}
+
+const MAX_PAST = 24
+
+function copySnapshot(snapshot: MaskSnapshot): MaskSnapshot {
+  return {
+    meta: { ...snapshot.meta },
+    mask: new Float32Array(snapshot.mask),
+    marks: snapshot.marks ? new Uint8Array(snapshot.marks) : undefined,
+  }
 }
 
 export class MaskHistory {
@@ -16,8 +28,9 @@ export class MaskHistory {
 
   push(snapshot: MaskSnapshot): void {
     if (this.current) this.past.push(this.current)
-    this.current = snapshot
+    this.current = copySnapshot(snapshot)
     this.future = []
+    while (this.past.length > MAX_PAST) this.past.shift()
   }
 
   undo(): MaskSnapshot | null {
@@ -25,7 +38,7 @@ export class MaskHistory {
     const prev = this.past.pop()!
     if (this.current) this.future.push(this.current)
     this.current = prev
-    return this.current
+    return copySnapshot(this.current)
   }
 
   redo(): MaskSnapshot | null {
@@ -33,10 +46,24 @@ export class MaskHistory {
     const next = this.future.pop()!
     if (this.current) this.past.push(this.current)
     this.current = next
-    return this.current
+    return copySnapshot(this.current)
   }
 
-  canUndo(): boolean { return this.past.length > 0 }
-  canRedo(): boolean { return this.future.length > 0 }
-  snapshot(): MaskSnapshot | null { return this.current }
+  clear(): void {
+    this.past = []
+    this.future = []
+    this.current = null
+  }
+
+  canUndo(): boolean {
+    return this.past.length > 0
+  }
+
+  canRedo(): boolean {
+    return this.future.length > 0
+  }
+
+  snapshot(): MaskSnapshot | null {
+    return this.current ? copySnapshot(this.current) : null
+  }
 }

@@ -8,7 +8,10 @@
  * the basic physics. These tests pin the bar so regressions are caught.
  *
  * Pass criteria:
- *   - Windward > lee on a mid-latitude N-S ridge (single wind direction).
+ *   - Windward > lee on a tropical N-S ridge. Winds are latitude-
+ *     banded (trade easterlies below 30°, westerlies 30°–60°, polar
+ *     easterlies above 60°), so in the tropical band the windward
+ *     face is the EAST face.
  *   - No ice↔warm-desert adjacency epidemic across 50 random seeds.
  *   - No flux wipe at sinks (local minima are sinks, not local maxima).
  *   - Alpine fires when elev ≥ 3500 m.
@@ -32,10 +35,11 @@ import { emptyPolityState } from '../../world/types'
 import { makeContinentWorld } from './fixtures'
 
 describe('Donald minimum', () => {
-  it('windward > lee on a mid-latitude N-S ridge', async () => {
-    // Single continent at mid-lat (lat 0.5) with a N-S ridge down the
-    // middle. Prevailing wind is west-to-east (the climate march).
-    // Windward (west side) should receive more moisture than lee (east).
+  it('windward > lee on a tropical N-S ridge', async () => {
+    // Single continent straddling the equator with a N-S ridge down
+    // the middle. The sampled band (rows 0.35h–0.65h) sits inside the
+    // trade easterlies (|lat| < 30°), so air marches east→west and the
+    // windward face is the EAST face of the ridge.
     const tw = makeContinentWorld()
     const meta = {
       seed: 42,
@@ -117,7 +121,7 @@ describe('Donald minimum', () => {
       for (let x = 0; x < tw.width; x++) {
         const i = y * tw.width + x
         if (tw.mask[i] < 0.5) continue
-        // West of the ridge column = windward, east of the ridge = lee.
+        // Trade easterlies: east of the ridge = windward, west = lee.
         if (x < ridgeX) {
           westMoist += moist[i]
           westCount++
@@ -132,11 +136,10 @@ describe('Donald minimum', () => {
     // The strict physics claim: windward mean moisture must beat lee by
     // a meaningful margin, not just "> 0". The old assertion was a
     // vacuous pass when both sides read 0.
-    // A two-plate continent is one rain-shadow obstacle, not a pizza of
-    // N-S ridges. West still has to beat east; the margin is the march,
-    // not a wall down the meridian.
-    expect(westMean).toBeGreaterThan(eastMean)
-    expect(westMean - eastMean).toBeGreaterThan(0.015)
+    // The band is inside the trade easterlies, so windward = EAST of
+    // the ridge and the lee (rain shadow) is the WEST side.
+    expect(eastMean).toBeGreaterThan(westMean)
+    expect(eastMean - westMean).toBeGreaterThan(0.015)
   })
 
   it('icy peak stays separate from warm desert', { timeout: 20000 }, async () => {

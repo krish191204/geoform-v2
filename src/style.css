@@ -4,12 +4,24 @@
   --paper: #e7e0d2;
   --paper-deep: #d5ccb8;
   --sea: #1f5a66;
-  --copper: #b85a2a;
+  /* Iron-oxide: the colour of weathered survey ink. Reserved for
+     irreversible acts (Make sense, Worldbuild) — colour as meaning. */
+  --copper: #a04a22;
+  /* Verdigris: aged bronze instruments. Marks DERIVED-world facts,
+     separating grounded geography from sketch guesses at a glance. */
+  --verdigris: #4a7a6a;
   --moss: #4a6b45;
+  /* Subtle paper-grain: turbulence noise, near-invisible, no assets. */
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.11 0 0 0 0 0.13 0 0 0 0 0.11 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
   --mist: #c5d0c8;
   --panel: rgba(231, 224, 210, 0.92);
+  --card: linear-gradient(180deg, rgba(241, 235, 221, 0.97), rgba(229, 221, 203, 0.97));
+  --line: rgba(28, 34, 28, 0.22);
   --shadow: 0 18px 50px rgba(28, 34, 28, 0.18);
+  --shadow-lift: 0 16px 40px rgba(8, 14, 12, 0.35);
   --radius: 14px;
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-data: 'Spline Sans Mono', ui-monospace, 'SF Mono', Menlo, monospace;
   font-family: 'Outfit', system-ui, sans-serif;
   color: var(--ink);
   background: var(--paper);
@@ -17,6 +29,11 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--copper);
+  outline-offset: 2px;
 }
 
 * {
@@ -88,9 +105,20 @@ body {
 .tagline {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 0.82rem;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 500;
+  font-size: 0.88rem;
   flex: 1;
   min-width: 0;
+}
+
+.save-meta,
+.status,
+.inspector dd,
+.inspect-head strong,
+kbd {
+  font-family: var(--font-data);
 }
 
 .nav-trailing {
@@ -190,6 +218,11 @@ body {
   max-width: 10rem;
 }
 
+.inspect-block[hidden],
+button.action-btn[hidden] {
+  display: none !important;
+}
+
 .account-sheet {
   position: fixed;
   inset: 0;
@@ -202,6 +235,93 @@ body {
 
 .account-sheet[hidden] {
   display: none;
+}
+
+/* Keys sheet — the shortcut reference card. */
+.keys-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(28, 34, 28, 0.32);
+}
+
+.keys-sheet[hidden] {
+  display: none;
+}
+
+.keys-card {
+  width: min(26rem, 100%);
+  max-height: 84vh;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.1rem 1.2rem 1rem;
+}
+
+.keys-card h2 {
+  margin: 0 0 0.2rem;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+}
+
+.keys-card h3 {
+  margin: 0.75rem 0 0.35rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-soft);
+}
+
+.keys-lede {
+  margin: 0 0 0.4rem;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+}
+
+.keys-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.32rem 0.7rem;
+  align-items: center;
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.keys-grid-tools {
+  grid-template-columns: auto 1fr auto 1fr;
+}
+
+.keys-grid dt,
+.keys-grid dd {
+  margin: 0;
+}
+
+.keys-grid dd {
+  color: var(--ink-soft);
+}
+
+kbd {
+  display: inline-block;
+  min-width: 1.4rem;
+  text-align: center;
+  font-size: 0.72rem;
+  background: rgba(28, 34, 28, 0.07);
+  border: 1px solid rgba(28, 34, 28, 0.24);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 0.08rem 0.4rem;
+  white-space: nowrap;
+}
+
+.keys-dismiss {
+  margin-top: 0.85rem;
 }
 
 .account-card {
@@ -305,7 +425,9 @@ button,
   border: 1px solid rgba(28, 34, 28, 0.16);
   background: rgba(255, 255, 255, 0.55);
   color: var(--ink);
-  border-radius: 999px;
+  /* Instrument plates, not consumer pills. Chips/toggles keep 999px
+     via their own rules — action buttons sit square. */
+  border-radius: 8px;
   padding: 0.5rem 0.95rem;
   font: inherit;
   font-weight: 500;
@@ -327,8 +449,8 @@ button.primary {
 }
 
 button.primary:hover {
-  background: #9a471f;
-  border-color: #9a471f;
+  background: #8a3d1b;
+  border-color: #8a3d1b;
 }
 
 .layout {
@@ -352,14 +474,14 @@ button.primary:hover {
 }
 
 .panel h2 {
-  margin: 0 0 0.75rem;
+  margin: 0 0 0.45rem;
   font-family: 'Fraunces', Georgia, serif;
   font-size: 1.15rem;
   font-weight: 600;
 }
 
 .panel h3 {
-  margin: 1rem 0 0.45rem;
+  margin: 0.65rem 0 0.3rem;
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -369,34 +491,61 @@ button.primary:hover {
 
 .tool-grid {
   display: grid;
-  gap: 0.45rem;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+}
+
+.tool-grid-icons {
+  grid-template-columns: repeat(3, 1fr);
 }
 
 .tool {
   text-align: left;
   border-radius: 10px;
+  padding: 0.4rem 0.5rem;
+}
+
+.tool-icon {
+  text-align: center;
+  padding: 0.42rem 0.2rem 0.38rem;
+  font-size: 0.78rem;
+}
+
+.tool-glyph {
+  display: block;
+  font-size: 1.05rem;
+  line-height: 1;
+  margin-bottom: 0.12rem;
+}
+
+.overlay-row.sketch-plane {
+  margin-top: 0;
+  margin-bottom: 0.45rem;
 }
 
 .tool small {
   display: block;
   opacity: 0.72;
   font-weight: 400;
-  font-size: 0.78rem;
-  margin-top: 0.15rem;
+  font-size: 0.68rem;
+  line-height: 1.25;
+  margin-top: 0.08rem;
 }
 
 .style-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0.35rem;
-  margin-bottom: 0.45rem;
+  gap: 0.3rem;
+  margin-bottom: 0.3rem;
 }
 
 .style-chip {
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
   border-radius: 10px;
-  padding: 0.45rem 0.3rem;
+  padding: 0.32rem 0.25rem;
   width: 100%;
   cursor: grab;
   user-select: none;
@@ -410,12 +559,179 @@ button.primary:hover {
 }
 
 .landform-thumb {
-  width: 5.4rem;
-  height: 2.7rem;
+  width: 4.5rem;
+  height: 2.25rem;
   display: block;
   pointer-events: none;
   background: transparent;
   object-fit: contain;
+}
+
+.style-chip-label {
+  font-size: 0.72rem;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.tool-row {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0.45rem 0 0.15rem;
+}
+
+.tool-row .action-btn {
+  flex: 1;
+}
+
+.seed-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0.4rem 0 0;
+  font-size: 0.82rem;
+}
+
+.place-name {
+  font: inherit;
+  font-weight: 600;
+  width: 9rem;
+  min-width: 0;
+  padding: 0.15rem 0.35rem;
+  border-radius: 6px;
+  border: 1px solid rgba(28, 34, 28, 0.18);
+  background: rgba(255, 255, 255, 0.45);
+  color: inherit;
+}
+
+.place-name-people {
+  font-weight: 500;
+  width: 12rem;
+}
+
+.country-block {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.5rem 0 0.55rem;
+}
+
+.polity-dossier {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.dossier-chip {
+  font-size: 0.72rem;
+  line-height: 1.25;
+  padding: 0.12rem 0.45rem;
+  border: 1px solid var(--line, rgba(28, 34, 28, 0.16));
+  border-radius: 4px;
+  color: var(--ink-soft, rgba(28, 34, 28, 0.72));
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.dossier-land {
+  font-weight: 600;
+  color: var(--moss, #4a7a5a);
+  border-color: color-mix(in srgb, var(--moss, #4a7a5a) 45%, transparent);
+}
+
+.city-list .wonder-line {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.wonder-goto {
+  justify-self: start;
+  font: inherit;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--line, rgba(28, 34, 28, 0.16));
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.4);
+  color: var(--copper, #b85a2a);
+  cursor: pointer;
+}
+
+.wonder-goto:hover {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.wonder-blurb {
+  font-size: 0.78rem;
+  color: var(--ink-soft, rgba(28, 34, 28, 0.72));
+  line-height: 1.35;
+}
+
+.wonder-earth {
+  font-size: 0.76rem;
+  color: var(--verdigris, #4a7a6a);
+  line-height: 1.35;
+}
+
+.place-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.75rem;
+}
+
+.place-fields label {
+  display: grid;
+  gap: 0.12rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+
+.brush-cursor {
+  position: fixed;
+  z-index: 70;
+  pointer-events: none;
+  border-radius: 50%;
+  border: 1.5px solid rgba(243, 238, 220, 0.92);
+  box-shadow: 0 0 0 1px rgba(8, 14, 12, 0.45);
+  transform: translate(-50%, -50%);
+}
+
+.brush-cursor.has-glyph::after {
+  content: attr(data-glyph);
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -54%);
+  font-size: max(11px, calc(var(--brush-d, 24px) * 0.42));
+  line-height: 1;
+  color: rgba(243, 238, 220, 0.96);
+  text-shadow: 0 1px 0 rgba(8, 14, 12, 0.55), 0 0 3px rgba(8, 14, 12, 0.8);
+  font-weight: 700;
+}
+
+.brush-cursor.is-erase {
+  border-color: rgba(120, 190, 210, 0.95);
+}
+
+.brush-cursor.is-fill {
+  border-radius: 4px;
+  border-style: dashed;
+}
+
+.brush-cursor.is-range {
+  border-color: rgba(92, 58, 32, 0.95);
+}
+
+.brush-cursor.is-river {
+  border-color: rgba(70, 140, 180, 0.95);
+}
+
+.brush-cursor.is-forest {
+  border-color: rgba(46, 92, 54, 0.95);
+}
+
+.brush-cursor.is-town {
+  border-radius: 4px;
+  border-color: rgba(28, 34, 28, 0.9);
 }
 
 .stamp-cursor {
@@ -461,8 +777,8 @@ button.primary:hover {
 
 .slider-row {
   display: grid;
-  gap: 0.35rem;
-  margin-top: 0.75rem;
+  gap: 0.25rem;
+  margin-top: 0.45rem;
 }
 
 .slider-row input[type='range'] {
@@ -478,8 +794,8 @@ button.primary:hover {
 }
 
 .hint {
-  margin: 0.85rem 0 0;
-  font-size: 0.85rem;
+  margin: 0.4rem 0 0;
+  font-size: 0.78rem;
   color: var(--ink-soft);
 }
 
@@ -527,6 +843,125 @@ button.primary:hover {
   background: transparent;
   position: relative;
   z-index: 0;
+  touch-action: none;
+}
+
+/* Zoom populating: HD window bake over the CSS-scaled base raster. */
+.map-zoom-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.map-zoom-canvas[hidden] {
+  display: none !important;
+}
+
+/* Names and wonder marks that appear as the writer zooms in. */
+.map-labels {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.map-label {
+  position: absolute;
+  transform: translate(-50%, -140%);
+  white-space: nowrap;
+  font-family: var(--font-data, monospace);
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+  color: #f3eee3;
+  text-shadow:
+    0 1px 2px rgba(8, 14, 12, 0.9),
+    0 0 6px rgba(8, 14, 12, 0.55);
+}
+
+.map-label-seat {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.map-label-wonder {
+  color: #f0d9a8;
+  font-style: italic;
+}
+
+.map-label-wonder .wonder-mark {
+  font-style: normal;
+  margin-right: 0.25rem;
+}
+
+/* Town names are editable in place once they appear at zoom. */
+.map-label-town,
+.map-label-seat {
+  pointer-events: auto;
+  cursor: text;
+  outline: none;
+}
+
+.map-label-town:focus,
+.map-label-seat:focus {
+  background: rgba(20, 28, 24, 0.55);
+  border-radius: 3px;
+  padding: 0.05rem 0.25rem;
+  box-shadow: 0 0 0 1px rgba(243, 238, 220, 0.35);
+}
+
+/* Zoom-aware km scale — science signal next to the cartouche. */
+.map-scale {
+  display: grid;
+  gap: 0.2rem;
+  justify-items: start;
+  padding: 0.35rem 0.45rem;
+  background: var(--card);
+  border: 1px solid rgba(28, 34, 28, 0.4);
+  border-radius: 3px;
+  box-shadow:
+    inset 0 0 0 2px rgba(241, 235, 221, 1),
+    0 8px 20px rgba(8, 14, 12, 0.28);
+  color: var(--ink);
+  pointer-events: none;
+}
+
+.map-scale[hidden] {
+  display: none !important;
+}
+
+.map-scale-rule {
+  height: 0;
+  border-top: 2px solid var(--ink);
+  border-left: 2px solid var(--ink);
+  border-right: 2px solid var(--ink);
+  min-width: 2rem;
+}
+
+.map-scale-label {
+  font-family: var(--font-data, monospace);
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  color: var(--verdigris, #4a7a6a);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .map-label {
+    animation: label-in 0.25s ease both;
+  }
+
+  @keyframes label-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
 }
 
 #globe {
@@ -613,13 +1048,82 @@ button.primary:hover {
   inset: 0;
   display: none;
   place-items: center;
-  background: rgba(28, 34, 28, 0.45);
-  color: #f3eee3;
-  font-family: 'Fraunces', Georgia, serif;
-  font-size: 1.15rem;
+  background: rgba(16, 24, 22, 0.55);
+  backdrop-filter: blur(2px);
   text-align: center;
   padding: 1rem;
   z-index: 3;
+}
+
+.loading-card {
+  width: min(24rem, 92vw);
+  padding: 1.1rem 1.3rem 1.15rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+  color: var(--ink);
+}
+
+.loading-kicker {
+  margin: 0;
+  font-size: 0.62rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.loading-title {
+  margin: 0.15rem 0 0.55rem;
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+
+.loading-step {
+  margin: 0;
+  min-height: 1.2em;
+  font-family: var(--font-data);
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+.loading-ticks {
+  display: flex;
+  justify-content: center;
+  gap: 0.3rem;
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+}
+
+.loading-ticks li {
+  width: 1.5rem;
+  height: 0.32rem;
+  border-radius: 999px;
+  background: rgba(28, 34, 28, 0.14);
+  transition: background 0.35s ease;
+}
+
+.loading-ticks li.done {
+  background: var(--moss);
+}
+
+.loading-ticks li.active {
+  background: var(--copper);
+  animation: tick-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tick-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.loading-note {
+  margin: 0.65rem 0 0;
+  font-size: 0.76rem;
+  color: var(--ink-soft);
 }
 
 .brand a {
@@ -716,10 +1220,103 @@ button.primary:hover {
   border-bottom: 1px solid rgba(28, 34, 28, 0.08);
 }
 
+.city-list .route-head {
+  font-weight: 600;
+  margin-top: 0.45rem;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.city-list .route-line {
+  display: block;
+  font-size: 0.8rem;
+  color: rgba(28, 34, 28, 0.78);
+}
+
+.layer-caption,
+.layer-gloss {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  max-width: 16rem;
+  color: #f4efe4;
+  text-shadow: 0 1px 3px rgba(8, 14, 12, 0.92);
+}
+
+.analog-still {
+  margin: 0.45rem 0 0.35rem;
+}
+
+.analog-still img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+
+.town-dossier {
+  margin: 0.4rem 0 0;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--line, rgba(28, 34, 28, 0.16));
+  border-left: 3px solid var(--copper, #b85a2a);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.town-head {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.town-line {
+  margin: 0.15rem 0 0;
+  font-size: 0.76rem;
+  color: var(--ink-soft, rgba(28, 34, 28, 0.72));
+}
+
+.wonder-inspect {
+  margin: 0.4rem 0 0;
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--copper, #b85a2a);
+  line-height: 1.35;
+}
+
+.inspect .wonder-earth {
+  margin: 0.2rem 0 0;
+}
+
+.analog-still figcaption,
+.analog-line,
+.inspect .route-line {
+  margin: 0.3rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.sheet-dock {
+  display: none;
+}
+
+.sheet-dock-btn {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid rgba(243, 238, 220, 0.28);
+  background: rgba(20, 28, 24, 0.58);
+  color: #f3eee3;
+  cursor: pointer;
+}
+
+.sheet-dock-btn.active {
+  background: rgba(20, 28, 24, 0.88);
+}
+
 .map-seasons {
   position: absolute;
   left: calc(min(16.75rem, 22vw) + 1.35rem);
-  top: 5.15rem;
+  top: 5.9rem;
   z-index: 2;
   display: flex;
   gap: 0.35rem;
@@ -727,7 +1324,7 @@ button.primary:hover {
 
 .map-hud {
   position: absolute;
-  top: 5.15rem;
+  top: 5.9rem;
   right: calc(min(17.25rem, 24vw) + 1.35rem);
   z-index: 2;
   display: flex;
@@ -735,11 +1332,32 @@ button.primary:hover {
   pointer-events: none;
 }
 
-.layout-toggle {
+.map-hud[hidden],
+.map-seasons[hidden] {
+  display: none !important;
+}
+
+.map-plate-dock {
   position: absolute;
   z-index: 50;
   bottom: 0.85rem;
   right: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+
+.map-plate-dock > * {
+  pointer-events: auto;
+}
+
+.app.is-layout-chrome .map-plate-dock {
+  right: calc(min(17.25rem, 24vw) + 1.35rem);
+}
+
+.layout-toggle {
   pointer-events: auto;
   font: inherit;
   font-size: 0.78rem;
@@ -751,9 +1369,71 @@ button.primary:hover {
   cursor: pointer;
 }
 
-.app.is-chrome-peek .layout-toggle,
-.app.is-layout-chrome .layout-toggle {
-  right: calc(min(17.25rem, 24vw) + 1.35rem);
+.layout-toggle[hidden] {
+  display: none !important;
+}
+
+/* Cartouche — the atlas plate legend, engraved paper on the sea. */
+.map-cartouche {
+  min-width: 11.5rem;
+  max-width: 15rem;
+  padding: 0.6rem 0.8rem 0.6rem;
+  background: var(--card);
+  border: 1px solid rgba(28, 34, 28, 0.4);
+  border-radius: 3px;
+  box-shadow:
+    inset 0 0 0 3px rgba(241, 235, 221, 1),
+    inset 0 0 0 4px rgba(28, 34, 28, 0.35),
+    0 10px 28px rgba(8, 14, 12, 0.4);
+  color: var(--ink);
+}
+
+.map-cartouche[hidden] {
+  display: none !important;
+}
+
+.cartouche-kicker {
+  margin: 0;
+  font-size: 0.58rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--ink-soft);
+}
+
+.cartouche-title {
+  margin: 0.08rem 0 0.4rem;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 500;
+  font-size: 1.05rem;
+  text-align: center;
+  line-height: 1.15;
+}
+
+.cartouche-data {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.16rem 0.65rem;
+  margin: 0;
+  border-top: 1px solid rgba(28, 34, 28, 0.18);
+  padding-top: 0.4rem;
+}
+
+.cartouche-data dt {
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  padding-top: 0.12rem;
+}
+
+.cartouche-data dd {
+  margin: 0;
+  text-align: right;
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  white-space: nowrap;
 }
 
 .map-view-esc {
@@ -803,12 +1483,101 @@ button.primary:hover {
   cursor: not-allowed;
 }
 
-.coach-card {
+/* Coach — tone-coded rule down the left edge so the eye reads the mood
+   before the words. Drag the grip to float it over the map. */
+.coach-dock {
   margin: 0 0 0.75rem;
-  padding: 0.65rem 0.7rem;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.45);
+  min-height: 0;
+}
+
+.coach-card {
+  margin: 0;
+  padding: 0.45rem 0.7rem 0.6rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid rgba(28, 34, 28, 0.1);
+  border-left: 3px solid var(--sea);
+  background: var(--card);
   font-size: 0.86rem;
+}
+
+.coach-handle {
+  display: block;
+  width: 100%;
+  height: 0.7rem;
+  margin: 0 0 0.35rem;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background:
+    radial-gradient(circle, rgba(28, 34, 28, 0.28) 1.1px, transparent 1.25px) center / 6px 6px repeat-x;
+  background-size: 6px 2px;
+  background-position: center;
+  cursor: grab;
+  opacity: 0.55;
+}
+
+.coach-handle:hover,
+.coach-handle:focus-visible {
+  opacity: 0.9;
+  outline: none;
+  background-color: rgba(28, 34, 28, 0.06);
+}
+
+.coach-card.is-dragging .coach-handle {
+  cursor: grabbing;
+}
+
+.coach-card.is-floating {
+  position: fixed;
+  z-index: 55;
+  width: min(17.25rem, 42vw);
+  margin: 0;
+  background-image: var(--grain), var(--card);
+  background-color: var(--card);
+  border: 1px solid rgba(28, 34, 28, 0.4);
+  box-shadow:
+    inset 0 0 0 3px rgba(241, 235, 221, 0.9),
+    inset 0 0 0 4px rgba(28, 34, 28, 0.14),
+    var(--shadow-lift);
+  pointer-events: auto;
+}
+
+.coach-card.is-dragging {
+  opacity: 0.96;
+  user-select: none;
+  touch-action: none;
+}
+
+.app.is-view-map .coach-card.is-floating {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.coach-success {
+  border-left-color: var(--moss);
+  background: linear-gradient(rgba(74, 107, 69, 0.14), rgba(74, 107, 69, 0.14)), var(--card);
+}
+
+.coach-warn {
+  border-left-color: var(--copper);
+  background: linear-gradient(rgba(184, 90, 42, 0.12), rgba(184, 90, 42, 0.12)), var(--card);
+}
+
+.coach-error {
+  border-left-color: #a33;
+  background: linear-gradient(rgba(170, 51, 51, 0.1), rgba(170, 51, 51, 0.1)), var(--card);
+}
+
+.coach-card.is-floating.coach-success {
+  background-image: var(--grain), linear-gradient(rgba(74, 107, 69, 0.12), rgba(74, 107, 69, 0.12)), var(--card);
+}
+
+.coach-card.is-floating.coach-warn {
+  background-image: var(--grain), linear-gradient(rgba(184, 90, 42, 0.12), rgba(184, 90, 42, 0.12)), var(--card);
+}
+
+.coach-card.is-floating.coach-error {
+  background-image: var(--grain), linear-gradient(rgba(170, 51, 51, 0.1), rgba(170, 51, 51, 0.1)), var(--card);
 }
 
 .coach-body,
@@ -907,23 +1676,26 @@ button.primary:hover {
   color: inherit;
 }
 
+/* Instrument cards — solid paper resting on the drafting table, ink on top.
+   Legible over any sea, no text-shadow crutch. */
 .tools-panel,
 .inspector {
   position: absolute;
   z-index: 30;
-  top: 5.1rem;
-  bottom: 0.75rem;
+  top: 5.9rem;
+  bottom: auto;
   width: min(16.75rem, 22vw);
-  max-height: calc(100% - 5.85rem);
+  max-height: calc(100% - 6.65rem);
   display: flex;
   flex-direction: column;
-  background: transparent;
-  border: none;
-  box-shadow: none;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  color: #f4efe4;
-  text-shadow: 0 1px 3px rgba(8, 14, 12, 0.92);
+  color: var(--ink);
+  text-shadow: none;
 }
 
 .tools-panel {
@@ -933,54 +1705,90 @@ button.primary:hover {
 .inspector {
   right: 0.75rem;
   width: min(17.25rem, 24vw);
+  overflow: auto;
 }
 
-.tools-panel h2,
-.tools-panel h3,
-.inspector h2,
-.inspector h3,
-.inspector dt {
-  color: #f4efe4;
+.inspector-resize {
+  position: absolute;
+  z-index: 4;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
 }
 
-.tools-panel .coach-card,
-.inspector .coach-card,
-.inspector .status,
-.inspector .reasons li,
-.inspector .issue,
-.inspector .progress-step {
-  background: rgba(12, 20, 18, 0.28);
-  color: #f4efe4;
+.inspector-resize-x {
+  left: 0;
+  top: 0;
+  width: 0.55rem;
+  height: 100%;
+  cursor: ew-resize;
 }
 
-.tools-panel button,
-.inspector button {
-  background: rgba(12, 20, 18, 0.34);
-  color: #f4efe4;
-  border-color: rgba(243, 238, 220, 0.22);
-  text-shadow: none;
+.inspector-resize-y {
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 0.55rem;
+  cursor: ns-resize;
 }
 
-.tools-panel button:hover,
-.tools-panel .tool.active,
-.inspector button:hover {
-  background: rgba(12, 20, 18, 0.62);
-  color: #f4efe4;
-  border-color: rgba(243, 238, 220, 0.4);
+.inspector-resize-xy {
+  left: 0;
+  bottom: 0;
+  width: 0.9rem;
+  height: 0.9rem;
+  cursor: nesw-resize;
 }
 
-.tools-panel .style-chip {
-  background: rgba(12, 20, 18, 0.18);
+.inspector-resize:hover,
+.inspector-resize:focus-visible {
+  background: rgba(28, 34, 28, 0.08);
+  outline: none;
+}
+
+.inspector.is-resizing {
+  user-select: none;
+}
+
+.inspector.is-floating {
+  position: fixed;
+  z-index: 60;
+  right: auto;
+}
+
+.inspector.is-dragging {
+  user-select: none;
+  cursor: grabbing;
+}
+
+.coach-title-drag {
+  cursor: grab;
 }
 
 .tools-panel .style-chip:hover {
-  background: rgba(12, 20, 18, 0.38);
+  background: rgba(255, 255, 255, 0.45);
   color: inherit;
 }
 
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* Overlay chrome eases out while the writer draws or views the full map —
+   the sheet clears itself instead of blinking away. */
+.chrome,
+.tools-panel,
+.inspector,
+.map-overlay,
+.map-seasons,
+.map-hud,
+.map-hint,
+.map-plate-dock,
+.sheet-dock {
+  transition: opacity 0.22s ease;
 }
 
 .app.is-view-map .chrome,
@@ -1002,12 +1810,65 @@ button:disabled {
 .app.is-doodling .map-seasons,
 .app.is-doodling .map-hud,
 .app.is-doodling .map-hint,
-.app.is-doodling .layout-toggle {
+.app.is-doodling .map-plate-dock,
+.app.is-doodling .sheet-dock,
+.app.is-stamping .chrome,
+.app.is-stamping .tools-panel,
+.app.is-stamping .inspector,
+.app.is-stamping .map-overlay,
+.app.is-stamping .map-seasons,
+.app.is-stamping .map-hud,
+.app.is-stamping .map-hint,
+.app.is-stamping .map-plate-dock,
+.app.is-stamping .sheet-dock {
   opacity: 0;
   pointer-events: none;
 }
 
-.app.is-doodling .map-shell::after {
+/* One quiet settle on load: chrome, then tools, then inspector, then plate. */
+@media (prefers-reduced-motion: no-preference) {
+  .chrome {
+    animation: settle 0.45s ease backwards;
+  }
+
+  .tools-panel {
+    animation: settle 0.5s ease 0.08s backwards;
+  }
+
+  .inspector {
+    animation: settle 0.5s ease 0.16s backwards;
+  }
+
+  .map-cartouche {
+    animation: settle 0.5s ease 0.24s backwards;
+  }
+}
+
+@keyframes settle {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chrome,
+  .tools-panel,
+  .inspector,
+  .map-overlay,
+  .map-seasons,
+  .map-hud,
+  .map-hint,
+  .map-plate-dock,
+  .sheet-dock,
+  .loading-ticks li {
+    transition: none;
+    animation: none;
+  }
+}
+
+.app.is-doodling .map-shell::after,
+.app.is-stamping .map-shell::after {
   opacity: 0.35;
 }
 
@@ -1016,25 +1877,45 @@ button:disabled {
     display: block;
   }
 
+  .sheet-dock {
+    display: flex;
+    position: absolute;
+    z-index: 40;
+    left: 0.5rem;
+    right: 0.5rem;
+    bottom: 0.35rem;
+    justify-content: center;
+    gap: 0.45rem;
+    pointer-events: auto;
+  }
+
   .tools-panel,
   .inspector {
     top: auto;
-    width: calc(50% - 0.85rem);
-    max-height: 36vh;
-    bottom: 0.5rem;
-  }
-
-  .tools-panel {
     left: 0.5rem;
+    right: 0.5rem;
+    width: auto;
+    max-height: 44vh;
+    bottom: 2.7rem;
   }
 
-  .inspector {
-    right: 0.5rem;
+  .tool small {
+    display: none;
+  }
+
+  .app.is-sheet-tools .inspector,
+  .app.is-sheet-inspect .tools-panel {
+    display: none;
+  }
+
+  .app.is-sheet-tools .tools-panel,
+  .app.is-sheet-inspect .inspector {
+    display: flex;
   }
 
   .map-overlay {
     left: 0.7rem;
-    bottom: calc(36vh + 0.7rem);
+    bottom: calc(44vh + 3.2rem);
   }
 
   .map-seasons {
@@ -1045,6 +1926,21 @@ button:disabled {
     right: 0.7rem;
   }
 
+  /* Small screens: the plate legend cedes the corner to the bottom sheets. */
+  .map-cartouche {
+    display: none;
+  }
+
+  .map-scale {
+    display: none !important;
+  }
+
+  .map-plate-dock,
+  .app.is-layout-chrome .map-plate-dock {
+    right: 0.7rem;
+    bottom: 0.35rem;
+  }
+
   .ux-stage-rail {
     display: flex;
   }
@@ -1053,4 +1949,33 @@ button:disabled {
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+/* --- Palette v2: weathering & instrument authority ------------------- */
+
+/* Paper grain + engraved double-rule frame on the instrument cards,
+   echoing the cartouche plate. CSS only; the map raster is untouched. */
+.tools-panel,
+.inspector,
+.keys-card,
+.loading-card {
+  background-image: var(--grain), var(--card);
+  box-shadow:
+    inset 0 0 0 3px rgba(241, 235, 221, 0.9),
+    inset 0 0 0 4px rgba(28, 34, 28, 0.14),
+    var(--shadow-lift);
+}
+
+/* Derived-world facts read in verdigris — grounded geography, not sketch. */
+.cartouche-data dd {
+  color: var(--verdigris);
+}
+
+.dossier-land {
+  color: var(--verdigris);
+  border-color: color-mix(in srgb, var(--verdigris) 45%, transparent);
+}
+
+.town-head {
+  color: var(--verdigris);
 }
