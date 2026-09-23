@@ -141,6 +141,46 @@ describe('placeCity', () => {
     expect(r.city?.seasonal).toBeCloseTo(0.72, 5)
   })
 
+  it('scores a placed city from the land and still rejects a bad click', () => {
+    const world = makeWorld()
+    setSuitability(world, 8, 28, 0.2)
+    const rejected = placeCity(world, 8, 28, 'Nowhere')
+    expect(rejected.mutated).toBe(false)
+    expect(rejected.rejected).toBe(true)
+    expect(rejected.city).toBeNull()
+    expect(world.cities).toHaveLength(0)
+
+    world.cities.push({
+      x: 2,
+      y: 2,
+      name: 'Throne',
+      seasonal: 0.9,
+      role: 'seat_of_power',
+      rank: 'seat',
+    })
+    setOcean(world, 16, 18)
+    const portI = 15 * world.meta.width + 16
+    world.biome[portI] = 'mediterranean'
+    world.elev[portI] = 30
+    setSuitability(world, 16, 15, 0.8)
+    const port = placeCity(world, 16, 15, 'Harbour')
+    expect(port.mutated).toBe(true)
+    expect(port.rejected).toBe(false)
+    expect(port.city?.port).toBe('sea')
+    expect(port.city?.population).toBeGreaterThan(1500)
+    expect(port.city?.sizeCause).toBe('coastal fishery')
+
+    const campI = 6 * world.meta.width + 26
+    world.biome[campI] = 'taiga'
+    world.elev[campI] = 500
+    setSuitability(world, 26, 6, 0.8)
+    const camp = placeCity(world, 26, 6, 'Camp')
+    expect(camp.mutated).toBe(true)
+    expect(camp.city?.role).toBe('hunting')
+    expect(camp.city?.sizeCause).toBe('inland hunting camp')
+    expect(port.city!.population!).toBeGreaterThan(camp.city!.population!)
+  })
+
   it('rejects out-of-bounds clicks', () => {
     const world = makeWorld()
     const r = placeCity(world, -1, 5, 'Nowhere')
