@@ -54,7 +54,7 @@ import {
   SETTLEMENT_RANK_LABEL,
   SETTLEMENT_ROLE_LABEL,
 } from '../sketch/settlements'
-import { routeCaption, tradeKindForOverlay, TRADE_GOOD_LABEL, MAX_POLITIES } from '../sketch/polities'
+import { entrepotHubs, routeDossier, tradeKindForOverlay, TRADE_GOOD_LABEL, MAX_POLITIES } from '../sketch/polities'
 import { wondersFor } from './wondersCache'
 import { groupWondersByKind, shortWonderName } from '../sketch/wonders'
 import { labelLandmasses } from '../sketch/countBigComponents'
@@ -2075,6 +2075,10 @@ function mountTradePage(state: ShellStateView): HTMLElement {
     return page
   }
   const routes = world.routes.filter((r) => r.kind === kind && r.path.length >= 2)
+  const hubs = entrepotHubs(world)
+  if (hubs.length) {
+    page.append(el('p', { class: 'cities-count' }, `Entrepôts: ${hubs.map((c) => c.name).join(', ')}`))
+  }
   page.append(
     el(
       'p',
@@ -2097,7 +2101,7 @@ function mountTradePage(state: ShellStateView): HTMLElement {
     const ranked = [...routes].sort((a, b) => b.volume - a.volume).slice(0, 12)
     for (const r of ranked) {
       const mid = r.path[Math.floor(r.path.length / 2)]
-      const row = el('li', { class: 'route-line', 'data-x': mid?.x ?? 0, 'data-y': mid?.y ?? 0 }, routeCaption(world, r))
+      const row = el('li', { class: 'route-line', 'data-x': mid?.x ?? 0, 'data-y': mid?.y ?? 0 }, routeDossier(world, r))
       if (mid) {
         row.addEventListener('click', () => goTo(mid.x, mid.y))
         if (isFocus(state, mid.x, mid.y)) row.classList.add('is-selected')

@@ -103,7 +103,6 @@ import {
   defaultPolityCount,
   clampPolityCount,
   removeRouteNearCell,
-  routeCaption,
   routeDossier,
   routeNearCell,
   tradeKindForOverlay,
@@ -864,6 +863,7 @@ export function mountApp(root: HTMLElement): void {
         const bits: string[] = []
         if (cityHere.role) bits.push(SETTLEMENT_ROLE_LABEL[cityHere.role])
         if (cityHere.port && cityHere.port !== 'none') bits.push(SETTLEMENT_PORT_LABEL[cityHere.port])
+        if (cityHere.entrepot) bits.push('entrepôt')
         town = `${cityHere.name}${bits.length ? ` — ${bits.join(', ').toLowerCase()}` : ''}`
         const si = world.suitability[cityHere.y * world.meta.width + cityHere.x]
         townPeople = populationBand(cityHere, si)
@@ -954,7 +954,7 @@ export function mountApp(root: HTMLElement): void {
       const hit = removeRouteNearCell(state.world, x, y, kind)
       announce(
         hit ? 'success' : 'warn',
-        hit ? `Cut: ${routeCaption(state.world, hit)}.` : 'No route near that click.',
+        hit ? `Cut: ${routeDossier(state.world, hit)}` : 'No route near that click.',
       )
       routeAnchor = null
       render()
@@ -997,7 +997,7 @@ export function mountApp(root: HTMLElement): void {
           : `No land path from ${from} to ${city.name}.`,
       )
     } else {
-      announce('success', `Traced: ${routeCaption(state.world, drawn)}.`)
+      announce('success', `Traced: ${routeDossier(state.world, drawn)}`)
     }
     render()
     return true
@@ -2113,7 +2113,7 @@ export function mountApp(root: HTMLElement): void {
             .sort((a, b) => b.volume - a.volume)[0]
           announce(
             'info',
-            `${n} ${kind === 'sea' ? 'sea lanes' : 'caravans'}. Width is cargo volume. Busiest: ${routeCaption(state.world, top)}.`,
+            `${n} ${kind === 'sea' ? 'sea lanes' : 'caravans'}. Width is cargo volume. Busiest: ${routeDossier(state.world, top)}`,
           )
         }
       }

@@ -139,6 +139,8 @@ export interface City {
   population?: number
   /** Short geographic cause of that size. Not a lore paragraph. */
   sizeCause?: string
+  /** Two or more significant routes meet here, or a sea port joins a caravan and a sea lane. */
+  entrepot?: boolean
 }
 
 /** Staple goods inferred from biome and town jobs — not GDP. */
@@ -169,6 +171,9 @@ export interface PlaceAnalog {
   tradition: string
 }
 
+/** Why a stretch of road is watched or not. A cause, not a combat roll. */
+export type RouteRisk = 'safe' | 'banditry' | 'piracy'
+
 export interface TradeRoute {
   kind: 'land' | 'sea'
   ax: number
@@ -181,6 +186,14 @@ export interface TradeRoute {
   path: { x: number; y: number }[]
   /** Writer-traced overlay. Survives country rebuild; not climate. */
   author?: boolean
+  /** Travel days at caravan (~30 km/day) or ship (~120 km/day) pace. */
+  days?: number
+  /** Why this pair trades. Surplus and want, not GDP. */
+  why?: string
+  /** safe, or banditry on land / piracy at sea. */
+  risk?: RouteRisk
+  /** One line: far from the seat, or crosses another country. */
+  riskCause?: string
 }
 
 export interface Polity {
