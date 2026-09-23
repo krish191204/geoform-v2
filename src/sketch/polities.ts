@@ -5,7 +5,7 @@
  * Borders follow relief and water; goods and routes are guesses with reasons.
  */
 
-import type { City, Polity, TradeGood, TradeRoute, World, WorldOverlay } from '../world/types'
+import type { City, Polity, RouteRisk, TradeGood, TradeRoute, World, WorldOverlay } from '../world/types'
 import { idx } from '../world/types'
 import { analogAt, analogForCells, PLACE_ANALOGS, TRADE_GOOD_LABEL } from './analogs'
 import { ensureSeatCount } from './settlements'
@@ -455,6 +455,18 @@ function dijkstraPath(
   return { cost: dist[goal], path: thin }
 }
 
+/** Why these two countries move this good. Does not change the gravity volume. */
+function crossWhy(a: Polity, b: Polity, good: TradeGood): string {
+  const label = TRADE_GOOD_LABEL[good]
+  if (a.exports.includes(good) && b.imports.includes(good)) {
+    return `${a.name} has surplus ${label}; ${b.name} wants it`
+  }
+  if (b.exports.includes(good) && a.imports.includes(good)) {
+    return `${b.name} has surplus ${label}; ${a.name} wants it`
+  }
+  return `${a.name} can spare ${label}; ${b.name} takes a share`
+}
+
 function pairVolume(
   a: Polity,
   b: Polity,
@@ -462,7 +474,7 @@ function pairVolume(
   cityB: City,
   cost: number,
   kind: 'land' | 'sea',
-): { v: number; good: TradeGood } {
+): { v: number; good: TradeGood; why: string } {
   let best: TradeGood = 'grain'
   let want = 0.2
   for (const good of a.exports) {
@@ -477,7 +489,7 @@ function pairVolume(
   let v = gravityFlow(massA, massB, cost, kind)
   if (cityA.port === 'sea' && cityB.port === 'sea' && kind === 'sea') v *= 1.15
   if (cityA.role === 'trade' || cityB.role === 'trade') v *= 1.05
-  return { v: Math.min(1, v), good: best }
+  return { v: Math.min(1, v), good: best, why: crossWhy(a, b, best) }
 }
 
 function isSeaPort(city: City): boolean {
@@ -519,6 +531,7 @@ function buildRoutes(world: World): void {
   const polities = world.polities
   if (polities.length < 1) {
     world.routes = kept
+    refreshRouteFacts(world)
     return
   }
   const coast = coastDistField(world)
@@ -547,16 +560,17 @@ function buildRoutes(world: World): void {
       if (!same) {
         const landPath = dijkstraPath(world, a.x, a.y, b.x, b.y, 'land', coast, land)
         if (landPath) {
-          const { v, good } = pairVolume(pa, pb, a, b, landPath.cost, 'land')
-          if (v > 0.04) {
+          const traded = pairVolume(pa, pb, a, b, landPath.cost, 'land')
+          if (traded.v > 0.04) {
             landCand.push({
               kind: 'land',
               ax: a.x,
               ay: a.y,
               bx: b.x,
               by: b.y,
-              volume: v,
-              good,
+              volume: traded.v,
+              good: traded.good,
+              why: traded.why,
               path: landPath.path,
             })
           }
@@ -566,6 +580,7 @@ function buildRoutes(world: World): void {
         if (landPath) {
           const v = Math.min(1, gravityFlow(Math.max(0.25, pa.mass ?? 1), Math.max(0.2, pa.mass * 0.45), landPath.cost, 'land') * 0.55)
           if (v > 0.05) {
+            const good = pa.exports[0] ?? 'grain'
             landCand.push({
               kind: 'land',
               ax: a.x,
@@ -573,7 +588,8 @@ function buildRoutes(world: World): void {
               bx: b.x,
               by: b.y,
               volume: v,
-              good: pa.exports[0] ?? 'grain',
+              good,
+              why: `${pa.name} moves ${TRADE_GOOD_LABEL[good]} inland between ${a.name} and ${b.name}`,
               path: landPath.path,
             })
           }
@@ -583,22 +599,24 @@ function buildRoutes(world: World): void {
       if (isSeaPort(a) && isSeaPort(b) && (!same || hop >= 14)) {
         const seaPath = dijkstraPath(world, a.x, a.y, b.x, b.y, 'sea', coast, land)
         if (seaPath) {
-          const { v, good } = same
+          const traded = same
             ? {
                 v: Math.min(1, gravityFlow(Math.max(0.25, pa.mass ?? 1), Math.max(0.2, pa.mass * 0.4), seaPath.cost, 'sea') * 0.5),
                 good: 'fish' as const,
+                why: `${pa.name} sends fish by sea between ${a.name} and ${b.name}`,
               }
             : pairVolume(pa, pb, a, b, seaPath.cost, 'sea')
           const floor = same ? 0.03 : 0.03
-          if (v > floor) {
+          if (traded.v > floor) {
             seaCand.push({
               kind: 'sea',
               ax: a.x,
               ay: a.y,
               bx: b.x,
               by: b.y,
-              volume: same ? v : v * 1.15,
-              good,
+              volume: same ? traded.v : traded.v * 1.15,
+              good: traded.good,
+              why: traded.why,
               path: seaPath.path,
             })
           }
@@ -614,6 +632,7 @@ function buildRoutes(world: World): void {
   const generated = [...pack(landCand, 24), ...pack(seaCand, 20)]
   const extra = generated.filter((g) => !kept.some((k) => sameEndpoints(k, g)))
   world.routes = [...kept, ...extra]
+  refreshRouteFacts(world)
 }
 
 export function tradeKindForOverlay(overlay: WorldOverlay): 'land' | 'sea' | null {
@@ -659,10 +678,285 @@ export function routeLengthKm(world: World, route: TradeRoute): number {
 const CARAVAN_KM_PER_DAY = 30
 /** Coastal sailing pace with fair winds, km per day. */
 const SHIP_KM_PER_DAY = 120
+/** Packed routes sit at least this high. Below it, a spur is not a hub. */
+const SIGNIFICANT_VOLUME = 0.08
+/** Past this, a seat's patrols no longer watch the road. */
+const FAR_LAND_KM = 400
+/** Past this, a port no longer watches the lane. */
+const FAR_SEA_KM = 900
+
+const N8: readonly [number, number][] = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1],
+]
 
 function fmtKm(km: number): string {
   const rounded = km >= 100 ? Math.round(km / 10) * 10 : Math.round(km)
   return `${rounded.toLocaleString('en-US')} km`
+}
+
+function fmtDays(days: number): string {
+  const n = Math.max(1, Math.round(days))
+  return n === 1 ? '1 day' : `${n.toLocaleString('en-US')} days`
+}
+
+function cellDistanceKm(world: World, ax: number, ay: number, bx: number, by: number): number {
+  const { width: w, height: h } = world.meta
+  const k = kmPerCell(world)
+  const midY = (ay + by) / 2
+  const lat = ((midY + 0.5) / h - 0.5) * Math.PI
+  const dx = wrapDx(ax, bx, w) * Math.cos(lat)
+  return Math.hypot(dx, ay - by) * k
+}
+
+function polityAtPoint(world: World, x: number, y: number): Polity | undefined {
+  const city = cityAt(world, x, y)
+  const id = city?.polityId ?? world.polityId[idx(world.meta.width, x, y)]
+  if (id === undefined || id < 0) return undefined
+  return world.polities.find((p) => p.id === id)
+}
+
+function endpointKey(x: number, y: number): string {
+  return `${x},${y}`
+}
+
+/** Cells the thinned path actually crosses, so a narrow country is not skipped. */
+function routeCells(world: World, route: TradeRoute): { x: number; y: number }[] {
+  const { width: w, height: h } = world.meta
+  const cells: { x: number; y: number }[] = []
+  const seen = new Set<number>()
+  const push = (x: number, y: number) => {
+    if (y < 0 || y >= h) return
+    const xx = wrapX(x, w)
+    const key = y * w + xx
+    if (seen.has(key)) return
+    seen.add(key)
+    cells.push({ x: xx, y })
+  }
+  const pts = route.path
+  if (!pts.length) return cells
+  push(pts[0].x, pts[0].y)
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]
+    const b = pts[i]
+    let dx = b.x - a.x
+    if (dx > w / 2) dx -= w
+    else if (dx < -w / 2) dx += w
+    const x1 = a.x + dx
+    const y1 = b.y
+    let x = a.x
+    let y = a.y
+    const adx = Math.abs(x1 - x)
+    const ady = Math.abs(y1 - y)
+    const sx = x < x1 ? 1 : -1
+    const sy = y < y1 ? 1 : -1
+    let err = adx - ady
+    const guard = adx + ady + 2
+    for (let s = 0; s < guard; s++) {
+      push(x, y)
+      if (x === x1 && y === y1) break
+      const e2 = 2 * err
+      if (e2 > -ady) {
+        err -= ady
+        x += sx
+      }
+      if (e2 < adx) {
+        err += adx
+        y += sy
+      }
+    }
+  }
+  return cells
+}
+
+function foreignCoast(world: World, x: number, y: number, home: Set<number>): Polity | undefined {
+  const { width: w, height: h, threshold } = world.meta
+  for (const [dx, dy] of N8) {
+    const nx = wrapX(x + dx, w)
+    const ny = y + dy
+    if (ny < 0 || ny >= h) continue
+    const i = idx(w, nx, ny)
+    if (world.mask[i] < threshold) continue
+    const pid = world.polityId[i]
+    if (pid >= 0 && !home.has(pid)) return world.polities.find((p) => p.id === pid)
+  }
+  return undefined
+}
+
+function watchSeats(
+  world: World,
+  pa: Polity | undefined,
+  pb: Polity | undefined,
+): { x: number; y: number; name: string }[] {
+  const out: { x: number; y: number; name: string }[] = []
+  if (pa) out.push({ x: pa.capitalX, y: pa.capitalY, name: pa.name })
+  if (pb && pb.id !== pa?.id) out.push({ x: pb.capitalX, y: pb.capitalY, name: pb.name })
+  if (out.length) return out
+  return world.polities.map((p) => ({ x: p.capitalX, y: p.capitalY, name: p.name }))
+}
+
+function assessRouteRisk(world: World, route: TradeRoute): { risk: RouteRisk; riskCause: string } {
+  const pa = polityAtPoint(world, route.ax, route.ay)
+  const pb = polityAtPoint(world, route.bx, route.by)
+  const home = new Set<number>()
+  if (pa) home.add(pa.id)
+  if (pb) home.add(pb.id)
+  let crossed: Polity | undefined
+  for (const cell of routeCells(world, route)) {
+    if (crossed) break
+    const i = idx(world.meta.width, cell.x, cell.y)
+    const onLand = world.mask[i] >= world.meta.threshold
+    const pid = world.polityId[i]
+    if (route.kind === 'land') {
+      if (onLand && pid >= 0 && !home.has(pid)) crossed = world.polities.find((p) => p.id === pid)
+      continue
+    }
+    if (onLand) {
+      if (pid >= 0 && !home.has(pid)) crossed = world.polities.find((p) => p.id === pid)
+    } else {
+      crossed = foreignCoast(world, cell.x, cell.y, home)
+    }
+  }
+  if (crossed) {
+    return route.kind === 'sea'
+      ? { risk: 'piracy', riskCause: `passes the coast of ${crossed.name}, outside either port's watch` }
+      : { risk: 'banditry', riskCause: `crosses ${crossed.name}, beyond either seat's patrols` }
+  }
+  const watch = watchSeats(world, pa, pb)
+  let farKm = 0
+  let farName = watch[0]?.name ?? ''
+  for (const p of route.path) {
+    let best = Infinity
+    let name = farName
+    for (const s of watch) {
+      const d = cellDistanceKm(world, p.x, p.y, s.x, s.y)
+      if (d < best) {
+        best = d
+        name = s.name
+      }
+    }
+    if (best < Infinity && best > farKm) {
+      farKm = best
+      farName = name
+    }
+  }
+  const limit = route.kind === 'sea' ? FAR_SEA_KM : FAR_LAND_KM
+  if (watch.length && farKm > limit) {
+    const where = fmtKm(farKm)
+    return route.kind === 'sea'
+      ? { risk: 'piracy', riskCause: `the farthest stretch is about ${where} from ${farName}'s seat, in open water` }
+      : { risk: 'banditry', riskCause: `the farthest stretch is about ${where} from ${farName}'s seat` }
+  }
+  if (!watch.length) {
+    return {
+      risk: 'safe',
+      riskCause: route.kind === 'sea' ? 'no seat watches this water' : 'no seat watches this road',
+    }
+  }
+  const names = [...new Set(watch.map((s) => s.name))].join(' and ')
+  return { risk: 'safe', riskCause: `it stays within reach of ${names}` }
+}
+
+function whyForRoute(world: World, route: TradeRoute): string {
+  const from = endpointName(world, route.ax, route.ay)
+  const to = endpointName(world, route.bx, route.by)
+  const label = TRADE_GOOD_LABEL[route.good]
+  const pa = polityAtPoint(world, route.ax, route.ay)
+  const pb = polityAtPoint(world, route.bx, route.by)
+  if (pa && pb && pa.id !== pb.id) return crossWhy(pa, pb, route.good)
+  if (pa && pb) {
+    return route.kind === 'sea'
+      ? `${pa.name} sends ${label} by sea between ${from} and ${to}`
+      : `${pa.name} moves ${label} inland between ${from} and ${to}`
+  }
+  if (route.author) return `Writer traced ${label} from ${from} to ${to}`
+  return `${label} moves from ${from} to ${to} because the path is cheap enough to carry`
+}
+
+function significantRoute(route: TradeRoute): boolean {
+  return route.path.length >= 2 && route.volume >= SIGNIFICANT_VOLUME
+}
+
+function routeDegree(world: World): Map<string, { n: number; land: boolean; sea: boolean }> {
+  const degree = new Map<string, { n: number; land: boolean; sea: boolean }>()
+  for (const route of world.routes) {
+    if (!significantRoute(route)) continue
+    for (const [x, y] of [
+      [route.ax, route.ay],
+      [route.bx, route.by],
+    ] as const) {
+      const key = endpointKey(x, y)
+      const row = degree.get(key) ?? { n: 0, land: false, sea: false }
+      row.n += 1
+      if (route.kind === 'land') row.land = true
+      else row.sea = true
+      degree.set(key, row)
+    }
+  }
+  return degree
+}
+
+function markEntrepots(world: World): void {
+  const degree = routeDegree(world)
+  for (const city of world.cities) {
+    const row = degree.get(endpointKey(city.x, city.y))
+    const meets = (row?.n ?? 0) >= 2
+    const portJoin = city.port === 'sea' && Boolean(row?.land) && Boolean(row?.sea)
+    city.entrepot = meets || portJoin
+  }
+}
+
+/** Entrepôt towns, busiest meeting-place first. */
+export function entrepotHubs(world: World): City[] {
+  const degree = routeDegree(world)
+  return world.cities
+    .filter((c) => c.entrepot)
+    .sort((a, b) => {
+      const d = (degree.get(endpointKey(b.x, b.y))?.n ?? 0) - (degree.get(endpointKey(a.x, a.y))?.n ?? 0)
+      if (d !== 0) return d
+      return a.name.localeCompare(b.name)
+    })
+}
+
+function refreshRouteFacts(world: World): void {
+  for (const route of world.routes) {
+    const km = routeLengthKm(world, route)
+    const pace = route.kind === 'sea' ? SHIP_KM_PER_DAY : CARAVAN_KM_PER_DAY
+    route.days = km <= 0 ? undefined : Math.max(1, Math.ceil(km / pace))
+    route.why = whyForRoute(world, route)
+    const risk = assessRouteRisk(world, route)
+    route.risk = risk.risk
+    route.riskCause = risk.riskCause
+  }
+  markEntrepots(world)
+}
+
+function riskSentence(kind: 'land' | 'sea', risk: RouteRisk, cause: string): string {
+  if (risk === 'banditry') return `Banditry: ${cause}.`
+  if (risk === 'piracy') return `Piracy: ${cause}.`
+  return kind === 'sea' ? `The lane is safe: ${cause}.` : `The road is safe: ${cause}.`
+}
+
+function hubClause(world: World, route: TradeRoute): string {
+  const ends = [cityAt(world, route.ax, route.ay), cityAt(world, route.bx, route.by)]
+  const hubs = ends.filter((c): c is City => Boolean(c?.entrepot))
+  if (!hubs.length) return ''
+  if (hubs.length === 1) return `Meets at ${hubs[0].name}, an entrepôt.`
+  return `Meets at entrepôts ${hubs[0].name} and ${hubs[1].name}.`
+}
+
+function travelDays(world: World, route: TradeRoute): number {
+  if (route.days && route.days > 0) return route.days
+  const km = routeLengthKm(world, route)
+  if (km <= 0) return 0
+  const pace = route.kind === 'sea' ? SHIP_KM_PER_DAY : CARAVAN_KM_PER_DAY
+  return Math.max(1, Math.ceil(km / pace))
 }
 
 export function routeCaption(world: World, route: TradeRoute): string {
@@ -671,23 +965,32 @@ export function routeCaption(world: World, route: TradeRoute): string {
   const to = endpointName(world, route.bx, route.by)
   const kind = route.kind === 'sea' ? 'Sea lane' : 'Caravan'
   const km = routeLengthKm(world, route)
-  if (km <= 0) return `${kind}: ${good}, ${from} → ${to}`
-  const days = Math.max(1, Math.ceil(km / (route.kind === 'sea' ? SHIP_KM_PER_DAY : CARAVAN_KM_PER_DAY)))
-  return `${kind}: ${good}, ${from} → ${to} · ${fmtKm(km)} · ${days} d`
+  const days = travelDays(world, route)
+  const safety =
+    route.risk === 'banditry' ? 'banditry' : route.risk === 'piracy' ? 'piracy' : route.risk === 'safe' ? 'safe' : ''
+  const core = `${kind}: ${good}, ${from} → ${to}`
+  if (km <= 0) return safety ? `${core} · ${safety}` : core
+  const tail = `${fmtKm(km)} · ${fmtDays(days)}`
+  return safety ? `${core} · ${tail} · ${safety}` : `${core} · ${tail}`
 }
 
 /**
- * Inspector dossier for a route: caption plus a short "why" — surplus,
- * path cost, and writer vs auto provenance. Not GDP.
+ * Inspector and gazetteer line: what moves, how far, how many days,
+ * why this pair, and whether the road is watched. Not GDP.
  */
 export function routeDossier(world: World, route: TradeRoute): string {
   const cap = routeCaption(world, route)
+  const why = route.why?.trim() || whyForRoute(world, route)
+  const assessed =
+    route.risk && route.riskCause ? { risk: route.risk, riskCause: route.riskCause } : assessRouteRisk(world, route)
+  const risk = riskSentence(route.kind, assessed.risk, assessed.riskCause)
+  const hub = hubClause(world, route)
   const vol = Math.round(Math.max(0, Math.min(1, route.volume)) * 100)
-  const pace = route.kind === 'sea' ? '~120 km/day by ship' : '~30 km/day by caravan'
-  if (route.author) {
-    return `${cap}. Writer-traced (${pace}). Width follows surplus and path cost, not GDP.`
-  }
-  return `${cap}. Auto trade at ${vol}% of the busiest lane (${pace}). Width is surplus × inverse path cost.`
+  const provenance = route.author
+    ? 'Writer-traced. Width follows surplus and path cost, not GDP.'
+    : `Auto trade at ${vol}% of the busiest lane. Width is surplus × inverse path cost.`
+  const whySentence = /[.!?]$/.test(why) ? why : `${why}.`
+  return [cap.endsWith('.') ? cap : `${cap}.`, whySentence, risk, hub, provenance].filter((s) => s.length > 0).join(' ')
 }
 
 function pathDist(world: World, route: TradeRoute, x: number, y: number): number {
@@ -730,6 +1033,7 @@ export function removeRouteNearCell(
   const hit = routeNearCell(world, x, y, kind, 4)
   if (!hit) return null
   world.routes = world.routes.filter((r) => r !== hit)
+  markEntrepots(world)
   return hit
 }
 
@@ -792,6 +1096,7 @@ export function traceTradeRoute(
   }
   world.routes = world.routes.filter((r) => !sameEndpoints(r, route))
   world.routes.push(route)
+  refreshRouteFacts(world)
   return route
 }
 
