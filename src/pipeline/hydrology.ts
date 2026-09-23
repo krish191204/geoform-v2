@@ -2,13 +2,16 @@
  * Hydrology step: flow accumulation and river mask.
  *
  * Algorithm:
- *   1. Sink-fill the elevation so every cell has a downhill path to a coast.
- *   2. Sort cells by elevation descending.
+ *   1. Priority-flood toward the ocean, but cap how far a pit may be raised.
+ *      Shallow depressions still spill to the sea. Deeper pits stay closed:
+ *      standing lakes when summer moisture is enough, salt flats when it
+ *      is not. Rivers may end in that basin.
+ *   2. Sort cells by the (capped) elevation descending.
  *   3. D8 flow accumulation: each land cell donates `runoff[cell] + flux[cell]`
  *      to its lowest neighbour. Default runoff is 1 (unit tests). Make sense
  *      passes summer moisture so deserts drain less than rainforests.
- *      Ocean cells are sinks. Local maxima stay at `flux = 0`.
- *   4. Mark rivers where `flux > RIVER_THRESHOLD`.
+ *      Ocean cells and closed basins are sinks. Local maxima stay at `flux = 0`.
+ *   4. Mark rivers where `flux > RIVER_THRESHOLD`, except on lake and salt cells.
  *
  * No flux boost. Raw accumulation; the renderer scales on display.
  */
@@ -19,6 +22,15 @@
 
 /** River cutoff. `flux > RIVER_THRESHOLD` -> river cell. */
 export const RIVER_THRESHOLD = 8
+
+/**
+ * Maximum metres a pit is raised to reach the sea. Deeper holes stay
+ * closed and become lakes or salt flats.
+ */
+export const FILL_CAP_M = 60
+
+/** Summer moisture below this turns a closed pit into a salt flat. */
+export const SALT_SUMMER_MOIST = 0.22
 
 /** Floor so a bone-dry cell still contributes a trickle, never zero donation. */
 export const RUNOFF_EPS = 0.05
@@ -236,6 +248,10 @@ export interface HydrologyResult {
   flux: Float32Array
   /** 1 = river cell (flux > RIVER_THRESHOLD), 0 = not. Length W*H. */
   rivers: Uint8Array
+  /** 1 = standing water in a closed basin. Not a sketch-mask edit. */
+  lakes: Uint8Array
+  /** 1 = closed basin too dry to hold a lake. */
+  salt: Uint8Array
 }
 
 /**
@@ -257,12 +273,29 @@ export function computeHydrology(
   runoff?: Float32Array,
 ): HydrologyResult {
   const n = width * height
-  // Copy elevation: sink-fill mutates it, and the caller owns the input.
+  // Spill-fill on a copy. Shallow pits rise to the outlet; deep ones stay.
   const e = new Float32Array(n)
   for (let i = 0; i < n; i++) e[i] = elev[i]
+  const spill = new Float32Array(elev)
+  fillSinks(spill, mask, width, height, threshold)
 
-  // 1. Sink fill — every land cell gets a downhill path.
-  fillSinks(e, mask, width, height, threshold)
+  let anyOcean = false
+  for (let i = 0; i < n; i++) {
+    if (mask[i] < threshold) anyOcean = true
+  }
+  const closed = new Uint8Array(n)
+  if (anyOcean) {
+    for (let i = 0; i < n; i++) {
+      if (mask[i] < threshold) continue
+      const depth = spill[i] - elev[i]
+      if (depth > FILL_CAP_M) {
+        closed[i] = 1
+        e[i] = elev[i]
+      } else {
+        e[i] = spill[i]
+      }
+    }
+  }
 
   // 2. Sort cells by elevation descending.
   const order = sortByElevationDesc(e)
@@ -270,6 +303,8 @@ export function computeHydrology(
   // 3. D8 flow accumulation.
   const flux = new Float32Array(n)
   const rivers = new Uint8Array(n)
+  const lakes = new Uint8Array(n)
+  const salt = new Uint8Array(n)
 
   for (let o = 0; o < n; o++) {
     const i = order[o]
@@ -307,14 +342,23 @@ export function computeHydrology(
     }
   }
 
-  // 4. Mark rivers where flux exceeds the documented threshold.
+  // 4. Closed basins: water when the cell is moist, salt when summer is dry.
+  // Rivers end here — the cell is a sink, not a channel.
   for (let i = 0; i < n; i++) {
-    if (mask[i] < threshold) {
+    if (!closed[i]) continue
+    const dry = runoff ? runoff[i] < SALT_SUMMER_MOIST : false
+    if (dry) salt[i] = 1
+    else lakes[i] = 1
+  }
+
+  // 5. Mark rivers where flux exceeds the documented threshold.
+  for (let i = 0; i < n; i++) {
+    if (mask[i] < threshold || lakes[i] || salt[i]) {
       rivers[i] = 0
       continue
     }
     rivers[i] = flux[i] > RIVER_THRESHOLD ? 1 : 0
   }
 
-  return { flux, rivers }
+  return { flux, rivers, lakes, salt }
 }

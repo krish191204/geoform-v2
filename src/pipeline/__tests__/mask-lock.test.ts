@@ -19,7 +19,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { makeSenseInline, MASK_LOCK_AREA_FRACTION, MASK_LOCK_MIN_COMPONENT } from '../makeSense_inline'
+import { makeSenseInline, MASK_LOCK_AREA_FRACTION, MASK_LOCK_MIN_COMPONENT, TOTAL_STEPS } from '../makeSense_inline'
+import { applyGlaciation } from '../glaciation'
 import { bigComponentsMask } from '../helpers'
 import { serializeWorld, deserializeWorld } from '../../world/persist'
 import type { World, WorldMeta } from '../../world/types'
@@ -86,6 +87,10 @@ function toWorld(result: Awaited<ReturnType<typeof makeSenseInline>>, meta: Worl
 // ---------------------------------------------------------------------------
 
 describe('mask-lock constants', () => {
+  it('keeps seven steps', () => {
+    expect(TOTAL_STEPS).toBe(7)
+  })
+
   it('MASK_LOCK_AREA_FRACTION is 12%', () => {
     expect(MASK_LOCK_AREA_FRACTION).toBeCloseTo(0.12, 6)
   })
@@ -124,6 +129,9 @@ describe('bigComponentsMask (pre-count)', () => {
     const result = await evolve(tw, 11, 0.5)
     const after = bigComponentsMask(result.mask, tw.width, tw.height, meta.threshold, MASK_LOCK_MIN_COMPONENT)
     expect(after.count).toBe(1)
+    expect(result.provenance.steps).toHaveLength(TOTAL_STEPS)
+    const oro = result.provenance.steps.find((s) => s.stepName === 'orogeny')
+    expect(String(oro?.measurements.summary ?? '')).toContain('carved valley')
     const allowed = MASK_LOCK_AREA_FRACTION * Math.max(1, result.provenance.inputMaskArea)
     expect(Math.abs(result.provenance.outputMaskArea - result.provenance.inputMaskArea)).toBeLessThanOrEqual(allowed)
   })
@@ -156,6 +164,59 @@ describe('bigComponentsMask (pre-count)', () => {
 // ---------------------------------------------------------------------------
 // Determinism
 // ---------------------------------------------------------------------------
+
+describe('fjord inlets respect the lock', () => {
+  function coldCoast(): { mask: Float32Array; elev: Float32Array; summer: Float32Array; winter: Float32Array; w: number; h: number; land: number } {
+    const w = 28
+    const h = 14
+    const mask = new Float32Array(w * h)
+    const elev = new Float32Array(w * h)
+    const summer = new Float32Array(w * h).fill(-6)
+    const winter = new Float32Array(w * h).fill(-18)
+    let land = 0
+    for (let y = 2; y <= 11; y++) {
+      for (let x = 6; x <= 24; x++) {
+        const i = y * w + x
+        mask[i] = 1
+        elev[i] = 80 + (x - 6) * 25
+        land++
+      }
+    }
+    return { mask, elev, summer, winter, w, h, land }
+  }
+
+  it('shortens the inlet when the landmass has no area left', () => {
+    const g = coldCoast()
+    const before = Float32Array.from(g.mask)
+    const inputLandArea = Math.ceil(g.land / (1 - MASK_LOCK_AREA_FRACTION))
+    applyGlaciation(g.elev, g.mask, g.summer, g.winter, g.w, g.h, 0.5, {
+      inputLandArea,
+      areaFraction: MASK_LOCK_AREA_FRACTION,
+      minComponent: MASK_LOCK_MIN_COMPONENT,
+    })
+    expect(Array.from(g.mask)).toEqual(Array.from(before))
+  })
+
+  it('cuts a short ice coast and keeps the landmass inside 12%', () => {
+    const g = coldCoast()
+    const beforeLand = g.land
+    const result = applyGlaciation(g.elev, g.mask, g.summer, g.winter, g.w, g.h, 0.5, {
+      inputLandArea: beforeLand,
+      areaFraction: MASK_LOCK_AREA_FRACTION,
+      minComponent: MASK_LOCK_MIN_COMPONENT,
+    })
+    expect(result.summary).toBe('ice coast')
+    let after = 0
+    for (let i = 0; i < g.mask.length; i++) if (g.mask[i] >= 0.5) after++
+    const lost = beforeLand - after
+    expect(lost).toBeGreaterThan(0)
+    expect(lost).toBeLessThanOrEqual(Math.floor(MASK_LOCK_AREA_FRACTION * beforeLand))
+    expect(lost).toBeLessThanOrEqual(3 * 8)
+    let ice = 0
+    for (let i = 0; i < result.ice.length; i++) ice += result.ice[i]
+    expect(ice).toBeGreaterThan(0)
+  })
+})
 
 describe('byte-deterministic output', () => {
   it('the same seed produces a byte-identical MakeSenseResult', async () => {

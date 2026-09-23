@@ -8,7 +8,14 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { ALPINE_ELEV_M, classifyBiome, computeBiomes, refineHydrologicBiomes, WETLAND_FLUX_MIN } from './biomes'
+import {
+  ALPINE_ELEV_M,
+  classifyBiome,
+  computeBiomes,
+  refineHydrologicBiomes,
+  waterBalance,
+  WETLAND_FLUX_MIN,
+} from './biomes'
 import type { BiomesResult, CellBiome } from './biomes'
 
 // ---------------------------------------------------------------------------
@@ -68,6 +75,12 @@ describe('classifyBiome — spec table', () => {
 
   it('cold dry in the boreal range is boreal desert, not taiga', () => {
     expect(classifyBiome(8, 15, 0.1)).toBe('boreal-desert')
+  })
+
+  it('treats hot modest rain as a deficit against PET, not a wet biome', () => {
+    expect(waterBalance(0.2, 28)).toBeLessThan(0)
+    expect(classifyBiome(28, 6, 0.2)).toBe('hot-desert')
+    expect(classifyBiome(12, 8, 0.55)).toBe('temperate-forest')
   })
 })
 

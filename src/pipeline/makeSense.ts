@@ -93,6 +93,7 @@ export function worldFromMakeSense(
     moistMean: result.moistMean,
     flux: result.flux,
     rivers: result.rivers,
+    lakes: result.lakes,
     biome: result.biome as CellBiome[],
     suitability: result.suitability,
     cities: [],
@@ -107,10 +108,12 @@ export function provenanceFromResult(result: MakeSenseResult): Provenance {
   return {
     steps: result.provenance.steps.map((s) => {
       const measurements: Record<string, number> = {}
+      let summary: string | undefined
       for (const [k, v] of Object.entries(s.measurements)) {
         if (typeof v === 'number') measurements[k] = v
+        else if (k === 'summary' && typeof v === 'string' && v.length > 0) summary = v
       }
-      return { name: s.stepName, at: s.elapsedMs, measurements }
+      return { name: s.stepName, at: s.elapsedMs, measurements, ...(summary ? { summary } : {}) }
     }),
     inputMaskArea: result.provenance.inputMaskArea,
     outputMaskArea: result.provenance.outputMaskArea,

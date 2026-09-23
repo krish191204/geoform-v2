@@ -32,6 +32,7 @@
  */
 
 import { idx, wrapX, latRad, bfsDistanceFromSea } from './helpers'
+import { computeOceanCurrents } from './oceanCurrents'
 
 /**
  * Minimal slice of the orogeny output the climate step needs: just
@@ -73,6 +74,8 @@ export interface SeasonalClimateResult {
   summerMoist: Float32Array
   /** Winter precipitation index per cell, 0..1. */
   winterMoist: Float32Array
+  /** 'cold current' or 'warm current' when a coast carries one. */
+  currentNote: '' | 'cold current' | 'warm current'
 }
 
 // ---------------------------------------------------------------------------
@@ -202,13 +205,52 @@ export function computeSeasonalClimate(
     }
   }
 
+  // Coastal currents: warm western boundaries, cold eastern ones.
+  // Applied before the mix so the anomaly bleeds a cell or two inland.
+  const currents = computeOceanCurrents(mask, width, height, threshold)
+  for (let i = 0; i < n; i++) {
+    const bias = currents.tempBias[i]
+    if (bias !== 0) {
+      summer[i] += bias
+      winter[i] += bias
+    }
+    if (currents.mild[i] > 0) {
+      const mid = (summer[i] + winter[i]) / 2
+      const pull = 1 - 0.28 * currents.mild[i]
+      summer[i] = mid + (summer[i] - mid) * pull
+      winter[i] = mid + (winter[i] - mid) * pull + 1.3 * currents.mild[i]
+    }
+    const isOcean = mask[i] < threshold
+    if (isOcean) {
+      summer[i] = clampNum(summer[i], OCEAN_SST_MIN_C, OCEAN_SST_MAX_C)
+      winter[i] = clampNum(winter[i], OCEAN_SST_MIN_C, OCEAN_SST_MAX_C)
+    } else {
+      summer[i] = clampNum(summer[i], LAND_TEMP_MIN_C, LAND_TEMP_MAX_C)
+      winter[i] = clampNum(winter[i], LAND_TEMP_MIN_C, LAND_TEMP_MAX_C)
+    }
+    if (winter[i] > summer[i]) {
+      const mid = (summer[i] + winter[i]) / 2
+      summer[i] = mid
+      winter[i] = mid
+    }
+  }
+
   // Air mixes. A one-cell 8000 m spike is not a climate boundary.
   mixTemperature(summer, width, height, 2)
   mixTemperature(winter, width, height, 2)
   for (let i = 0; i < n; i++) tempMean[i] = (summer[i] + winter[i]) / 2
 
-  marchPrecipitation(orogeny.elev, mask, threshold, width, height, summerMoist, 1.0)
-  marchPrecipitation(orogeny.elev, mask, threshold, width, height, winterMoist, WINTER_PRECIP_SCALE)
+  marchPrecipitation(orogeny.elev, mask, threshold, width, height, summerMoist, 1.0, currents.evapScale)
+  marchPrecipitation(
+    orogeny.elev,
+    mask,
+    threshold,
+    width,
+    height,
+    winterMoist,
+    WINTER_PRECIP_SCALE,
+    currents.evapScale,
+  )
 
   for (let y = 0; y < height; y++) {
     const lat = latRad(y, height)
@@ -227,12 +269,13 @@ export function computeSeasonalClimate(
       const upstreamI = idx(width, wrapX(x - dir, width), y)
       const drop = orogeny.elev[upstreamI] - orogeny.elev[i]
       const foehn = !isOcean && drop > 280 ? 0.78 : 1
-      summerMoist[i] = clampNum(summerMoist[i] + wetSummer * foehn, 0, 1)
-      winterMoist[i] = clampNum(winterMoist[i] + wetWinter * foehn, 0, 1)
+      const scale = currents.moistScale[i]
+      summerMoist[i] = clampNum((summerMoist[i] + wetSummer * foehn) * scale, 0, 1)
+      winterMoist[i] = clampNum((winterMoist[i] + wetWinter * foehn) * scale, 0, 1)
     }
   }
 
-  return { summer, winter, tempMean, summerMoist, winterMoist }
+  return { summer, winter, tempMean, summerMoist, winterMoist, currentNote: currents.note }
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +380,7 @@ function marchPrecipitation(
   height: number,
   out: Float32Array,
   scale: number,
+  evapScale?: Float32Array,
 ): void {
   const march = (deposit: boolean) => {
     for (let y = 0; y < height; y++) {
@@ -346,7 +390,8 @@ function marchPrecipitation(
         const x = dir > 0 ? step : width - 1 - step
         const i = idx(width, x, y)
         if (mask[i] < threshold) {
-          airM = airM + OCEAN_EVAP < 1 ? airM + OCEAN_EVAP : 1
+          const evap = OCEAN_EVAP * (evapScale ? evapScale[i] : 1)
+          airM = airM + evap < 1 ? airM + evap : 1
         }
         const upstreamI = idx(width, wrapX(x - dir, width), y)
         const upstreamElev = elev[upstreamI]

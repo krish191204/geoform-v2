@@ -462,8 +462,13 @@ export interface World {
   flux: Float32Array
   /** 1 = river cell, 0 = not. */
   rivers: Uint8Array
+  /**
+   * 1 = closed-basin lake. Drawn as water. The sketch mask stays land;
+   * this is a field on the grounded world.
+   */
+  lakes?: Uint8Array
 
-  /** Per-cell biome name, keyed off (tempMean, tempRange, summerMoist). Length W*H. */
+  /** Per-cell biome name, keyed off (tempMean, tempRange, water balance). Length W*H. */
   biome: CellBiome[]
 
   /** Per-cell city-placement suitability score, 0..1. Length W*H. */
@@ -507,7 +512,7 @@ export interface Issue {
 
 /** The anti-gaslight trail: what Make-sense did, and how much it moved. */
 export interface Provenance {
-  steps: { name: string; at: number; measurements: Record<string, number> }[]
+  steps: { name: string; at: number; measurements: Record<string, number>; summary?: string }[]
   inputMaskArea: number
   outputMaskArea: number
   maskDeltaPct: number

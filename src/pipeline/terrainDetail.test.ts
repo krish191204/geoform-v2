@@ -10,6 +10,7 @@ import {
   perlin2,
   ridgeFbm,
   sculptTerrain,
+  valleyDepthMetres,
 } from './terrainDetail'
 
 const W = 32
@@ -133,5 +134,37 @@ describe('sculptTerrain', () => {
     expect(landMin).toBeGreaterThanOrEqual(0)
     expect(landMax).toBeGreaterThan(landMin)
     expect(landMax).toBeLessThan(1200)
+  })
+
+  it('reports a before/after and a valley cut on the D8 grain', () => {
+    const mask = filledLand()
+    const elev = new Float32Array(W * H).fill(200)
+    const uplift = new Float32Array(W * H)
+    const carve = sculptTerrain(elev, uplift, mask, W, H, THRESHOLD, 4)
+    expect(carve.meanElevBefore).toBeGreaterThan(0)
+    expect(carve.valleyDepthM).toBeGreaterThan(0)
+    expect(carve.meanElevAfter).toBeLessThan(carve.meanElevBefore)
+  })
+})
+
+describe('valleyDepthMetres', () => {
+  it('reads a trench that drains along D8, deeper than its shoulders', () => {
+    const mask = filledLand()
+    const elev = new Float32Array(W * H)
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const trench = y === 8 ? 50 : 0
+        elev[idx(W, x, y)] = 500 - x * 6 - trench
+      }
+    }
+    const floor = idx(W, 12, 8)
+    const shoulder = idx(W, 12, 7)
+    const downstream = idx(W, 13, 8)
+    expect(elev[floor]).toBeLessThan(elev[shoulder])
+    expect(elev[downstream]).toBeLessThan(elev[floor])
+    expect(valleyDepthMetres(elev, mask, W, H, THRESHOLD)).toBeGreaterThan(4)
+    hydraulicErode(elev, mask, W, H, THRESHOLD, 2)
+    expect(elev[floor]).toBeLessThan(elev[shoulder])
+    expect(elev[downstream]).toBeLessThanOrEqual(elev[floor])
   })
 })

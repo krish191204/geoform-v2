@@ -25,7 +25,8 @@
  * so the noise lives here.
  */
 
-import { idx, wrapX } from './helpers'
+import { idx, meanLand, wrapX } from './helpers'
+import { D8_OFFSETS } from './hydrology'
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -64,19 +65,6 @@ const REPOSE_M = 1600
 const SLUMP = 0.18
 /** Don't cut land below this, so rifts don't punch through to sea. */
 const MIN_LAND_M = 5
-
-const SQRT2 = Math.SQRT2
-
-const D8: ReadonlyArray<{ dx: number; dy: number; dist: number }> = [
-  { dx: -1, dy: -1, dist: SQRT2 },
-  { dx: 0, dy: -1, dist: 1 },
-  { dx: 1, dy: -1, dist: SQRT2 },
-  { dx: -1, dy: 0, dist: 1 },
-  { dx: 1, dy: 0, dist: 1 },
-  { dx: -1, dy: 1, dist: SQRT2 },
-  { dx: 0, dy: 1, dist: 1 },
-  { dx: 1, dy: 1, dist: SQRT2 },
-]
 
 const GRAD2: ReadonlyArray<readonly [number, number]> = [
   [1, 1],
@@ -218,8 +206,8 @@ function steepestDownhill(
   const e = elev[i]
   let best = -1
   let bestSlope = 0
-  for (let k = 0; k < D8.length; k++) {
-    const { dx, dy, dist } = D8[k]
+  for (let k = 0; k < D8_OFFSETS.length; k++) {
+    const { dx, dy, dist } = D8_OFFSETS[k]
     const ny = y + dy
     if (ny < 0 || ny >= height) continue
     const j = idx(width, wrapX(x + dx, width), ny)
@@ -313,8 +301,8 @@ export function hydraulicErode(
       const i = land[k]
       const x = i % width
       const y = (i - x) / width
-      for (let d = 0; d < D8.length; d++) {
-        const { dx, dy, dist } = D8[d]
+      for (let d = 0; d < D8_OFFSETS.length; d++) {
+        const { dx, dy, dist } = D8_OFFSETS[d]
         const ny = y + dy
         if (ny < 0 || ny >= height) continue
         const j = idx(width, wrapX(x + dx, width), ny)
@@ -329,9 +317,63 @@ export function hydraulicErode(
   }
 }
 
+export interface CarveReport {
+  /** Mean land elevation just before the hydraulic pass, metres. */
+  meanElevBefore: number
+  /** Mean land elevation after the hydraulic pass, metres. */
+  meanElevAfter: number
+  /**
+   * Mean depth of drainage cells below their higher D8 neighbours.
+   * The grain is the same D8 hydrology uses, so rivers sit in the cuts.
+   */
+  valleyDepthM: number
+}
+
+/**
+ * How deep the D8 drainage lines sit below their shoulders.
+ * A cell counts when it has a downhill neighbour and at least two
+ * higher neighbours — a cut, not a peak.
+ */
+export function valleyDepthMetres(
+  elev: Float32Array,
+  mask: Float32Array,
+  width: number,
+  height: number,
+  threshold: number,
+): number {
+  let sum = 0
+  let n = 0
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = idx(width, x, y)
+      if (mask[i] <= threshold) continue
+      const down = steepestDownhill(elev, x, y, width, height)
+      if (down === null) continue
+      let shoulder = 0
+      let shoulders = 0
+      for (let k = 0; k < D8_OFFSETS.length; k++) {
+        const { dx, dy } = D8_OFFSETS[k]
+        const ny = y + dy
+        if (ny < 0 || ny >= height) continue
+        const j = idx(width, wrapX(x + dx, width), ny)
+        const rise = elev[j] - elev[i]
+        if (rise > 0) {
+          shoulder += rise
+          shoulders++
+        }
+      }
+      if (shoulders < 2) continue
+      sum += shoulder / shoulders
+      n++
+    }
+  }
+  return n === 0 ? 0 : sum / n
+}
+
 /**
  * Rolling hills + belt ridges, then a short hydraulic carve.
  * In-place on `elev`. Ocean is not raised.
+ * The returned before/after is what the orogeny step narrates.
  */
 export function sculptTerrain(
   elev: Float32Array,
@@ -341,7 +383,13 @@ export function sculptTerrain(
   height: number,
   threshold: number,
   seed: number,
-): void {
+): CarveReport {
   applyCoherentRelief(elev, boundaryUplift, mask, width, height, threshold, seed)
+  const meanElevBefore = meanLand(elev, mask, threshold)
   hydraulicErode(elev, mask, width, height, threshold, seed)
+  return {
+    meanElevBefore,
+    meanElevAfter: meanLand(elev, mask, threshold),
+    valleyDepthM: valleyDepthMetres(elev, mask, width, height, threshold),
+  }
 }

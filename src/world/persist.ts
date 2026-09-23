@@ -79,6 +79,8 @@ export interface SavedWorld {
     moistMean: number[]
     flux: number[]
     rivers: number[]
+    /** Closed-basin lakes. Omitted on worlds grounded before that field existed. */
+    lakes?: number[]
     biome: string[]
     suitability: number[]
     cities: World['cities']
@@ -271,6 +273,7 @@ export function serializeWorld(world: World): string {
       moistMean: Array.from(world.moistMean),
       flux: Array.from(world.flux),
       rivers: Array.from(world.rivers),
+      ...(world.lakes ? { lakes: Array.from(world.lakes) } : {}),
       biome: world.biome.slice(),
       suitability: Array.from(world.suitability),
       cities: world.cities.map((c) => ({ ...c })),
@@ -357,6 +360,7 @@ export function deserializeWorld(json: string): World | null {
     rivers: Uint8Array.from(w.rivers),
     biome: w.biome.slice() as CellBiome[],
     suitability: Float32Array.from(w.suitability),
+    ...(isNumberArray(w.lakes) && w.lakes.length === n ? { lakes: Uint8Array.from(w.lakes) } : {}),
     cities: w.cities.map((c) => ({ ...c })),
     ...emptyPolityState(n),
     ...(isNumberArray(w.polityId) && w.polityId.length === n

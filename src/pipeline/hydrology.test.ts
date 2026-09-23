@@ -311,6 +311,61 @@ describe('computeHydrology: edge cases', () => {
     // — ocean cells accumulate the flow that drained from land.
     expect(sum(flux)).toBeGreaterThan(0)
   })
+
+  it('holds a deep pit as a lake and lets the river end there', () => {
+    const w = 7
+    const h = 7
+    const elev = new Float32Array(w * h)
+    const mask = new Float32Array(w * h)
+    const moist = new Float32Array(w * h).fill(0.55)
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = idx(w, x, y)
+        const edge = x === 0 || y === 0 || x === w - 1 || y === h - 1
+        if (edge) {
+          mask[i] = 0
+          elev[i] = 0
+          continue
+        }
+        mask[i] = 1
+        const d = Math.max(Math.abs(x - 3), Math.abs(y - 3))
+        elev[i] = d === 2 ? 220 : 20 + d * 70
+      }
+    }
+    const center = idx(w, 3, 3)
+    const { lakes, salt, flux, rivers } = computeHydrology(elev, mask, w, h, THRESHOLD, moist)
+    expect(lakes[center]).toBe(1)
+    expect(salt[center]).toBe(0)
+    expect(flux[center]).toBeGreaterThan(1)
+    expect(rivers[center]).toBe(0)
+    let upstreamRiver = false
+    for (let k = 0; k < D8_OFFSETS.length; k++) {
+      const o = D8_OFFSETS[k]
+      const j = idx(w, 3 + o.dx, 3 + o.dy)
+      if (rivers[j] === 1 || flux[j] > 0) upstreamRiver = true
+    }
+    expect(upstreamRiver).toBe(true)
+  })
+
+  it('turns a dry closed pit into a salt flat', () => {
+    const w = 7
+    const h = 7
+    const elev = new Float32Array(w * h)
+    const mask = new Float32Array(w * h)
+    const moist = new Float32Array(w * h).fill(0.05)
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = idx(w, x, y)
+        const edge = x === 0 || y === 0 || x === w - 1 || y === h - 1
+        mask[i] = edge ? 0 : 1
+        const d = Math.max(Math.abs(x - 3), Math.abs(y - 3))
+        elev[i] = edge ? 0 : d === 2 ? 220 : 20 + d * 70
+      }
+    }
+    const { lakes, salt } = computeHydrology(elev, mask, w, h, THRESHOLD, moist)
+    expect(salt[idx(w, 3, 3)]).toBe(1)
+    expect(lakes[idx(w, 3, 3)]).toBe(0)
+  })
 })
 
 // ---------------------------------------------------------------------------

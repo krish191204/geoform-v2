@@ -1827,8 +1827,20 @@ export function mountApp(root: HTMLElement): void {
     })
     try {
       const groundStart = performance.now()
+      const stepLines: string[] = []
+      const showCause = (index: number): void => {
+        const note = map.loading.querySelector('.loading-note')
+        if (!note) return
+        const line = stepLines[index]
+        note.textContent =
+          line && line.length > 0 ? line : 'Same continents. The geography is being invented.'
+      }
+      showCause(0)
       const result = await makeSenseInline({ meta: state.meta, mask }, (step) => {
         flags.pipelineStep = MAKE_SENSE_STEP_INDEX[step.stepName] ?? flags.pipelineStep
+        const summary = step.measurements.summary
+        if (typeof summary === 'string') stepLines[flags.pipelineStep] = summary
+        showCause(flags.pipelineStep)
         inspector.workHost.replaceChildren(mountStageWork(buildView(bundle)))
         // Narrate the step on the loading overlay too, not just the pipeline list.
         updateMapShell(map, buildView(bundle))
@@ -1842,6 +1854,7 @@ export function mountApp(root: HTMLElement): void {
         for (let done = 0; done <= MAKE_SENSE_STEPS.length; done++) {
           if (!state.isProcessing) break
           flags.pipelineStep = done
+          showCause(done)
           inspector.workHost.replaceChildren(mountStageWork(buildView(bundle)))
           updateMapShell(map, buildView(bundle))
           await new Promise((resolve) => setTimeout(resolve, beat))

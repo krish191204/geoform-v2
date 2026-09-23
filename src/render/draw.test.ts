@@ -616,6 +616,36 @@ describe('bakeSketchMaskImageData', () => {
   })
 })
 
+describe('lakes and ice sample the same fields on atlas and globe', () => {
+  it('paints a closed lake as water and ice as a pale cap', () => {
+    const world = makeWorld({
+      width: 8,
+      height: 6,
+      elev: () => 420,
+      biome: Array.from({ length: 48 }, () => 'steppe' as CellBiome),
+    })
+    world.mask.fill(1)
+    world.lakes = new Uint8Array(48)
+    for (let y = 2; y <= 4; y++) {
+      for (let x = 2; x <= 4; x++) world.lakes[y * 8 + x] = 1
+    }
+    world.biome[3 * 8 + 6] = 'ice'
+    const atlas = draw(world, 'summer', 'relief', { scale: 1, bakeCities: false })
+    const lake = pixel(atlas, 3, 3)
+    const land = pixel(atlas, 6, 1)
+    const ice = pixel(atlas, 6, 3)
+    expect(lake[2]).toBeGreaterThan(lake[0])
+    expect(land[1]).toBeGreaterThan(land[2])
+    expect(ice[0] + ice[1] + ice[2]).toBeGreaterThan(land[0] + land[1] + land[2])
+
+    const globe = bakeWorldImageDataSmooth(world, 'summer', 'relief', 16, { bakeCities: false, vignette: false })
+    const gx = Math.round(((3 + 0.5) * 16) / 8)
+    const gy = Math.round(((3 + 0.5) * 12) / 6)
+    const gLake = pixel(globe, Math.min(15, gx), Math.min(11, gy))
+    expect(gLake[2]).toBeGreaterThan(gLake[0])
+  })
+})
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------

@@ -97,6 +97,44 @@ function findCoastPair(): { land: number; ocean: number } {
 // ---------------------------------------------------------------------------
 
 describe('computeOrogeny', () => {
+  it('raises a fast continent-continent collision higher and narrower than a slow one', () => {
+    const { mask } = makeContinentWorld()
+    const bi = idx(WIDTH, 32, 16)
+    const bj = idx(WIDTH, 33, 16)
+    const fast = oneBoundary('convergent-cc')
+    fast.boundaries[0] = {
+      ...fast.boundaries[0],
+      i: bi,
+      ji: bj,
+      relativeVx: 2,
+      relativeVy: 0,
+    }
+    const slow = oneBoundary('convergent-cc')
+    slow.boundaries[0] = {
+      ...slow.boundaries[0],
+      i: bi,
+      ji: bj,
+      relativeVx: 0.4,
+      relativeVy: 0,
+    }
+    const high = computeOrogeny(fast, mask, WIDTH, HEIGHT, THRESHOLD, 3)
+    const low = computeOrogeny(slow, mask, WIDTH, HEIGHT, THRESHOLD, 3)
+    expect(high.rangeNote).toBe('fast range')
+    expect(low.rangeNote).toBe('')
+    expect(high.elev[bi]).toBeGreaterThan(low.elev[bi])
+    expect(Math.max(...high.elev)).toBeLessThanOrEqual(8000)
+    const above = (elev: Float32Array, level: number): number => {
+      let n = 0
+      for (let i = 0; i < elev.length; i++) {
+        if (mask[i] > THRESHOLD && elev[i] > level) n++
+      }
+      return n
+    }
+    expect(above(high.elev, 700)).toBeLessThan(above(low.elev, 700))
+    expect(high.carve.valleyDepthM).toBeGreaterThan(0)
+    expect(high.carve.meanElevAfter).toBeLessThanOrEqual(high.carve.meanElevBefore + 1)
+  })
+
   it('produces a ~2000 m peak at a single convergent-cc boundary', () => {
     const { mask } = makeContinentWorld()
     // Drop one convergent-cc boundary somewhere in the interior of the
@@ -116,6 +154,7 @@ describe('computeOrogeny', () => {
     // peak is still a mountain and still well below Himalaya-cap.
     expect(elev[bi]).toBeGreaterThan(1400)
     expect(elev[bi]).toBeLessThan(3200)
+    expect(elev[bi]).toBeLessThanOrEqual(8000)
 
     let maxElev = 0
     for (let i = 0; i < elev.length; i++) if (elev[i] > maxElev) maxElev = elev[i]

@@ -154,6 +154,8 @@ export interface MakeSenseResult {
   flux: Float32Array
   /** 1 = river cell, 0 = not; length W*H. */
   rivers: Uint8Array
+  /** 1 = closed-basin lake. Water on the grounded world, not a sketch edit. */
+  lakes: Uint8Array
   /** Per-cell biome id; length W*H. */
   biome: string[]
   /** Per-cell suitability score, 0..1; length W*H. */

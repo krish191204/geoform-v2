@@ -59,6 +59,23 @@ export const WETLAND_FLUX_MIN = RIVER_THRESHOLD * 2
 /** Warm-coast mangrove ceiling (m). */
 export const MANGROVE_MAX_ELEV_M = 80
 
+/**
+ * Thornthwaite-style potential evapotranspiration as a 0..1+ index.
+ * Freezing temperatures evaporate nothing. Heat raises demand faster
+ * than linearly, so the same rainfall is a desert at 30 °C and a forest
+ * at 12 °C.
+ */
+export function thornthwaitePet(tempC: number): number {
+  if (tempC <= 0) return 0
+  const demand = 0.012 * tempC + 0.00055 * tempC * tempC
+  return demand > 1.4 ? 1.4 : demand
+}
+
+/** Precipitation index minus PET. Positive is a surplus, negative a deficit. */
+export function waterBalance(precip: number, tempC: number): number {
+  return precip - thornthwaitePet(tempC)
+}
+
 // ---------------------------------------------------------------------------
 // classifyBiome — the pure matcher
 // ---------------------------------------------------------------------------
@@ -76,17 +93,16 @@ export const MANGROVE_MAX_ELEV_M = 80
  *                        climates that should be polar desert or tundra.
  *   3. polar desert    — cold coastal dry (low tempRange, low summerMoist).
  *   4. tundra          — cold catch-all (between polar desert and taiga).
- *   5. boreal desert   — cold dry; more specific than taiga.
- *   6. taiga           — cold wet catch-all.
- *   7. tropical desert — hot dry.
- *   8. rainforest      — hot, low seasonality, very wet.
- *   9. savanna         — hot, mid-wet.
- *  10. temperate desert — mid-latitude very dry.
- *  11. steppe           — mid-latitude dry.
- *  12. mediterranean    — mid-latitude coastal (low tempRange), mid moisture.
- *  13. temperate forest — mid-latitude, mild swing, wet (evergreen).
- *  14. temperate deciduous — same band, continental swing.
- *  15. fallback         — `steppe` for mid latitudes, `tundra` otherwise.
+ *   5. boreal desert   — cold, precipitation below PET.
+ *   6. taiga           — cold, precipitation meets PET.
+ *   7. tropical desert — hot, a deep water deficit.
+ *   8. rainforest      — hot, low seasonality, a real surplus.
+ *   9. savanna         — hot, precip near but below PET.
+ *  10. mediterranean    — mild coasts with a modest dry-season deficit.
+ *  11. steppe           — mid-latitude water deficit.
+ *  12. temperate forest — mid-latitude surplus, mild swing (evergreen).
+ *  13. temperate deciduous — same surplus, continental swing.
+ *  14. fallback         — `steppe` for mid latitudes, `tundra` otherwise.
  * Hydrologic overlays (wetland, mangrove) run in `refineHydrologicBiomes`.
  */
 export function classifyBiome(
@@ -110,43 +126,47 @@ export function classifyBiome(
   // 4. Tundra = cold catch-all.
   if (tempMean < 5) return 'tundra'
 
-  // 5. Boreal desert = cold dry; checked before taiga because it's more
-  //    specific (uses summerMoist in addition to tempMean).
-  if (tempMean < 12 && summerMoist < 0.2) return 'boreal-desert'
+  const balance = waterBalance(summerMoist, tempMean)
 
-  // 6. Taiga = cold wet catch-all.
-  if (tempMean < 12) return 'taiga'
+  // 5–6. Boreal: desert when precip cannot meet PET, otherwise taiga.
+  if (tempMean < 12) return balance < 0 ? 'boreal-desert' : 'taiga'
 
-  // 7. Tropical desert = hot dry. Tagged 'hot-desert' to match
-  //    BIOME_BY_ID keys (avoids the prose ambiguity of "tropical
-  //    desert" vs "hot desert").
-  if (tempMean > 25 && summerMoist < 0.15) return 'hot-desert'
+  // 7. Hot desert = deep deficit. A warm rain that still loses to PET
+  //    counts; the old raw moisture cut did not.
+  if (tempMean > 25 && balance < -0.45) return 'hot-desert'
 
-  // 8. Rainforest = hot, low seasonality, very wet.
-  if (tempMean > 20 && tempRange < 10 && summerMoist > 0.7) return 'rainforest'
+  // 8. Rainforest = hot, low seasonality, surplus over PET.
+  if (tempMean > 20 && tempRange < 10 && balance > 0.12 && summerMoist > 0.55) return 'rainforest'
 
-  // 9. Savanna = hot, mid-wet.
-  if (tempMean > 20 && summerMoist >= 0.2 && summerMoist <= 0.5) return 'savanna'
+  // 9. Savanna = hot, precip near PET but not a surplus and not a true desert.
+  if (
+    tempMean > 20 &&
+    balance >= -0.45 &&
+    balance <= 0.12 &&
+    summerMoist >= 0.15 &&
+    summerMoist <= 0.55
+  ) {
+    return 'savanna'
+  }
 
-  // 10. Mid-latitude very dry — atlas has no separate temperate desert, so steppe.
-  if (tempMean >= 5 && tempMean <= 25 && summerMoist < 0.15) return 'steppe'
-
-  // 11. Steppe = mid-latitude dry.
-  if (tempMean >= 5 && tempMean <= 25 && summerMoist < 0.3) return 'steppe'
-
-  // 12. Mediterranean = mid-latitude coastal (low tempRange), mid moisture.
+  // 10. Mediterranean = mild coasts with a modest dry-season deficit.
   if (
     tempMean >= 12 &&
     tempMean <= 25 &&
     tempRange < 15 &&
+    balance > -0.35 &&
+    balance < 0.08 &&
     summerMoist >= 0.2 &&
     summerMoist <= 0.5
   ) {
     return 'mediterranean'
   }
 
-  // 13–14. Temperate forest: wet mid-latitudes. Continental swing drops leaves.
-  if (tempMean >= 5 && tempMean <= 25 && tempRange < 25 && summerMoist > 0.4) {
+  // 11. Steppe = mid-latitude water deficit (includes the old "temperate desert").
+  if (tempMean >= 5 && tempMean <= 25 && balance < -0.02) return 'steppe'
+
+  // 12–13. Temperate forest: a surplus. Continental swing drops leaves.
+  if (tempMean >= 5 && tempMean <= 25 && tempRange < 25 && balance > 0.05) {
     return tempRange >= DECIDUOUS_RANGE_C ? 'temperate-deciduous' : 'temperate-forest'
   }
 
@@ -237,6 +257,12 @@ export interface HydrologicBiomeInput {
   threshold: number
   tempMean: Float32Array
   summerMoist: Float32Array
+  /** Standing closed-basin water. Skips the wetland overlay. */
+  lakes?: Uint8Array
+  /** Dry closed basins. Kept as desert or steppe, not marsh. */
+  salt?: Uint8Array
+  /** Land that stays below freezing. Alpine peaks are left alone. */
+  ice?: Uint8Array
 }
 
 /**
@@ -250,10 +276,21 @@ export function refineHydrologicBiomes(
   biome: CellBiome[],
   ctx: HydrologicBiomeInput,
 ): void {
-  const { elev, flux, mask, width, height, threshold, tempMean, summerMoist } = ctx
+  const { elev, flux, mask, width, height, threshold, tempMean, summerMoist, lakes, salt, ice } = ctx
   const n = biome.length
   for (let i = 0; i < n; i++) {
     if (mask[i] < threshold) continue
+    if (ice && ice[i] && biome[i] !== 'alpine') {
+      biome[i] = 'ice'
+      continue
+    }
+    if (lakes && lakes[i]) continue
+    if (salt && salt[i]) {
+      if (tempMean[i] >= 18) biome[i] = 'hot-desert'
+      else if (tempMean[i] >= 5) biome[i] = 'steppe'
+      else biome[i] = 'polar-desert'
+      continue
+    }
     const b = biome[i]
     if (b === 'ocean' || b === 'ice' || b === 'alpine' || b === 'hot-desert' || b === 'polar-desert') {
       continue

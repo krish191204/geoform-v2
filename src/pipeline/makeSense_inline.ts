@@ -23,6 +23,7 @@ import { computeHydrology } from './hydrology'
 import { computeBiomes, refineHydrologicBiomes } from './biomes'
 import { computeSuitability } from './suitability'
 import { groundCoast } from './groundCoast'
+import { applyGlaciation } from './glaciation'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -217,10 +218,22 @@ export async function makeSenseInline(
   const orogeny = computeOrogeny(platesResult, land, width, height, threshold, seed)
   const peakElev = peakLand(orogeny.elev, land, threshold)
   const meanElev = meanLandSafe(orogeny.elev, land, threshold)
+  const orogenyParts: string[] = []
+  if (orogeny.rangeNote) orogenyParts.push(orogeny.rangeNote)
+  if (orogeny.carve.valleyDepthM > 0.5 || orogeny.carve.meanElevAfter < orogeny.carve.meanElevBefore) {
+    orogenyParts.push('carved valley')
+  }
+  const orogenySummary = orogenyParts.join(', ')
   stage(
     {
       stepName: STEP_OROGENY,
-      measurements: { peakElev, meanElev },
+      measurements: {
+        peakElev,
+        meanElev,
+        meanElevBefore: orogeny.carve.meanElevBefore,
+        valleyDepthM: orogeny.carve.valleyDepthM,
+        ...(orogenySummary ? { summary: orogenySummary } : {}),
+      },
       elapsedMs: now() - t2,
     },
     3,
@@ -240,6 +253,22 @@ export async function makeSenseInline(
     obliquityDeg,
     seed,
   )
+  // Ice is a process on the grounded mask, narrated inside climate.
+  // Fjords shorten themselves when another cell would break the lock.
+  const glaciation = applyGlaciation(
+    orogeny.elev,
+    land,
+    seasonal.summer,
+    seasonal.winter,
+    width,
+    height,
+    threshold,
+    {
+      inputLandArea: inputMaskArea,
+      areaFraction: MASK_LOCK_AREA_FRACTION,
+      minComponent: MASK_LOCK_MIN_COMPONENT,
+    },
+  )
   const meanSummerC = meanLandSafe(seasonal.summer, land, threshold)
   const meanWinterC = meanLandSafe(seasonal.winter, land, threshold)
   const meanRangeC = meanDifferenceLand(
@@ -248,10 +277,19 @@ export async function makeSenseInline(
     land,
     threshold,
   )
+  const climateParts: string[] = []
+  if (seasonal.currentNote) climateParts.push(seasonal.currentNote)
+  if (glaciation.summary) climateParts.push(glaciation.summary)
+  const climateSummary = climateParts.join(', ')
   stage(
     {
       stepName: STEP_CLIMATE,
-      measurements: { meanSummerC, meanWinterC, meanRangeC },
+      measurements: {
+        meanSummerC,
+        meanWinterC,
+        meanRangeC,
+        ...(climateSummary ? { summary: climateSummary } : {}),
+      },
       elapsedMs: now() - t3,
     },
     4,
@@ -271,10 +309,18 @@ export async function makeSenseInline(
   )
   const riverCount = sumUint8(hydro.rivers)
   const maxFlux = peakLand(hydro.flux, land, threshold)
+  let lakeCount = 0
+  for (let i = 0; i < hydro.lakes.length; i++) lakeCount += hydro.lakes[i]
+  for (let i = 0; i < hydro.salt.length; i++) lakeCount += hydro.salt[i]
   stage(
     {
       stepName: STEP_HYDRO,
-      measurements: { riverCount, maxFlux },
+      measurements: {
+        riverCount,
+        maxFlux,
+        lakeCount,
+        ...(lakeCount > 0 ? { summary: 'closed lake' } : {}),
+      },
       elapsedMs: now() - t4,
     },
     5,
@@ -306,6 +352,9 @@ export async function makeSenseInline(
     threshold,
     tempMean: biomesResult.tempMean,
     summerMoist: seasonal.summerMoist,
+    lakes: hydro.lakes,
+    salt: hydro.salt,
+    ice: glaciation.ice,
   })
   const biomeCounts = new Map<string, number>()
   for (let i = 0; i < biomesResult.biome.length; i++) {
@@ -412,6 +461,7 @@ export async function makeSenseInline(
     moistMean,
     flux: hydro.flux,
     rivers: hydro.rivers,
+    lakes: hydro.lakes,
     biome: biomesResult.biome,
     suitability,
     mask: land,

@@ -30,8 +30,9 @@
  */
 
 import type { PlateAssignment } from './plates'
-import { idx, wrapX, meanLand, lerp } from './helpers'
-import { sculptTerrain } from './terrainDetail'
+import type { Boundary } from './types'
+import { idx, wrapX, meanLand, lerp, clamp } from './helpers'
+import { sculptTerrain, type CarveReport } from './terrainDetail'
 
 // ---------------------------------------------------------------------------
 // Output
@@ -43,6 +44,10 @@ export interface OrogenyResult {
   elev: Float32Array
   /** Per-cell metres of uplift that came from a boundary process, length W*H. */
   boundaryUplift: Float32Array
+  /** Before/after of the hydraulic carve inside this step. */
+  carve: CarveReport
+  /** 'fast range' when a continent–continent boundary is faster than the reference. */
+  rangeNote: '' | 'fast range'
 }
 
 // ---------------------------------------------------------------------------
@@ -62,10 +67,18 @@ const PEAK_DIVERGENT_M = -500
 /** Passive-coast continental shelf bump peak, in metres. */
 const PEAK_SHELF_M = 50
 
-/** CC Gaussian radius in cells (peak ~8 cells falloff). */
+/** CC Gaussian radius in cells at reference collision speed (1 cell/Myr). */
 const CC_RADIUS = 11
-/** CC Gaussian standard deviation in cells. */
+/** CC Gaussian standard deviation in cells at reference collision speed. */
 const CC_SIGMA = 4.2
+/**
+ * Relative speed (cells/Myr) at which a collision is the reference
+ * Gaussian: peak PEAK_CC_M, radius CC_RADIUS. Faster is higher and
+ * narrower; slower is lower and broader.
+ */
+const CC_REF_SPEED = 1
+/** At or above this multiple of the reference, the step may say "fast range". */
+const FAST_RANGE_SPEED = 1.15
 /** OC Gaussian radius in cells (peak ~6 cells falloff). */
 const OC_RADIUS = 6
 /** OC Gaussian standard deviation in cells. */
@@ -214,6 +227,34 @@ function blurElev(
  * Build a "land-only" or "ocean-only" predicate bound to the current mask.
  * Cheaper than rebuilding an arrow each iteration.
  */
+/** Stable speed for one plate pair. Relative velocity when it exists; otherwise a seeded fallback. */
+function plateBoundarySpeed(b: Boundary, seed: number): number {
+  const mag = Math.hypot(b.relativeVx, b.relativeVy)
+  if (mag > 1e-3) return mag
+  const lo = Math.min(b.plateId, b.otherPlateId)
+  const hi = Math.max(b.plateId, b.otherPlateId)
+  let n = Math.imul(lo + 1, 374761393) + Math.imul(hi + 3, 668265263) + (seed + 101)
+  n = (n ^ (n >>> 13)) >>> 0
+  n = Math.imul(n, 1274126177)
+  const h = ((n ^ (n >>> 16)) >>> 0) / 4294967296
+  return 0.55 + 0.6 * h
+}
+
+/**
+ * Fast collisions stack a taller, tighter Gaussian. Slow ones spread
+ * the same family of uplift into a lower, broader belt. Speed 1 is
+ * the historical reference so existing single-boundary fixtures hold.
+ */
+function scaleCollision(speed: number): { peak: number; radius: number; sigma: number } {
+  const t = clamp(speed / CC_REF_SPEED, 0.35, 2.2)
+  const width = 1 / Math.sqrt(t)
+  return {
+    peak: PEAK_CC_M * t,
+    radius: Math.max(4, Math.round(CC_RADIUS * width)),
+    sigma: Math.max(1.4, CC_SIGMA * width),
+  }
+}
+
 function sidePredicate(
   mask: Float32Array,
   threshold: number,
@@ -260,6 +301,7 @@ export function computeOrogeny(
   // 2-5. Boundary-driven uplift.
   const landPred = sidePredicate(mask, threshold, true)
   const oceanPred = sidePredicate(mask, threshold, false)
+  let fastestCc = 0
   for (let k = 0; k < plates.boundaries.length; k++) {
     const b = plates.boundaries[k]
     const ix = b.i % width
@@ -270,13 +312,17 @@ export function computeOrogeny(
     const jIsLand = mask[b.ji] > threshold
 
     if (b.class === 'convergent-cc') {
-      // Continental-continental: both sides land. Single Gaussian.
+      // Continental-continental: both sides land. Height and width
+      // follow the plate-pair's relative speed (stable along the suture).
+      const speed = plateBoundarySpeed(b, seed)
+      if (speed > fastestCc) fastestCc = speed
+      const scaled = scaleCollision(speed)
       applyGaussian(
         ix,
         iy,
-        PEAK_CC_M,
-        CC_RADIUS,
-        CC_SIGMA,
+        scaled.peak,
+        scaled.radius,
+        scaled.sigma,
         elev,
         boundaryUplift,
         density,
@@ -425,7 +471,7 @@ export function computeOrogeny(
   //    ridged belts, dandrino hydraulic loop). Replaces per-cell white
   //    noise so craton is rolling hills and collision belts have ridges
   //    that hydrology can actually drain.
-  sculptTerrain(elev, boundaryUplift, mask, width, height, threshold, seed)
+  const carve = sculptTerrain(elev, boundaryUplift, mask, width, height, threshold, seed)
 
   // 8. Final smoothing.
   blurElev(elev, mask, threshold, width, height)
@@ -449,5 +495,6 @@ export function computeOrogeny(
   // for callers that want it.
   void meanLand(elev, mask, threshold)
 
-  return { elev, boundaryUplift }
+  const rangeNote: OrogenyResult['rangeNote'] = fastestCc >= FAST_RANGE_SPEED ? 'fast range' : ''
+  return { elev, boundaryUplift, carve, rangeNote }
 }

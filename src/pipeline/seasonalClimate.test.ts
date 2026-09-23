@@ -479,4 +479,34 @@ describe('computeSeasonalClimate', () => {
     expect(Math.abs(stormTrack)).toBeLessThan(0.1)
     expect(tropical).toBeGreaterThan(Math.abs(stormTrack) + 0.1)
   })
+
+  it('cools the eastern ocean boundary and warms the western one', () => {
+    const w = 32
+    const h = 18
+    const y = 6
+    const world = flatWorld(w, h, (x, yy) => yy >= 3 && yy <= 10 && x >= 10 && x <= 22)
+    const result = run(world)
+    const coldOcean = y * w + 9
+    const warmOcean = y * w + 23
+    expect(world.mask[coldOcean]).toBeLessThan(THRESHOLD)
+    expect(world.mask[warmOcean]).toBeLessThan(THRESHOLD)
+    expect(result.summer[warmOcean]).toBeGreaterThan(result.summer[coldOcean] + 0.3)
+    expect(result.currentNote === 'cold current' || result.currentNote === 'warm current').toBe(true)
+    const westCoast = y * w + 10
+    const eastCoast = y * w + 22
+    expect(result.summerMoist[westCoast]).toBeLessThan(result.summerMoist[eastCoast])
+  })
+
+  it('names a warm current when the only coast faces a western boundary', () => {
+    const w = 32
+    const h = 18
+    const y = 5
+    const world = flatWorld(w, h, (x, yy) => yy >= 3 && yy <= 8 && x <= 8)
+    const result = run(world)
+    const gulf = y * w + 9
+    const open = y * w + 24
+    expect(world.mask[gulf]).toBeLessThan(THRESHOLD)
+    expect(result.summer[gulf]).toBeGreaterThan(result.summer[open])
+    expect(result.currentNote).toBe('warm current')
+  })
 })

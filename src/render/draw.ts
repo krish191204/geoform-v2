@@ -219,8 +219,20 @@ function elevBandColor(e: number, ocean: boolean): [number, number, number] {
   return mix([168, 162, 152], [246, 248, 250], ramp((e - 5000) / 3000))
 }
 
+function isLakeCell(world: World, i: number): boolean {
+  const lakes = world.lakes
+  return lakes != null && i >= 0 && i < lakes.length && lakes[i] === 1
+}
+
 function isOceanCell(world: World, i: number): boolean {
-  return world.mask[i] < world.meta.threshold
+  return world.mask[i] < world.meta.threshold || isLakeCell(world, i)
+}
+
+/** Bilinear lake amount so a shore is a blend, not a stair of cells. */
+function sampleLakes(world: World, x: number, y: number): number {
+  const lakes = world.lakes
+  if (!lakes || lakes.length !== world.mask.length) return 0
+  return sampleScalar(lakes, world, x, y)
 }
 
 /**
@@ -556,6 +568,9 @@ function layerFill(
 
   switch (layer) {
     case 'relief':
+      if (ocean) return elevBandColor(e, true)
+      if (world.biome[i] === 'ice') return mix(elevBandColor(e, false), [232, 240, 244], 0.72)
+      return elevBandColor(e, false)
     case 'elevation':
       return elevBandColor(e, ocean)
     case 'plates': {
@@ -581,7 +596,8 @@ function layerFill(
       // Temperature includes ocean (SST). Do not hide climate under a sea fill.
       return tempColor(season === 'summer' ? world.summer[i] : world.winter[i])
     case 'biome':
-      // One message: climate class. Hillshade comes later; do not tint deserts green.
+      // Lakes are water on the grounded world. Ice is the biome field.
+      if (isLakeCell(world, i)) return hexToRgb(biomeColor('ocean'))
       return hexToRgb(biomeColor(world.biome[i] ?? 'ocean'))
     case 'suitability':
       return ocean
@@ -604,7 +620,9 @@ function applyPaperLook(
 ): [number, number, number] {
   const threshold = world.meta.threshold
   const e = sampleElev(world, x, y)
-  const ocean = sampleMask(world, x, y) < threshold
+  const maskV = sampleMask(world, x, y)
+  const lakeV = sampleLakes(world, x, y)
+  const ocean = maskV < threshold || (lakeV >= 0.45 && maskV >= threshold)
 
   // Hillshade on terrain-ish layers. Height stays a raw metre ramp.
   if (layer === 'relief' || layer === 'biome') {
