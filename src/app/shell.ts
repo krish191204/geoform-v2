@@ -85,6 +85,7 @@ import {
   inferSettlementRole,
   seedSettlements,
   annotateSettlement,
+  formatSettlementPeople,
   SETTLEMENT_PORT_LABEL,
   SETTLEMENT_ROLE_LABEL,
 } from '../sketch/settlements'
@@ -825,8 +826,13 @@ export function mountApp(root: HTMLElement): void {
     state.issues = []
   }
 
-  /** Honest banded estimate: role sets the order of magnitude, suitability scales it. */
-  function populationBand(city: { role?: string }, suitability: number): string {
+  /**
+   * People line for the inspector. Uses the stored count and cause when the
+   * town was scored. Older saves without a count fall back to a role guess.
+   */
+  function populationBand(city: { role?: string; population?: number; sizeCause?: string }, suitability: number): string {
+    const earned = formatSettlementPeople(city)
+    if (earned) return earned
     const base =
       city.role === 'seat_of_power' ? 30000 : city.role === 'trade' ? 12000 : city.role === 'fishing' ? 4000 : 6000
     const s = Number.isFinite(suitability) ? Math.max(0, Math.min(1, suitability)) : 0.5

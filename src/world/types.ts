@@ -135,6 +135,10 @@ export interface City {
   polityId?: number
   /** 0..1 mix at the docks — seats in a dead-end valley stay low. */
   meltingPot?: number
+  /** People living here, earned from suitability, role, port, and rank. */
+  population?: number
+  /** Short geographic cause of that size. Not a lore paragraph. */
+  sizeCause?: string
 }
 
 /** Staple goods inferred from biome and town jobs — not GDP. */

@@ -48,7 +48,12 @@ import {
 import { accountsConfigured } from '../auth/account'
 import type { Account } from '../auth/account'
 import { LAYER_CHIPS, SEASON_LAYERS } from './atlas'
-import { SETTLEMENT_PORT_LABEL, SETTLEMENT_RANK_LABEL, SETTLEMENT_ROLE_LABEL } from '../sketch/settlements'
+import {
+  formatSettlementPeople,
+  SETTLEMENT_PORT_LABEL,
+  SETTLEMENT_RANK_LABEL,
+  SETTLEMENT_ROLE_LABEL,
+} from '../sketch/settlements'
 import { routeCaption, tradeKindForOverlay, TRADE_GOOD_LABEL, MAX_POLITIES } from '../sketch/polities'
 import { wondersFor } from './wondersCache'
 import { groupWondersByKind, shortWonderName } from '../sketch/wonders'
@@ -1800,6 +1805,8 @@ function cityListBlurb(city: City, state: ShellStateView): string {
   if (city.role === 'seat_of_power' && city.meltingPot !== undefined) {
     bits.push(city.meltingPot >= 0.55 ? 'melting pot' : 'provincial')
   }
+  const people = formatSettlementPeople(city)
+  if (people) bits.push(people)
   void state
   return bits.join(' · ')
 }
@@ -2165,7 +2172,7 @@ export function worldInspectHtml(
     route?: string
     /** Town dossier headline, e.g. "Harbour — sea port, market town". */
     town?: string
-    /** Population band, e.g. "≈12,000 people". */
+    /** People and why, e.g. "≈12,000 people — sea-port trade". */
     townPeople?: string
     /** Trade partners line, e.g. "Trades with Seat, Fisherton". */
     townPartners?: string

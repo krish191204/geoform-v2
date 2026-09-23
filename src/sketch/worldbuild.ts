@@ -11,12 +11,15 @@
  *   2. The cell's suitability must be >= 0.4.
  *   3. No existing city within 5 cells (Chebyshev / D8 distance).
  * If any rule fails the call returns `{ mutated: false, city: null, rejected: true }`.
+ * A city that passes is scored like an auto-founded town: population and a
+ * one-line cause from suitability, role, port, and rank.
  *
  * Remove-nearest rule: drop the closest city within D8 distance 8 of (x, y).
  */
 
 import type { World, City } from '../world/types'
 import { idx, createRng } from '../world/types'
+import { annotateSettlement } from './settlements'
 
 // ---------------------------------------------------------------------------
 // Public result types
@@ -189,8 +192,9 @@ export function placeCity(
     }
   }
 
-  // All rules pass — push the city.
+  // All rules pass — score the town from this cell, then push it.
   const city: City = { x, y, name, seasonal: suitability[i] }
+  annotateSettlement(world, city)
   world.cities.push(city)
   return { mutated: true, city, rejected: false }
 }

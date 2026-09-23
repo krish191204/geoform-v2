@@ -567,8 +567,16 @@ describe('worldbuild names', () => {
   it('exposes country and people fields on the kingdoms page', () => {
     const world = {
       cities: [
-        { x: 2, y: 2, name: 'Harbour', role: 'fishing', polityId: 0 },
-        { x: 1, y: 1, name: 'Seat', role: 'seat_of_power', polityId: 0 },
+        { x: 2, y: 2, name: 'Harbour', role: 'fishing', polityId: 0, population: 2400, sizeCause: 'coastal fishery' },
+        {
+          x: 1,
+          y: 1,
+          name: 'Seat',
+          role: 'seat_of_power',
+          polityId: 0,
+          population: 28000,
+          sizeCause: 'seat on the best land',
+        },
       ],
       polities: [
         {
@@ -597,6 +605,10 @@ describe('worldbuild names', () => {
     )
     const townNames = Array.from(towns.querySelectorAll('.place-name')) as HTMLInputElement[]
     expect(townNames.map((el) => el.value)).toEqual(['Harbour', 'Seat'])
+    expect(towns.textContent).toContain('2,400')
+    expect(towns.textContent).toContain('coastal fishery')
+    expect(towns.textContent).toContain('28,000')
+    expect(towns.textContent).toContain('seat on the best land')
   })
 })
 
