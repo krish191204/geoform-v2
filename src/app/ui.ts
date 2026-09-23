@@ -58,6 +58,8 @@ import { entrepotHubs, routeDossier, tradeKindForOverlay, TRADE_GOOD_LABEL, MAX_
 import { wondersFor } from './wondersCache'
 import { groupWondersByKind, shortWonderName } from '../sketch/wonders'
 import { labelLandmasses } from '../sketch/countBigComponents'
+import { foundingLine } from '../sketch/chronicle'
+import type { ChronicleRuin } from '../world/types'
 import { LANDFORM_OPTIONS, stampLandformAt, type LandformKind } from '../sketch/landforms'
 import { hasAnyLand } from './canvas_paint'
 import { analogStillDataUri, ANALOG_STILL_CAPTION } from './analogStills'
@@ -1926,6 +1928,65 @@ function townRow(city: City, state: ShellStateView): HTMLElement {
   return row
 }
 
+function kingdomTownLine(city: City, state: ShellStateView): HTMLElement {
+  const selected = isFocus(state, city.x, city.y)
+  const row = el(
+    'li',
+    {
+      class: 'town-row' + (selected ? ' is-selected' : ''),
+      'data-x': city.x,
+      'data-y': city.y,
+    },
+    el('span', {}, city.name),
+    el('span', { class: 'wonder-fact' }, cityListBlurb(city, state)),
+  )
+  row.addEventListener('click', () => goTo(city.x, city.y))
+  return row
+}
+
+function appendChronicleRuins(list: HTMLElement, state: ShellStateView, ruins: readonly ChronicleRuin[]): void {
+  if (!ruins.length) return
+  const groups = new Map<string, ChronicleRuin[]>()
+  for (const ruin of ruins) {
+    const key = ruin.landmass || 'The land'
+    const bucket = groups.get(key)
+    if (bucket) bucket.push(ruin)
+    else groups.set(key, [ruin])
+  }
+  for (const [name, sites] of groups) {
+    const places = el('ul', { class: 'wonder-places' })
+    for (const ruin of sites) {
+      const goBtn = el(
+        'button',
+        { type: 'button', class: 'wonder-goto', title: `Zoom to ${ruin.name}` },
+        ruin.name,
+      )
+      goBtn.addEventListener('click', () => goTo(ruin.x, ruin.y))
+      places.append(
+        el(
+          'li',
+          {
+            class: 'wonder-place' + (isFocus(state, ruin.x, ruin.y) ? ' is-selected' : ''),
+            'data-x': ruin.x,
+            'data-y': ruin.y,
+          },
+          goBtn,
+          el('span', { class: 'wonder-fact' }, ruin.cause),
+        ),
+      )
+    }
+    const open = sites.some((ruin) => isFocus(state, ruin.x, ruin.y)) || groups.size === 1
+    list.append(
+      el(
+        'details',
+        { class: 'gazetteer-fold', open: open ? true : null },
+        el('summary', {}, `${name} · ruins`),
+        places,
+      ),
+    )
+  }
+}
+
 function mountLandPage(state: ShellStateView): HTMLElement {
   const land = landCellCount(state.mask, state.meta.threshold)
   const total = state.meta.width * state.meta.height
@@ -1943,7 +2004,8 @@ function mountLandPage(state: ShellStateView): HTMLElement {
     return list
   }
   const groups = groupWondersByKind(wondersFor(state.world))
-  if (!groups.length) {
+  const ruins = state.world.chronicle?.ruins ?? []
+  if (!groups.length && !ruins.length) {
     list.append(el('p', { class: 'hint' }, 'No standout wonders on this plate — hover a cell anyway.'))
     return list
   }
@@ -1982,6 +2044,7 @@ function mountLandPage(state: ShellStateView): HTMLElement {
     )
     list.append(box)
   }
+  appendChronicleRuins(list, state, ruins)
   return list
 }
 
@@ -2006,6 +2069,14 @@ function mountKingdomsPage(state: ShellStateView): HTMLElement {
         el('summary', {}, p.name),
         countryBlock(p, state),
       )
+      const entry = world.chronicle?.entries.find((row) => row.polityId === p.id)
+      if (entry) card.append(el('p', { class: 'wonder-blurb' }, foundingLine(entry)))
+      const towns = world.cities.filter((city) => city.polityId === p.id)
+      if (towns.length) {
+        const ul = el('ul', { class: 'city-list' })
+        for (const city of towns) ul.append(kingdomTownLine(city, state))
+        card.append(ul)
+      }
       if (focus || (!opened && masses.length === 1)) opened = true
       body.append(card)
     }

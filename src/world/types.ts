@@ -212,6 +212,42 @@ export interface Polity {
   mass: number
 }
 
+/**
+ * One kingdom's derived past. Copy for the gazetteer, not a second border grid.
+ * Years are before a present seeded from `World.meta.seed` and the polity id.
+ */
+export interface ChronicleEntry {
+  polityId: number
+  /** Years before the seeded present. Larger means an older seat. */
+  yearsAgo: number
+  /** One sentence: a split, an empty coast, or a highland hold. */
+  origin: string
+  /** People name already stored on the polity. Empty when none exists. */
+  people: string
+  /** One sentence when a neighbour shares a clear edge. */
+  border: string | null
+  /** Set when a natural wonder sits in this country. */
+  wonder: string | null
+}
+
+/** An abandoned site. Not a live city. */
+export interface ChronicleRuin {
+  name: string
+  x: number
+  y: number
+  cause: string
+  /** Landmass blob this cell already belongs to. */
+  landmass: string
+  /** Country that holds the cell now, or −1. */
+  polityId: number
+}
+
+/** Founding lines and a short ruin list, rebuilt from the grounded world. */
+export interface WorldChronicle {
+  entries: ChronicleEntry[]
+  ruins: ChronicleRuin[]
+}
+
 // ---------------------------------------------------------------------------
 // 11. Biome palette
 // ---------------------------------------------------------------------------
@@ -497,6 +533,12 @@ export interface World {
   polityId: Int16Array
   polities: Polity[]
   routes: TradeRoute[]
+
+  /**
+   * Derived kingdom history. Absent until Worldbuild runs.
+   * Rebuilt from polities, seats, wonders, and landmasses — never a sketch note.
+   */
+  chronicle?: WorldChronicle
 }
 
 /** Empty country layer for a new World or a test stub. */

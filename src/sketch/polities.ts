@@ -9,6 +9,7 @@ import type { City, Polity, RouteRisk, TradeGood, TradeRoute, World, WorldOverla
 import { idx } from '../world/types'
 import { analogAt, analogForCells, PLACE_ANALOGS, TRADE_GOOD_LABEL } from './analogs'
 import { ensureSeatCount } from './settlements'
+import { attachChronicle } from './chronicle'
 import { gravityFlow } from '../science/gravity'
 
 export const MIN_POLITIES = 1
@@ -1163,6 +1164,7 @@ export function ensureWorldbuild(world: World, polityCount?: number): void {
   ensureSeatCount(world, n)
   growPolities(world)
   refreshTrade(world)
+  attachChronicle(world)
 }
 
 /** After the writer paints a claim: keep borders, rebuild goods and routes. */
