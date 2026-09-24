@@ -61,8 +61,6 @@ import {
   SETTLEMENT_ROLE_LABEL,
 } from '../sketch/settlements'
 import { entrepotHubs, routeDossier, tradeKindForOverlay, TRADE_GOOD_LABEL, MAX_POLITIES } from '../sketch/polities'
-import { scoreBiomeMix } from '../science/earthPriors'
-import { journeyDays } from '../sketch/travel'
 import { wondersFor } from './wondersCache'
 import { groupWondersByKind, shortWonderName } from '../sketch/wonders'
 import { labelLandmasses } from '../sketch/countBigComponents'
@@ -856,7 +854,7 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
     const title = refs.cartouche.querySelector('.cartouche-title')
     if (title) title.textContent = derived ? 'Grounded world' : 'Working sketch'
     const cellKm = (2 * Math.PI * (state.meta.planetRadiusKm > 0 ? state.meta.planetRadiusKm : 6371)) / state.meta.width
-    const rows: [string, string, string?][] = [['Land', `${landPct}%`]]
+    const rows: [string, string][] = [['Land', `${landPct}%`]]
     rows.push(['Cell', `≈${Math.round(cellKm)} km`])
     if (derived) {
       const chipNow = LAYER_CHIPS.find((c) => c.id === state.layer)
@@ -872,13 +870,6 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
         rows.push(['Peopled', `${countries} ctry · ${towns} towns`])
       }
       rows.push(['Seed', String(state.meta.seed)])
-      if (state.world?.meta && state.world.biome) {
-        const mix = scoreBiomeMix(state.world)
-        const groups = ['A', 'B', 'C', 'D', 'E'] as const
-        let err = 0
-        for (const g of groups) err += mix.absError[g]
-        rows.push(['Earth', `${Math.round((err / groups.length) * 100)} pt off`, mix.note])
-      }
     } else {
       rows.push(['Seed', String(state.meta.seed)])
       rows.push(['Radius', `${state.meta.planetRadiusKm} km`])
@@ -887,9 +878,7 @@ export function updateMapShell(refs: MapShellRefs, state: ShellStateView): void 
     const data = refs.cartouche.querySelector('.cartouche-data')
     if (data) {
       data.replaceChildren()
-      for (const [k, v, title] of rows) {
-        data.append(el('dt', {}, k), el('dd', title ? { title } : {}, v))
-      }
+      for (const [k, v] of rows) data.append(el('dt', {}, k), el('dd', {}, v))
     }
   }
 
@@ -2301,14 +2290,7 @@ function mountTradePage(state: ShellStateView): HTMLElement {
     const ranked = [...routes].sort((a, b) => b.volume - a.volume).slice(0, 12)
     for (const r of ranked) {
       const mid = r.path[Math.floor(r.path.length / 2)]
-      const mode = r.kind === 'sea' ? 'ship' : 'army'
-      const trip = journeyDays(world, r.ax, r.ay, r.bx, r.by, mode, state.season)
-      const pace = `${mode === 'ship' ? 'Ship' : 'Army'} ${Math.max(1, Math.ceil(trip.days))} days`
-      const row = el(
-        'li',
-        { class: 'route-line', 'data-x': mid?.x ?? 0, 'data-y': mid?.y ?? 0 },
-        `${routeDossier(world, r)} ${pace}.`,
-      )
+      const row = el('li', { class: 'route-line', 'data-x': mid?.x ?? 0, 'data-y': mid?.y ?? 0 }, routeDossier(world, r))
       if (mid) {
         row.addEventListener('click', () => goTo(mid.x, mid.y))
         if (isFocus(state, mid.x, mid.y)) row.classList.add('is-selected')

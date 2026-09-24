@@ -548,21 +548,6 @@ export interface World {
    */
   lakes?: Uint8Array
 
-  /**
-   * Row-wise zonal wind from the climate march. `+1` west→east, `−1` east→west.
-   * Length = height. Omitted on old saves.
-   */
-  windDir?: Int8Array
-  /**
-   * Coastal-current temperature bias, °C, length W*H.
-   * Omitted on old saves.
-   */
-  currentBias?: Float32Array
-  /** 1 = glacial ice. Length W*H. Omitted on old saves. */
-  ice?: Uint8Array
-  /** 1 = salt flat. Length W*H. Omitted on old saves. */
-  salt?: Uint8Array
-
   /** Per-cell biome name, keyed off (tempMean, tempRange, water balance). Length W*H. */
   biome: CellBiome[]
 
@@ -573,11 +558,6 @@ export interface World {
 
   /** Country id per cell, −1 = ocean or unclaimed. Length W*H. */
   polityId: Int16Array
-  /**
-   * Hold from the seat. 1 march, 2 claimed, 3 core. 0 unset.
-   * Written by kingdom growth. Omitted on old saves.
-   */
-  marchBand?: Uint8Array
   polities: Polity[]
   routes: TradeRoute[]
 

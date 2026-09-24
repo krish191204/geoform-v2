@@ -19,37 +19,6 @@ const HEIGHT_SEG = 128
 const DISPLACE = 0.065
 const TEX_MAX = 2048
 
-/**
- * Paper atlas hillshade (`applyPaperLook`): brighter when the slope faces
- * the upper-left of the texture. East-west weight is `dx * 4.2` (west),
- * north-south is `dy * 3.0` (north). Altitude stays high so flats and
- * lowlands are not crushed and the terminator stays soft.
- */
-export const PAPER_KEY_LIGHT = {
-  west: 4.2,
-  north: 3.0,
-  altitude: Math.PI / 3,
-} as const
-
-/**
- * Direction toward the key light, in the globe's object space.
- * At the texture centre (u = 0.5, equator) the sphere frame is
- * outward +X, north +Y, west +Z — so this vector sits in the
- * texture's upper-left, not on a camera-following sun.
- */
-export function paperKeyLightDirection(
-  light: { west: number; north: number; altitude: number } = PAPER_KEY_LIGHT,
-): { x: number; y: number; z: number } {
-  const horiz = Math.hypot(light.west, light.north) || 1
-  const c = Math.cos(light.altitude)
-  const s = Math.sin(light.altitude)
-  const x = s
-  const y = c * (light.north / horiz)
-  const z = c * (light.west / horiz)
-  const len = Math.hypot(x, y, z) || 1
-  return { x: x / len, y: y / len, z: z / len }
-}
-
 function imageDataToTexture(
   image: ImageData,
   renderer: THREE.WebGLRenderer,
@@ -132,18 +101,13 @@ export class PlanetView {
     this.scene.add(this.atmosphere)
 
     // Geoform 1 paper-day: cool ambient + warm key + cool fill. No HDRI, no bloom.
-    // Key light is fixed to the texture's upper-left (northwest), matching
-    // the atlas hillshade. Ambient is high so lowlands and the soft shadow
-    // side stay bright; the fill only lifts the opposite limb.
-    const key = paperKeyLightDirection()
-    this.scene.add(new THREE.AmbientLight(0x9ab0c8, 0.72))
-    this.sun = new THREE.DirectionalLight(0xfff6e8, 0.85)
-    this.sun.position.set(key.x * 5, key.y * 5, key.z * 5)
+    this.scene.add(new THREE.AmbientLight(0x9ab0c8, 0.48))
+    this.sun = new THREE.DirectionalLight(0xfff6e8, 1.45)
     this.sun.target.position.set(0, 0, 0)
     this.scene.add(this.sun)
     this.scene.add(this.sun.target)
-    this.fill = new THREE.DirectionalLight(0x88a8d0, 0.28)
-    this.fill.position.set(-key.x * 4, -key.y * 2, -key.z * 4)
+    this.fill = new THREE.DirectionalLight(0x88a8d0, 0.35)
+    this.fill.position.set(-2.2, 0.4, -1.6)
     this.scene.add(this.fill)
     this.scene.add(this.makeStars())
 
@@ -254,6 +218,7 @@ export class PlanetView {
       this.distance * cp * Math.cos(this.yaw),
     )
     this.camera.lookAt(0, 0, 0)
+    this.sun.position.copy(this.camera.position).add(new THREE.Vector3(1.4, 0.8, 0.6))
   }
 
   pick(clientX: number, clientY: number, world: World): { x: number; y: number } | null {
