@@ -232,6 +232,7 @@ export function growPolities(world: World): void {
   if (!seats.length) {
     world.polities = []
     world.routes = []
+    world.marchBand = new Uint8Array(n)
     return
   }
   // Float64 + a visit cap: same reasons as `dijkstraPath`. Float32 rounding
@@ -278,6 +279,15 @@ export function growPolities(world: World): void {
       world.polityId[i] = -1
     }
   }
+  const march = new Uint8Array(n)
+  for (let i = 0; i < n; i++) {
+    if (world.polityId[i] < 0 || !Number.isFinite(dist[i])) continue
+    const cost = dist[i]
+    if (cost <= CORE_REACH) march[i] = 3
+    else if (cost <= CLAIMED_REACH) march[i] = 2
+    else march[i] = 1
+  }
+  world.marchBand = march
   for (const city of world.cities) {
     const i = idx(w, city.x, city.y)
     const pid = world.polityId[i]

@@ -477,12 +477,35 @@ function paintCountryInk(ctx: CanvasRenderingContext2D, world: World, box: BlitB
   const step = Math.max(1, Math.round(Math.min(w, h) > 200 ? 2 : 1))
   for (let y = 0; y < h; y += step) {
     for (let x = 0; x < w; x += step) {
-      const pid = world.polityId[y * w + x]
-      if (pid < 0 || world.mask[y * w + x] < threshold) continue
+      const i = y * w + x
+      const pid = world.polityId[i]
+      if (pid < 0 || world.mask[i] < threshold) continue
+      const march = world.marchBand
+      if (march && march.length === w * h && march[i] === 1) continue
       const rgb = POLITY_WASH[pid % POLITY_WASH.length]
       ctx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`
       ctx.fillRect(box.x + x * cellW, box.y + y * cellH, cellW * step + 0.4, cellH * step + 0.4)
     }
+  }
+  const march = world.marchBand
+  if (march && march.length === w * h) {
+    ctx.globalAlpha = 0.55
+    ctx.strokeStyle = '#1c221c'
+    ctx.lineWidth = Math.max(0.6, Math.min(cellW, cellH) * 0.12)
+    ctx.beginPath()
+    for (let y = 0; y < h; y += step) {
+      for (let x = 0; x < w; x += step) {
+        const i = y * w + x
+        if (march[i] !== 1 || world.mask[i] < threshold) continue
+        const x0 = box.x + x * cellW
+        const y0 = box.y + y * cellH
+        const x1 = x0 + cellW * step
+        const y1 = y0 + cellH * step
+        ctx.moveTo(x0, y1)
+        ctx.lineTo(x1, y0)
+      }
+    }
+    ctx.stroke()
   }
   ctx.globalAlpha = 0.92
   ctx.strokeStyle = '#1c221c'

@@ -573,6 +573,11 @@ export interface World {
 
   /** Country id per cell, −1 = ocean or unclaimed. Length W*H. */
   polityId: Int16Array
+  /**
+   * Hold from the seat. 1 march, 2 claimed, 3 core. 0 unset.
+   * Written by kingdom growth. Omitted on old saves.
+   */
+  marchBand?: Uint8Array
   polities: Polity[]
   routes: TradeRoute[]
 
