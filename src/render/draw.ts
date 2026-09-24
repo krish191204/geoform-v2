@@ -198,16 +198,53 @@ function ramp(v: number | undefined): number {
 // 4. Per-layer colour ramps
 // ---------------------------------------------------------------------------
 
+function smooth01(t: number): number {
+  const x = t < 0 ? 0 : t > 1 ? 1 : t
+  return x * x * (3 - 2 * x)
+}
+
+/** Mild annual moisture when the bake has no usable `moistMean`. */
+const MILD_MOIST = 0.45
+
 /**
- * Banded elevation ramp in metres. Ocean is the mask, not `meta.seaLevel`
+ * Continuous hypsometric land tint. Humid lowlands lean cool green, dry
+ * lowlands lean warm brown, and the blend pales toward the crests.
+ * No elevation steps — one smooth curve in metres.
+ */
+function landHypsometric(e: number, moist: number | undefined): [number, number, number] {
+  if (!Number.isFinite(e)) return [120, 120, 120]
+  const m = Number.isFinite(moist as number) ? ramp(moist as number) : MILD_MOIST
+  const z = smooth01(Math.max(0, e) / 4600)
+  const low = mix([176, 132, 86], [64, 116, 76], m)
+  const pale = mix([198, 186, 164], [232, 228, 218], z)
+  return mix(low, pale, z)
+}
+
+/**
+ * Bathymetric blues. Shelf (coast class) stays lighter; open water drops
+ * through a short break into quieter abyss. Trenches (`e < 0`) darken further.
+ * Abyssal default in the pipeline is 0 m.
+ */
+function oceanBathymetry(e: number, kind: OceanClass | null): [number, number, number] {
+  const depth = !Number.isFinite(e) || e >= 0 ? 0 : ramp(-e / 1200)
+  const shelf: [number, number, number] = [56, 128, 150]
+  const shelfBreak: [number, number, number] = [26, 84, 118]
+  const open: [number, number, number] = [12, 44, 74]
+  const abyss: [number, number, number] = [6, 22, 42]
+  if (kind === 'shelf') return mix(shelf, shelfBreak, smooth01(Math.min(1, depth / 0.35)))
+  if (kind === 'ice-edge') return mix(mix(open, abyss, depth), [188, 206, 214], 0.4)
+  const broke = smooth01(Math.min(1, depth / 0.22))
+  return mix(mix(shelfBreak, open, 0.78), abyss, broke * 0.85 + depth * 0.15)
+}
+
+/**
+ * Height-layer metre ramp. Ocean is the mask, not `meta.seaLevel`
  * (that field is a 0..1 freeze threshold leftover and would paint every
- * 200 m plain as snow).
+ * 200 m plain as snow). Relief uses `landHypsometric` instead of these steps.
  */
 function elevBandColor(e: number, ocean: boolean): [number, number, number] {
   if (!Number.isFinite(e)) return [120, 120, 120]
   if (ocean) {
-    // Pipeline abyssal default is 0 m; trenches go negative. Geoform 1 paints
-    // empty ocean as deep water, not a lagoon shelf.
     const t = e >= 0 ? 0.22 : ramp((e + 1600) / 1600) * 0.22
     return mix([8, 28, 48], [18, 62, 92], t / 0.45)
   }
@@ -493,38 +530,6 @@ function plateBoundaryCue(
   return { edge, approach }
 }
 
-function isCoast(world: World, x: number, y: number): boolean {
-  const { width: w, height: h } = world.meta
-  if (x < 0 || y < 0 || x >= w || y >= h) return false
-  const land = !isOceanCell(world, y * w + x)
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      if (!dx && !dy) continue
-      const nx = wrapX(x + dx, w)
-      const ny = y + dy
-      if (ny < 0 || ny >= h) continue
-      const nLand = !isOceanCell(world, ny * w + nx)
-      if (nLand !== land) return true
-    }
-  }
-  return false
-}
-
-/** How much of the bilinear neighbourhood is a land/sea edge (0..1). */
-function coastAmount(world: World, xf: number, yf: number): number {
-  const { width: w, height: h } = world.meta
-  const x0 = wrapX(Math.floor(xf), w)
-  const y0 = Math.max(0, Math.min(h - 1, Math.floor(yf)))
-  const x1 = wrapX(x0 + 1, w)
-  const y1 = Math.max(0, Math.min(h - 1, y0 + 1))
-  let n = 0
-  if (isCoast(world, x0, y0)) n++
-  if (isCoast(world, x1, y0)) n++
-  if (isCoast(world, x0, y1)) n++
-  if (isCoast(world, x1, y1)) n++
-  return n / 4
-}
-
 function sampleScalar(field: ArrayLike<number>, world: World, x: number, y: number): number {
   const { width: w, height: h } = world.meta
   const x0 = wrapX(Math.floor(x), w)
@@ -567,10 +572,21 @@ function layerFill(
   const ocean = isOceanCell(world, i)
 
   switch (layer) {
-    case 'relief':
-      if (ocean) return elevBandColor(e, true)
-      if (world.biome[i] === 'ice') return mix(elevBandColor(e, false), [232, 240, 244], 0.72)
-      return elevBandColor(e, false)
+    case 'relief': {
+      if (isLakeCell(world, i)) return [46, 102, 122]
+      if (ocean) {
+        const kind = classifyOcean(world.mask, world.summer, w, h, world.meta.threshold, x, y)
+        return oceanBathymetry(e, kind)
+      }
+      const moistField = world.moistMean
+      const moist =
+        moistField != null && i < moistField.length && Number.isFinite(moistField[i])
+          ? moistField[i]
+          : undefined
+      const land = landHypsometric(e, moist)
+      if (world.biome[i] === 'ice') return mix(land, [232, 240, 244], 0.72)
+      return land
+    }
     case 'elevation':
       return elevBandColor(e, ocean)
     case 'plates': {
@@ -624,15 +640,18 @@ function applyPaperLook(
   const lakeV = sampleLakes(world, x, y)
   const ocean = maskV < threshold || (lakeV >= 0.45 && maskV >= threshold)
 
-  // Hillshade on terrain-ish layers. Height stays a raw metre ramp.
+  // Northwest light (upper-left). The previous term lit +x/+y faces.
+  // Lowlands stay bright; contrast rises toward crests. Ocean stays quieter.
   if (layer === 'relief' || layer === 'biome') {
     const er = sampleElev(world, x + 1, y)
     const ed = sampleElev(world, x, y + 1)
     const dx = (e - er) / SHADE_M
     const dy = (e - ed) / SHADE_M
-    const shade = 0.72 + dx * 4.2 + dy * 3.0
-    const ambient = layer === 'biome' ? 0.55 : 0.35
-    const lit = ambient + ((1 - ambient) * clamp(shade, 0.45, 1.35)) / 1.15
+    const slope = -dx * 1.55 - dy * 1.15
+    const crest = ocean ? 0 : smooth01(Math.max(0, e) / 3600)
+    const contrast = (ocean ? 0.22 : lerp(0.18, 1, crest)) * (layer === 'biome' ? 0.85 : 1)
+    const ambient = ocean ? 0.93 : lerp(layer === 'biome' ? 0.9 : 0.96, 0.68, crest)
+    const lit = clamp(ambient + slope * contrast, ocean ? 0.82 : 0.58, ocean ? 1.05 : 1.28)
     rgb = [clamp(rgb[0] * lit), clamp(rgb[1] * lit), clamp(rgb[2] * lit)]
   }
 
@@ -647,17 +666,6 @@ function applyPaperLook(
       clamp(rgb[1] + shimmer * 70),
       clamp(rgb[2] + shimmer * 90),
     ]
-  }
-
-  // Ocean aspects live on Relief: shelf and ice edge.
-  // Biome keeps one ocean colour so the classifier stays one message.
-  if (ocean && layer === 'relief') {
-    const { width: w, height: h, threshold } = world.meta
-    const ix = wrapX(Math.floor(x), w)
-    const iy = Math.max(0, Math.min(h - 1, Math.floor(y)))
-    const kind = classifyOcean(world.mask, world.summer, w, h, threshold, ix, iy)
-    if (kind === 'ice-edge') rgb = mix(rgb, [198, 214, 222], 0.38)
-    else if (kind === 'shelf') rgb = mix(rgb, [36, 110, 128], 0.32)
   }
 
   // Weather veil on Relief only — view overlay from moisture + SST, not a GCM.
@@ -675,13 +683,17 @@ function applyPaperLook(
     if (cloud > 0.04) rgb = mix(rgb, [232, 234, 230], cloud)
   }
 
-  // Coastal ink/foam — skip plates so sutures stay readable.
+  // Coast foam is a hairline on the mask (or lake) edge, not a cell-wide glow.
   if (layer !== 'plates') {
-    const foam = coastAmount(world, x, y)
-    if (foam > 0) {
+    const band = Math.abs(maskV - threshold)
+    const maskHair = band < 0.07 ? 1 - band / 0.07 : 0
+    const lakeBand = Math.abs(lakeV - 0.5)
+    const lakeHair = lakeV > 0.05 && lakeV < 0.95 ? Math.max(0, 1 - lakeBand / 0.18) : 0
+    const hair = Math.max(maskHair, lakeHair)
+    if (hair > 0.04) {
       rgb = ocean
-        ? mix(rgb, [210, 230, 230], 0.28 * foam)
-        : mix(rgb, [30, 42, 36], 0.22 * foam)
+        ? mix(rgb, [206, 222, 220], 0.16 * hair)
+        : mix(rgb, [32, 40, 34], 0.1 * hair)
     }
   }
 
