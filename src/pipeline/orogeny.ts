@@ -92,6 +92,8 @@ const SHELF_RADIUS = 2
 
 /** Hard upper bound on peak elevation, in metres. */
 const MAX_PEAK_M = 8000
+/** Earth radius. Gaussian widths are defined in kilometres at this size. */
+const EARTH_RADIUS_KM = 6371
 /** Skip Gaussian samples whose magnitude is below this — saves work. */
 const WEIGHT_EPSILON = 0.01
 
@@ -255,6 +257,22 @@ function scaleCollision(speed: number): { peak: number; radius: number; sigma: n
   }
 }
 
+/**
+ * Cell count for a kilometre-wide feature. A larger planet has more
+ * kilometres per cell, so the same belt occupies fewer cells.
+ * At 6371 km this is 1, and every radius stays the historical cell count.
+ */
+function earthCellScale(planetRadiusKm: number, width: number): number {
+  const radius = planetRadiusKm > 0 ? planetRadiusKm : EARTH_RADIUS_KM
+  const kmPerCell = (2 * Math.PI * radius) / width
+  const earthKmPerCell = (2 * Math.PI * EARTH_RADIUS_KM) / width
+  return earthKmPerCell / kmPerCell
+}
+
+function scaledCells(earthCells: number, cellScale: number): number {
+  return Math.max(1, Math.round(earthCells * cellScale))
+}
+
 function sidePredicate(
   mask: Float32Array,
   threshold: number,
@@ -279,6 +297,8 @@ function sidePredicate(
  *   - `height`     — map height in cells.
  *   - `threshold`  — mask threshold that distinguishes land from sea.
  *   - `seed`       — world seed; drives coherent relief and erosion.
+ *   - `planetRadiusKm` — scales Gaussian widths so a belt keeps its
+ *     kilometre width. Default 6371 matches the historical cell radii.
  */
 export function computeOrogeny(
   plates: PlateAssignment,
@@ -287,7 +307,14 @@ export function computeOrogeny(
   height: number,
   threshold: number,
   seed: number = 1,
+  planetRadiusKm: number = EARTH_RADIUS_KM,
 ): OrogenyResult {
+  const cellScale = earthCellScale(planetRadiusKm, width)
+  const ocRadius = scaledCells(OC_RADIUS, cellScale)
+  const ocSigma = OC_SIGMA * cellScale
+  const divergentRadius = scaledCells(DIVERGENT_RADIUS, cellScale)
+  const divergentSigma = DIVERGENT_SIGMA * cellScale
+  const shelfRadius = scaledCells(SHELF_RADIUS, cellScale)
   const n = width * height
   const elev = new Float32Array(n)
   const boundaryUplift = new Float32Array(n)
@@ -321,8 +348,8 @@ export function computeOrogeny(
         ix,
         iy,
         scaled.peak,
-        scaled.radius,
-        scaled.sigma,
+        scaledCells(scaled.radius, cellScale),
+        scaled.sigma * cellScale,
         elev,
         boundaryUplift,
         density,
@@ -338,8 +365,8 @@ export function computeOrogeny(
           ix,
           iy,
           PEAK_OC_ARC_M,
-          OC_RADIUS,
-          OC_SIGMA,
+          ocRadius,
+          ocSigma,
           elev,
           boundaryUplift,
           density,
@@ -351,8 +378,8 @@ export function computeOrogeny(
           jx,
           jy,
           PEAK_OC_TRENCH_M,
-          OC_RADIUS,
-          OC_SIGMA,
+          ocRadius,
+          ocSigma,
           elev,
           boundaryUplift,
           density,
@@ -365,8 +392,8 @@ export function computeOrogeny(
           ix,
           iy,
           PEAK_OC_TRENCH_M,
-          OC_RADIUS,
-          OC_SIGMA,
+          ocRadius,
+          ocSigma,
           elev,
           boundaryUplift,
           density,
@@ -378,8 +405,8 @@ export function computeOrogeny(
           jx,
           jy,
           PEAK_OC_ARC_M,
-          OC_RADIUS,
-          OC_SIGMA,
+          ocRadius,
+          ocSigma,
           elev,
           boundaryUplift,
           density,
@@ -396,8 +423,8 @@ export function computeOrogeny(
           ix,
           iy,
           PEAK_DIVERGENT_M,
-          DIVERGENT_RADIUS,
-          DIVERGENT_SIGMA,
+          divergentRadius,
+          divergentSigma,
           elev,
           boundaryUplift,
           density,
@@ -410,8 +437,8 @@ export function computeOrogeny(
           jx,
           jy,
           PEAK_DIVERGENT_M,
-          DIVERGENT_RADIUS,
-          DIVERGENT_SIGMA,
+          divergentRadius,
+          divergentSigma,
           elev,
           boundaryUplift,
           density,
@@ -424,8 +451,8 @@ export function computeOrogeny(
           ix,
           iy,
           PEAK_DIVERGENT_M,
-          DIVERGENT_RADIUS,
-          DIVERGENT_SIGMA,
+          divergentRadius,
+          divergentSigma,
           elev,
           boundaryUplift,
           density,
@@ -448,10 +475,10 @@ export function computeOrogeny(
       const i = idx(width, x, y)
       if (mask[i] <= threshold) continue
       let nearestOceanDist = -1
-      for (let dy = -SHELF_RADIUS; dy <= SHELF_RADIUS; dy++) {
+      for (let dy = -shelfRadius; dy <= shelfRadius; dy++) {
         const ny = y + dy
         if (ny < 0 || ny >= height) continue
-        for (let dx = -SHELF_RADIUS; dx <= SHELF_RADIUS; dx++) {
+        for (let dx = -shelfRadius; dx <= shelfRadius; dx++) {
           const nx = wrapX(x + dx, width)
           if (mask[idx(width, nx, ny)] <= threshold) {
             const d = Math.sqrt(dx * dx + dy * dy)
@@ -461,8 +488,8 @@ export function computeOrogeny(
           }
         }
       }
-      if (nearestOceanDist > 0 && nearestOceanDist <= SHELF_RADIUS) {
-        elev[i] += lerp(PEAK_SHELF_M, 0, nearestOceanDist / SHELF_RADIUS)
+      if (nearestOceanDist > 0 && nearestOceanDist <= shelfRadius) {
+        elev[i] += lerp(PEAK_SHELF_M, 0, nearestOceanDist / shelfRadius)
       }
     }
   }

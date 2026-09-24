@@ -147,6 +147,9 @@ export async function makeSenseInline(
 ): Promise<MakeSenseResult> {
   const { mask, meta } = input
   const { width, height, threshold, seed, planetRadiusKm, obliquityDeg } = meta
+  const currentStrength = meta.currentStrength ?? 1
+  const iceLineC = meta.iceLineC ?? 0
+  const lakeFillM = meta.lakeFillM ?? 60
   const steps: StepResult[] = []
   const capture: (step: StepResult) => void = (s) => {
     steps.push(s)
@@ -215,7 +218,15 @@ export async function makeSenseInline(
   // Convert plate boundaries + drift into elevation. Returns the elevation
   // field plus any auxiliary data the climate step needs.
   const t2 = now()
-  const orogeny = computeOrogeny(platesResult, land, width, height, threshold, seed)
+  const orogeny = computeOrogeny(
+    platesResult,
+    land,
+    width,
+    height,
+    threshold,
+    seed,
+    planetRadiusKm,
+  )
   const peakElev = peakLand(orogeny.elev, land, threshold)
   const meanElev = meanLandSafe(orogeny.elev, land, threshold)
   const orogenyParts: string[] = []
@@ -252,6 +263,7 @@ export async function makeSenseInline(
     planetRadiusKm,
     obliquityDeg,
     seed,
+    currentStrength,
   )
   // Ice is a process on the grounded mask, narrated inside climate.
   // Fjords shorten themselves when another cell would break the lock.
@@ -268,6 +280,7 @@ export async function makeSenseInline(
       areaFraction: MASK_LOCK_AREA_FRACTION,
       minComponent: MASK_LOCK_MIN_COMPONENT,
     },
+    iceLineC,
   )
   const meanSummerC = meanLandSafe(seasonal.summer, land, threshold)
   const meanWinterC = meanLandSafe(seasonal.winter, land, threshold)
@@ -306,6 +319,7 @@ export async function makeSenseInline(
     height,
     threshold,
     seasonal.summerMoist,
+    lakeFillM,
   )
   const riverCount = sumUint8(hydro.rivers)
   const maxFlux = peakLand(hydro.flux, land, threshold)

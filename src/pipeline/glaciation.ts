@@ -113,6 +113,7 @@ export function applyGlaciation(
   height: number,
   threshold: number,
   budget: GlaciationBudget,
+  iceLineC: number = 0,
 ): GlaciationResult {
   const n = width * height
   const ice = new Uint8Array(n)
@@ -220,7 +221,7 @@ export function applyGlaciation(
   for (let i = 0; i < n; i++) {
     if (!isLand(mask, i, threshold)) continue
     if (elev[i] >= ICE_MAX_ELEV_M) continue
-    if (summer[i] < 0 && winter[i] < 0) ice[i] = 1
+    if (summer[i] <= iceLineC && winter[i] <= iceLineC) ice[i] = 1
   }
 
   const summary: GlaciationResult['summary'] = drowned > 0 || carvedAny ? 'ice coast' : ''

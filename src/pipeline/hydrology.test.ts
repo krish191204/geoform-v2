@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   computeHydrology,
+  FILL_CAP_M,
   RIVER_THRESHOLD,
   D8_OFFSETS,
   idx,
@@ -365,6 +366,29 @@ describe('computeHydrology: edge cases', () => {
     const { lakes, salt } = computeHydrology(elev, mask, w, h, THRESHOLD, moist)
     expect(salt[idx(w, 3, 3)]).toBe(1)
     expect(lakes[idx(w, 3, 3)]).toBe(0)
+  })
+
+  it('lakeFillM 60 matches FILL_CAP_M', () => {
+    expect(FILL_CAP_M).toBe(60)
+    const w = 7
+    const h = 7
+    const elev = new Float32Array(w * h)
+    const mask = new Float32Array(w * h)
+    const moist = new Float32Array(w * h).fill(0.55)
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = idx(w, x, y)
+        const edge = x === 0 || y === 0 || x === w - 1 || y === h - 1
+        mask[i] = edge ? 0 : 1
+        const d = Math.max(Math.abs(x - 3), Math.abs(y - 3))
+        elev[i] = edge ? 0 : d === 2 ? 220 : 20 + d * 70
+      }
+    }
+    const capped = computeHydrology(elev, mask, w, h, THRESHOLD, moist, 60)
+    const implicit = computeHydrology(elev, mask, w, h, THRESHOLD, moist)
+    expect(Array.from(capped.lakes)).toEqual(Array.from(implicit.lakes))
+    expect(Array.from(capped.salt)).toEqual(Array.from(implicit.salt))
+    expect(capped.lakes[idx(w, 3, 3)]).toBe(1)
   })
 })
 

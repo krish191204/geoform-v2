@@ -46,8 +46,9 @@ function landDist(
   dx: 1 | -1,
   width: number,
   threshold: number,
+  reach: number,
 ): number {
-  for (let s = 1; s <= REACH; s++) {
+  for (let s = 1; s <= reach; s++) {
     const nx = wrapX(x + dx * s, width)
     if (mask[idx(width, nx, y)] >= threshold) return s
   }
@@ -79,6 +80,7 @@ export function computeOceanCurrents(
   width: number,
   height: number,
   threshold: number,
+  strength: number = 1,
 ): OceanCurrents {
   const n = width * height
   const tempBias = new Float32Array(n)
@@ -87,6 +89,15 @@ export function computeOceanCurrents(
   const moistScale = new Float32Array(n)
   evapScale.fill(1)
   moistScale.fill(1)
+
+  // Strength 0 is today's planet with currents switched off.
+  if (!(strength > 0)) {
+    return { tempBias, mild, evapScale, moistScale, note: '' }
+  }
+
+  const reach = REACH * strength
+  const warmC = WARM_C * strength
+  const coldC = COLD_C * strength
 
   const ocean = new Uint8Array(n)
   for (let i = 0; i < n; i++) ocean[i] = mask[i] < threshold ? 1 : 0
@@ -98,18 +109,18 @@ export function computeOceanCurrents(
     for (let x = 0; x < width; x++) {
       const i = idx(width, x, y)
       if (!ocean[i]) continue
-      const toWest = landDist(mask, x, y, -1, width, threshold)
-      const toEast = landDist(mask, x, y, 1, width, threshold)
+      const toWest = landDist(mask, x, y, -1, width, threshold, reach)
+      const toEast = landDist(mask, x, y, 1, width, threshold, reach)
       // Western ocean boundary: land is to the west, and it is the nearer shore.
       const western = toWest > 0 && (toEast === 0 || toWest <= toEast)
       const eastern = toEast > 0 && (toWest === 0 || toEast < toWest)
       if (western) {
-        const falloff = 1 - (toWest - 1) / REACH
-        tempBias[i] = WARM_C * warmK * falloff
+        const falloff = 1 - (toWest - 1) / reach
+        tempBias[i] = warmC * warmK * falloff
         evapScale[i] = clamp(1 + 0.5 * warmK * falloff, 0.45, 1.6)
       } else if (eastern) {
-        const falloff = 1 - (toEast - 1) / REACH
-        tempBias[i] = -COLD_C * coldK * falloff
+        const falloff = 1 - (toEast - 1) / reach
+        tempBias[i] = -coldC * coldK * falloff
         evapScale[i] = clamp(1 - 0.55 * coldK * falloff, 0.4, 1.6)
       }
     }

@@ -263,6 +263,7 @@ export interface HydrologyResult {
  * @param height grid height
  * @param threshold mask threshold separating land from ocean
  * @param runoff optional per-cell water donation (0..1 moisture). Omitted → 1.
+ * @param fillCapM metres a pit may be raised before it stays closed. Default `FILL_CAP_M`.
  */
 export function computeHydrology(
   elev: Float32Array,
@@ -271,6 +272,7 @@ export function computeHydrology(
   height: number,
   threshold: number,
   runoff?: Float32Array,
+  fillCapM: number = FILL_CAP_M,
 ): HydrologyResult {
   const n = width * height
   // Spill-fill on a copy. Shallow pits rise to the outlet; deep ones stay.
@@ -288,7 +290,7 @@ export function computeHydrology(
     for (let i = 0; i < n; i++) {
       if (mask[i] < threshold) continue
       const depth = spill[i] - elev[i]
-      if (depth > FILL_CAP_M) {
+      if (depth > fillCapM) {
         closed[i] = 1
         e[i] = elev[i]
       } else {

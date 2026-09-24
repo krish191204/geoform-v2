@@ -121,6 +121,12 @@ export interface MakeSenseInput {
     seaLevel: number
     /** Land mask threshold, 0..1. */
     threshold: number
+    /** Ocean-current multiplier. Omitted → 1. `0` turns currents off. */
+    currentStrength?: number
+    /** °C. Both seasons at or below this can glaciate. Omitted → 0. */
+    iceLineC?: number
+    /** Metres of sink-fill before a pit stays closed. Omitted → 60. */
+    lakeFillM?: number
   }
   /** Authoritative soft mask from Sketch, 0..1, length W*H. */
   mask: Float32Array

@@ -150,6 +150,7 @@ export function computeSeasonalClimate(
   planetRadiusKm: number,
   obliquityDeg: number,
   _seed: number,
+  currentStrength: number = 1,
 ): SeasonalClimateResult {
   const n = width * height
   const summer = new Float32Array(n)
@@ -207,7 +208,7 @@ export function computeSeasonalClimate(
 
   // Coastal currents: warm western boundaries, cold eastern ones.
   // Applied before the mix so the anomaly bleeds a cell or two inland.
-  const currents = computeOceanCurrents(mask, width, height, threshold)
+  const currents = computeOceanCurrents(mask, width, height, threshold, currentStrength)
   for (let i = 0; i < n; i++) {
     const bias = currents.tempBias[i]
     if (bias !== 0) {

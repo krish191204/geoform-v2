@@ -96,7 +96,48 @@ function findCoastPair(): { land: number; ocean: number } {
 // Tests
 // ---------------------------------------------------------------------------
 
+function upliftSpanCells(uplift: Float32Array, cx: number, cy: number): number {
+  let maxD = 0
+  for (let y = 0; y < HEIGHT; y++) {
+    for (let x = 0; x < WIDTH; x++) {
+      if (uplift[idx(WIDTH, x, y)] <= 1) continue
+      const dx = Math.min(Math.abs(x - cx), WIDTH - Math.abs(x - cx))
+      const dy = y - cy
+      const d = Math.hypot(dx, dy)
+      if (d > maxD) maxD = d
+    }
+  }
+  return maxD
+}
+
 describe('computeOrogeny', () => {
+  it('keeps Earth-radius Gaussian width and narrows a larger planet in cells', () => {
+    const mask = new Float32Array(WIDTH * HEIGHT).fill(1)
+    const cx = 32
+    const cy = 16
+    const plates = oneBoundary('convergent-cc')
+    plates.boundaries[0] = {
+      ...plates.boundaries[0],
+      i: idx(WIDTH, cx, cy),
+      ji: idx(WIDTH, cx + 1, cy),
+      relativeVx: 1,
+      relativeVy: 0,
+    }
+    const earth = computeOrogeny(plates, mask, WIDTH, HEIGHT, THRESHOLD, 1, 6371)
+    const implicit = computeOrogeny(plates, mask, WIDTH, HEIGHT, THRESHOLD, 1)
+    expect(Array.from(earth.boundaryUplift)).toEqual(Array.from(implicit.boundaryUplift))
+    const giant = computeOrogeny(plates, mask, WIDTH, HEIGHT, THRESHOLD, 1, 12742)
+    const earthCells = upliftSpanCells(earth.boundaryUplift, cx, cy)
+    const giantCells = upliftSpanCells(giant.boundaryUplift, cx, cy)
+    expect(giantCells).toBeLessThan(earthCells)
+    const km = (cells: number, radiusKm: number) => cells * ((2 * Math.PI * radiusKm) / WIDTH)
+    const earthKm = km(earthCells, 6371)
+    const giantKm = km(giantCells, 12742)
+    expect(Math.abs(giantKm - earthKm) / earthKm).toBeLessThan(0.2)
+    expect(Math.max(...earth.elev)).toBeLessThanOrEqual(8000)
+    expect(Math.max(...giant.elev)).toBeLessThanOrEqual(8000)
+  })
+
   it('raises a fast continent-continent collision higher and narrower than a slow one', () => {
     const { mask } = makeContinentWorld()
     const bi = idx(WIDTH, 32, 16)
