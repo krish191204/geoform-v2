@@ -14,12 +14,14 @@
   /* Subtle paper-grain: turbulence noise, near-invisible, no assets. */
   --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.11 0 0 0 0 0.13 0 0 0 0 0.11 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
   --mist: #c5d0c8;
-  --panel: rgba(231, 224, 210, 0.92);
-  --card: linear-gradient(180deg, rgba(241, 235, 221, 0.97), rgba(229, 221, 203, 0.97));
-  --line: rgba(28, 34, 28, 0.22);
-  --shadow: 0 18px 50px rgba(28, 34, 28, 0.18);
-  --shadow-lift: 0 16px 40px rgba(8, 14, 12, 0.35);
-  --radius: 14px;
+  --panel: #e7e0d2;
+  --card: #e7e0d2;
+  --line: rgba(28, 34, 28, 0.55);
+  --shadow: none;
+  --shadow-lift: none;
+  --radius: 3px;
+  --tools-col: min(16.75rem, 22vw);
+  --inspect-col: min(21rem, 28vw);
   --font-display: 'Fraunces', Georgia, serif;
   --font-data: 'Spline Sans Mono', ui-monospace, 'SF Mono', Menlo, monospace;
   font-family: 'Outfit', system-ui, sans-serif;
@@ -49,10 +51,7 @@ body {
 
 body {
   min-height: 100vh;
-  background:
-    radial-gradient(1200px 700px at 10% -10%, #dfe8e2 0%, transparent 55%),
-    radial-gradient(900px 600px at 100% 0%, #d8cfc0 0%, transparent 50%),
-    linear-gradient(165deg, #ebe4d6 0%, #d7e0da 45%, #cfd6cf 100%);
+  background: var(--paper);
 }
 
 #app,
@@ -60,24 +59,25 @@ body {
 #app-root.app {
   height: 100%;
   min-height: 0;
-  display: block;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   position: relative;
+  background: var(--paper);
 }
 
 .chrome {
-  padding: 0.4rem 0.85rem 0.55rem;
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
+  padding: 0.35rem 0.7rem 0.4rem;
+  position: relative;
   z-index: 40;
   pointer-events: none;
-  background: linear-gradient(
-    180deg,
-    rgba(231, 224, 210, 0.82) 0%,
-    rgba(231, 224, 210, 0.28) 72%,
-    transparent 100%
-  );
+  background: var(--paper);
+  border-bottom: 1px solid var(--ink);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 0.85rem;
+  row-gap: 0.1rem;
 }
 
 .chrome > * {
@@ -85,32 +85,33 @@ body {
 }
 
 .topnav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem 1rem;
-  flex-wrap: wrap;
+  display: contents;
 }
 
 .brand-lock {
+  grid-column: 1;
+  grid-row: 1;
   font-family: 'Fraunces', Georgia, serif;
   font-weight: 700;
-  font-size: 1.35rem;
+  font-size: 1.15rem;
   letter-spacing: -0.02em;
   color: var(--ink);
   text-decoration: none;
-  flex-shrink: 0;
+  line-height: 1;
 }
 
 .tagline {
+  grid-column: 1;
+  grid-row: 2;
   margin: 0;
+  max-width: 14rem;
   color: var(--ink-soft);
-  font-family: var(--font-display);
-  font-style: italic;
-  font-weight: 500;
-  font-size: 0.88rem;
-  flex: 1;
-  min-width: 0;
+  font-family: inherit;
+  font-style: normal;
+  font-weight: 400;
+  font-size: 0.68rem;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
 }
 
 .save-meta,
@@ -122,28 +123,61 @@ kbd {
 }
 
 .nav-trailing {
+  grid-column: 3;
+  grid-row: 1 / span 2;
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  margin-left: auto;
+  justify-content: flex-end;
+  gap: 0.15rem 0.35rem;
+  margin-left: 0;
   flex-wrap: wrap;
+  max-width: 22rem;
+  justify-self: end;
+}
+
+.nav-trailing .action-btn {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-soft);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  padding: 0.1rem 0.28rem;
+  border-radius: 2px;
+}
+
+.nav-trailing .action-btn:hover {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--ink);
+}
+
+.nav-trailing .save-meta {
+  flex-basis: 100%;
+  text-align: right;
+  max-width: none;
+  font-size: 0.62rem;
 }
 
 .ux-stage-rail {
+  grid-column: 2;
+  grid-row: 1 / span 2;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.3rem;
-  margin-top: 0.35rem;
+  justify-content: center;
+  gap: 0.35rem;
+  margin-top: 0;
   padding-top: 0;
   border-top: none;
+  justify-self: center;
 }
 
 .ux-stage-btn {
   text-align: left;
-  border: 1px solid rgba(28, 34, 28, 0.1);
-  background: rgba(255, 255, 255, 0.42);
-  border-radius: 999px;
-  padding: 0.28rem 0.7rem;
+  border: 1px solid var(--ink);
+  background: transparent;
+  border-radius: 2px;
+  padding: 0.22rem 0.65rem;
   cursor: pointer;
   font: inherit;
   color: var(--ink-soft);
@@ -182,10 +216,13 @@ kbd {
 }
 
 .ux-act-rail {
+  grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem;
-  margin-top: 0.3rem;
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--line);
 }
 
 .ux-act-rail[hidden] {
@@ -194,10 +231,10 @@ kbd {
 
 .ux-act-btn {
   text-align: left;
-  border: 1px solid rgba(28, 34, 28, 0.1);
-  background: rgba(255, 255, 255, 0.38);
-  border-radius: 999px;
-  padding: 0.18rem 0.55rem;
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: 2px;
+  padding: 0.12rem 0.45rem;
   cursor: pointer;
   font: inherit;
   color: var(--ink-soft);
@@ -469,17 +506,15 @@ kbd {
 
 button,
 .select-like {
-  border: 1px solid rgba(28, 34, 28, 0.16);
-  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--line);
+  background: transparent;
   color: var(--ink);
-  /* Instrument plates, not consumer pills. Chips/toggles keep 999px
-     via their own rules — action buttons sit square. */
-  border-radius: 8px;
-  padding: 0.5rem 0.95rem;
+  border-radius: 3px;
+  padding: 0.4rem 0.7rem;
   font: inherit;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 button:hover,
@@ -501,30 +536,34 @@ button.primary:hover {
 }
 
 .layout {
-  position: absolute;
-  inset: 0;
-  display: block;
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
   padding: 0;
   min-height: 0;
   height: 100%;
+  background: var(--paper);
 }
 
 .panel {
-  background: rgba(231, 224, 210, 0.78);
-  border: 1px solid rgba(28, 34, 28, 0.08);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  background: var(--paper);
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   padding: 0.85rem 0.9rem;
-  backdrop-filter: blur(12px);
+  backdrop-filter: none;
   min-height: 0;
   overflow: auto;
 }
 
 .panel h2 {
   margin: 0 0 0.45rem;
-  font-family: 'Fraunces', Georgia, serif;
-  font-size: 1.15rem;
+  font-family: inherit;
+  font-size: 0.78rem;
   font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .panel h3 {
@@ -548,7 +587,7 @@ button.primary:hover {
 
 .tool {
   text-align: left;
-  border-radius: 10px;
+  border-radius: 3px;
   padding: 0.4rem 0.5rem;
 }
 
@@ -591,7 +630,7 @@ button.primary:hover {
   flex-direction: column;
   align-items: center;
   gap: 0.15rem;
-  border-radius: 10px;
+  border-radius: 3px;
   padding: 0.32rem 0.25rem;
   width: 100%;
   cursor: grab;
@@ -919,32 +958,24 @@ button.primary:hover {
 }
 
 .map-shell {
-  position: absolute;
-  inset: 0;
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
   z-index: 0;
   border-radius: 0;
   overflow: hidden;
   box-shadow: none;
   border: none;
-  background:
-    radial-gradient(ellipse at 30% 20%, rgba(80, 140, 150, 0.35), transparent 50%),
-    radial-gradient(ellipse at 70% 80%, rgba(20, 40, 50, 0.5), transparent 55%),
-    #163a44;
+  background: #163a44;
   min-height: 0;
-  width: 100%;
+  min-width: 0;
+  width: auto;
   height: 100%;
   display: grid;
 }
 
 .map-shell::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(180deg, rgba(243, 238, 220, 0.06), transparent 18%),
-    radial-gradient(ellipse at center, transparent 55%, rgba(20, 24, 20, 0.28) 100%);
-  z-index: 1;
+  content: none;
 }
 
 #map[hidden],
@@ -1042,9 +1073,7 @@ button.primary:hover {
   background: var(--card);
   border: 1px solid rgba(28, 34, 28, 0.4);
   border-radius: 3px;
-  box-shadow:
-    inset 0 0 0 2px rgba(241, 235, 221, 1),
-    0 8px 20px rgba(8, 14, 12, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(28, 34, 28, 0.35);
   color: var(--ink);
   pointer-events: none;
 }
@@ -1107,7 +1136,7 @@ button.primary:hover {
   color: #f3eee3;
   background: rgba(20, 28, 24, 0.45);
   border: 1px solid rgba(243, 238, 220, 0.18);
-  border-radius: 999px;
+  border-radius: 2px;
   padding: 0.28rem 0.7rem;
   cursor: pointer;
 }
@@ -1124,7 +1153,7 @@ button.primary:hover {
 
 .map-overlay {
   position: absolute;
-  left: calc(min(16.75rem, 22vw) + 1.35rem);
+  left: 0.75rem;
   bottom: 0.85rem;
   display: flex;
   flex-wrap: wrap;
@@ -1434,8 +1463,8 @@ button.primary:hover {
 
 .map-seasons {
   position: absolute;
-  left: calc(min(16.75rem, 22vw) + 1.35rem);
-  top: 5.9rem;
+  left: 0.75rem;
+  top: 0.75rem;
   z-index: 2;
   display: flex;
   gap: 0.35rem;
@@ -1443,8 +1472,8 @@ button.primary:hover {
 
 .map-hud {
   position: absolute;
-  top: 5.9rem;
-  right: calc(min(17.25rem, 24vw) + 1.35rem);
+  top: 0.75rem;
+  right: 0.75rem;
   z-index: 2;
   display: flex;
   gap: 0.4rem;
@@ -1473,7 +1502,7 @@ button.primary:hover {
 }
 
 .app.is-layout-chrome .map-plate-dock {
-  right: calc(min(17.25rem, 24vw) + 1.35rem);
+  right: 0.85rem;
 }
 
 .layout-toggle {
@@ -1502,8 +1531,7 @@ button.primary:hover {
   border-radius: 3px;
   box-shadow:
     inset 0 0 0 3px rgba(241, 235, 221, 1),
-    inset 0 0 0 4px rgba(28, 34, 28, 0.35),
-    0 10px 28px rgba(8, 14, 12, 0.4);
+    inset 0 0 0 4px rgba(28, 34, 28, 0.55);
   color: var(--ink);
 }
 
@@ -1750,24 +1778,26 @@ button.primary:hover {
   color: inherit;
 }
 
-/* Instrument cards — solid paper resting on the drafting table, ink on top.
-   Legible over any sea, no text-shadow crutch. */
+/* Edge plates: full-height columns under the top rule, map between them. */
 .tools-panel,
 .inspector {
-  position: absolute;
+  position: relative;
   z-index: 30;
-  top: 5.9rem;
+  top: auto;
+  right: auto;
   bottom: auto;
-  width: min(16.75rem, 22vw);
-  max-height: calc(100% - 6.65rem);
+  left: auto;
+  grid-row: 1;
+  height: 100%;
+  max-height: none;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   padding: 0;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-lift);
+  background: var(--paper);
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   color: var(--ink);
@@ -1776,17 +1806,20 @@ button.primary:hover {
 
 .chrome.is-worldbuild-chrome ~ .layout .tools-panel,
 .chrome.is-worldbuild-chrome ~ .layout .inspector {
-  top: 7.55rem;
-  max-height: calc(100% - 8.3rem);
+  top: auto;
+  max-height: none;
 }
 
 .tools-panel {
-  left: 0.75rem;
+  grid-column: 1;
+  width: var(--tools-col);
+  border-right: 1px solid var(--ink);
 }
 
 .inspector {
-  right: 0.75rem;
-  width: min(21rem, 28vw);
+  grid-column: 3;
+  width: var(--inspect-col);
+  border-left: 1px solid var(--ink);
 }
 
 .panel-head {
@@ -1808,7 +1841,7 @@ button.primary:hover {
   flex: 0 0 auto;
   font-size: 0.72rem;
   padding: 0.15rem 0.45rem;
-  border-radius: 999px;
+  border-radius: 2px;
   cursor: pointer;
 }
 
@@ -1824,11 +1857,11 @@ button.primary:hover {
   flex: 0 0 auto;
   max-height: 42%;
   overflow: auto;
-  margin: 0 0.55rem 0.55rem;
-  padding: 0.5rem 0.55rem 0.6rem;
+  margin: 0;
+  padding: 0.5rem 0.7rem 0.6rem;
   border-top: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.42);
-  border-radius: 8px;
+  background: transparent;
+  border-radius: 0;
 }
 
 .tools-panel.is-collapsed,
@@ -1964,6 +1997,22 @@ button:disabled {
   transition: opacity 0.22s ease;
 }
 
+.app.is-view-map .layout {
+  display: block;
+}
+
+.app.is-view-map .tools-panel,
+.app.is-view-map .inspector {
+  position: absolute;
+}
+
+.app.is-view-map .map-shell {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
 .app.is-view-map .chrome,
 .app.is-view-map .tools-panel,
 .app.is-view-map .inspector,
@@ -2046,8 +2095,43 @@ button:disabled {
 }
 
 @media (max-width: 980px) {
+  .chrome {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .topnav {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+    min-width: 0;
+  }
+
+  .tagline {
+    display: none;
+  }
+
+  .ux-stage-rail {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
+
+  .nav-trailing {
+    max-width: none;
+  }
+
   .layout {
     display: block;
+  }
+
+  .map-shell {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
   }
 
   .sheet-dock {
@@ -2064,12 +2148,18 @@ button:disabled {
 
   .tools-panel,
   .inspector {
+    position: absolute;
     top: auto;
     left: 0.5rem;
     right: 0.5rem;
     width: auto;
+    height: auto;
     max-height: 44vh;
     bottom: 2.7rem;
+    border-left: none;
+    border-right: none;
+    border: 1px solid var(--ink);
+    border-radius: 3px;
   }
 
   .tool small {
@@ -2126,17 +2216,21 @@ button:disabled {
 
 /* --- Palette v2: weathering & instrument authority ------------------- */
 
-/* Paper grain + engraved double-rule frame on the instrument cards,
-   echoing the cartouche plate. CSS only; the map raster is untouched. */
+/* Paper grain on the plates. Ink rules only — no modal drop shadow. */
 .tools-panel,
 .inspector,
 .keys-card,
 .loading-card {
-  background-image: var(--grain), var(--card);
-  box-shadow:
-    inset 0 0 0 3px rgba(241, 235, 221, 0.9),
-    inset 0 0 0 4px rgba(28, 34, 28, 0.14),
-    var(--shadow-lift);
+  background-image: var(--grain), linear-gradient(var(--paper), var(--paper));
+  box-shadow: none;
+}
+
+.keys-card,
+.loading-card,
+.account-card {
+  border: 1px solid var(--ink);
+  border-radius: 3px;
+  box-shadow: none;
 }
 
 /* Derived-world facts read in verdigris — grounded geography, not sketch. */

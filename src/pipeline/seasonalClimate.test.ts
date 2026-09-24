@@ -28,7 +28,9 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { computeSeasonalClimate } from './seasonalClimate'
+import { computeSeasonalClimate, rowWindDir } from './seasonalClimate'
+import { computeOceanCurrents } from './oceanCurrents'
+import { latRad } from './helpers'
 import type { OrogenyResult, SeasonalClimateResult } from './seasonalClimate'
 import { makeContinentWorld } from './__tests__/fixtures'
 import { meanLand } from './helpers'
@@ -508,5 +510,29 @@ describe('computeSeasonalClimate', () => {
     expect(world.mask[gulf]).toBeLessThan(THRESHOLD)
     expect(result.summer[gulf]).toBeGreaterThan(result.summer[open])
     expect(result.currentNote).toBe('warm current')
+  })
+
+  it('returns the row wind and the current bias the step already computed', () => {
+    const world = continentWorld()
+    const result = run(world)
+    expect(result.windDir.length).toBe(world.height)
+    for (let y = 0; y < world.height; y++) {
+      expect(result.windDir[y]).toBe(rowWindDir(latRad(y, world.height)))
+    }
+    const currents = computeOceanCurrents(world.mask, world.width, world.height, THRESHOLD, 1)
+    expect(Array.from(result.currentBias)).toEqual(Array.from(currents.tempBias))
+    const off = computeSeasonalClimate(
+      world.orogeny,
+      world.mask,
+      world.width,
+      world.height,
+      THRESHOLD,
+      world.planetRadiusKm,
+      world.obliquityDeg,
+      1,
+      0,
+    )
+    expect(off.currentBias.every((v) => v === 0)).toBe(true)
+    expect(arrEq(off.summer, result.summer)).toBe(false)
   })
 })

@@ -11,6 +11,7 @@ import {
   defaultPolityCount,
   ensureWorldbuild,
   growPolities,
+  marchOf,
   meltingPotLabel,
   paintClaim,
   polityAt,
@@ -270,6 +271,42 @@ function landWorld(width: number, height: number, seats: number): World {
     ...emptyPolityState(n),
   }
 }
+
+describe('marches', () => {
+  it('leaves a short crest or river path wild and a farther open cell a march', () => {
+    const width = 96
+    const height = 11
+    const world = landWorld(width, height, 1)
+    const seat = { x: 40, y: 5 }
+    world.cities = [
+      { x: seat.x, y: seat.y, name: 'Seat', seasonal: 1, role: 'seat_of_power', rank: 'seat' },
+    ]
+    for (let y = 0; y < height; y++) world.rivers[y * width + 20] = 1
+    for (let x = 0; x < width; x++) world.elev[3 * width + x] = 2400
+    const rivers = world.rivers.slice()
+    const mask = world.mask.slice()
+    growPolities(world)
+    expect(Array.from(world.mask)).toEqual(Array.from(mask))
+    expect(Array.from(world.rivers)).toEqual(Array.from(rivers))
+
+    const openFar = { x: 76, y: 5 }
+    const pastReach = { x: 88, y: 5 }
+    const acrossCrest = { x: 40, y: 1 }
+    const acrossRiver = { x: 18, y: 5 }
+    const openNear = { x: 56, y: 5 }
+
+    expect(marchOf(world, seat.x, seat.y)).toBe('core')
+    expect(marchOf(world, openNear.x, openNear.y)).toBe('claimed')
+    expect(marchOf(world, openFar.x, openFar.y)).toBe('march')
+    expect(world.polityId[openFar.y * width + openFar.x]).toBe(0)
+    expect(marchOf(world, pastReach.x, pastReach.y)).toBe('wild')
+    expect(world.polityId[pastReach.y * width + pastReach.x]).toBe(-1)
+    expect(marchOf(world, acrossCrest.x, acrossCrest.y)).toBe('wild')
+    expect(marchOf(world, acrossRiver.x, acrossRiver.y)).toBe('wild')
+    expect(seat.x - acrossRiver.x).toBeLessThan(openFar.x - seat.x)
+    expect(seat.y - acrossCrest.y).toBeLessThan(openFar.x - seat.x)
+  })
+})
 
 describe('growPolities heap', () => {
   it('terminates when elevation is NaN instead of overflowing Array.push', () => {

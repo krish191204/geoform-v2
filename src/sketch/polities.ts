@@ -116,6 +116,108 @@ function landStepCost(world: World, from: number, to: number): number {
   return Number.isFinite(c) && c >= 1 ? c : 1
 }
 
+/** Past this travel cost a cell stays wild, even if a shorter hop path exists. */
+const CLAIM_REACH = 42
+/** Close to the seat: the core. */
+const CORE_REACH = 10
+/** Inside this, held land. Farther, still inside the reach, is a march. */
+const CLAIMED_REACH = 24
+/** Crossing the river mask. Open country does not pay this. */
+const RIVER_CROSS_COST = 24
+/** A step this steep is a crest, not a slope. */
+const CREST_JUMP_M = 600
+
+function crossesRiver(world: World, from: number, to: number): boolean {
+  return (world.rivers[from] > 0) !== (world.rivers[to] > 0)
+}
+
+/** Extra claim cost for stepping across a high crest. Zero on a gentle slope. */
+function crestExtra(world: World, from: number, to: number): number {
+  const a = world.elev[from]
+  const b = world.elev[to]
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0
+  const jump = Math.abs(b - a)
+  if (jump < CREST_JUMP_M) return 0
+  return (jump - 200) / 35
+}
+
+/**
+ * Cost to claim `to` from `from`. Ridges and rivers are frontiers:
+ * open country is the land-step cost; a crest or a river crossing costs more.
+ * Trade routing still uses `landStepCost` alone.
+ */
+function claimStepCost(world: World, from: number, to: number): number {
+  let c = landStepCost(world, from, to)
+  if (crossesRiver(world, from, to)) c += RIVER_CROSS_COST
+  c += crestExtra(world, from, to)
+  return Number.isFinite(c) && c >= 1 ? c : 1
+}
+
+export type MarchBand = 'core' | 'claimed' | 'march' | 'wild'
+
+function seatOf(world: World, pid: number): { x: number; y: number } | null {
+  const polity = world.polities.find((p) => p.id === pid)
+  if (polity) return { x: polity.capitalX, y: polity.capitalY }
+  const seat = world.cities.find((c) => c.role === 'seat_of_power' && c.polityId === pid)
+  if (seat) return { x: seat.x, y: seat.y }
+  return null
+}
+
+/** Travel cost from a seat to one land cell. Same frontier costs as growth. */
+function travelCost(world: World, ax: number, ay: number, bx: number, by: number): number {
+  const { width: w, height: h, threshold } = world.meta
+  const n = w * h
+  const start = idx(w, ax, ay)
+  const goal = idx(w, bx, by)
+  if (start === goal) return 0
+  const dist = new Float64Array(n).fill(1e9)
+  const heap = new MinHeap()
+  dist[start] = 0
+  heap.push(0, start)
+  let guard = 0
+  const cap = Math.min(n * 8, 1_200_000)
+  while (heap.size && guard++ < cap) {
+    const item = heap.pop()
+    if (!item) break
+    const { key, val: i } = item
+    if (key > CLAIM_REACH) break
+    if (i === goal) return key
+    if (key > dist[i] + 1e-6) continue
+    const x = i % w
+    const y = (i - x) / w
+    for (const [dx, dy] of N4) {
+      const nx = wrapX(x + dx, w)
+      const ny = y + dy
+      if (ny < 0 || ny >= h) continue
+      const ni = ny * w + nx
+      if (world.mask[ni] < threshold) continue
+      const nd = key + claimStepCost(world, i, ni)
+      if (!Number.isFinite(nd) || nd + 1e-6 >= dist[ni]) continue
+      dist[ni] = nd
+      heap.push(nd, ni)
+    }
+  }
+  return dist[goal]
+}
+
+/**
+ * How tightly the owning seat holds this cell, from travel cost.
+ * Wild is unclaimed. Core is close, march is far but still inside the reach.
+ */
+export function marchOf(world: World, x: number, y: number): MarchBand {
+  const { width: w, height: h } = world.meta
+  if (y < 0 || y >= h || x < 0 || x >= w) return 'wild'
+  const pid = world.polityId[idx(w, x, y)]
+  if (pid < 0) return 'wild'
+  const seat = seatOf(world, pid)
+  if (!seat) return 'claimed'
+  const cost = travelCost(world, seat.x, seat.y, x, y)
+  if (!Number.isFinite(cost) || cost > CLAIM_REACH) return 'march'
+  if (cost <= CORE_REACH) return 'core'
+  if (cost <= CLAIMED_REACH) return 'claimed'
+  return 'march'
+}
+
 function seatsOf(world: World): City[] {
   return world.cities.filter((c) => c.role === 'seat_of_power')
 }
@@ -160,8 +262,8 @@ export function growPolities(world: World): void {
       if (ny < 0 || ny >= h) continue
       const ni = ny * w + nx
       if (world.mask[ni] < threshold) continue
-      const nd = key + landStepCost(world, i, ni)
-      if (!Number.isFinite(nd) || nd + 1e-6 >= dist[ni]) continue
+      const nd = key + claimStepCost(world, i, ni)
+      if (!Number.isFinite(nd) || nd > CLAIM_REACH || nd + 1e-6 >= dist[ni]) continue
       dist[ni] = nd
       world.polityId[ni] = pid
       heap.push(nd, ni)
