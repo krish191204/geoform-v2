@@ -40,8 +40,7 @@ export interface AgeLandInput {
   plateVy: Float32Array
 }
 
-/** How hard the neighbouring plate is pulling away, in cells per million years. */
-function pullApart(
+function diverges(
   plateId: Int16Array,
   vx: Float32Array,
   vy: Float32Array,
@@ -49,11 +48,10 @@ function pullApart(
   y: number,
   w: number,
   h: number,
-): number {
+): boolean {
   const i = y * w + x
   const id = plateId[i]
-  if (id < 0) return 0
-  let best = 0
+  if (id < 0) return false
   const n4: readonly (readonly [number, number])[] = [
     [1, 0],
     [-1, 0],
@@ -67,9 +65,9 @@ function pullApart(
     const j = ny * w + nx
     if (plateId[j] === id || plateId[j] < 0) continue
     const pull = (vx[j] - vx[i]) * dx + (vy[j] - vy[i]) * dy
-    if (pull > best) best = pull
+    if (pull > 0.015) return true
   }
-  return best
+  return false
 }
 
 export function ageLand(input: AgeLandInput): Uint8Array {
@@ -98,40 +96,17 @@ export function ageLand(input: AgeLandInput): Uint8Array {
       sites[i] = SITE_MIRROR
     }
   }
-  const springCandidates: { i: number; pull: number }[] = []
   for (let y = 1; y < h - 1; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x
       if (mask[i] < threshold || sites[i] || salt[i] || (ice && ice[i])) continue
       if (tempMean[i] < 8) continue
-      const pull = pullApart(plateId, plateVx, plateVy, x, y, w, h)
-      if (pull <= 0.015) continue
-      springCandidates.push({ i, pull })
-    }
-  }
-  springCandidates.sort((a, b) => b.pull - a.pull)
-  const springGap = Math.max(28, Math.round(w / 14))
-  const placed: { x: number; y: number }[] = []
-  for (const candidate of springCandidates) {
-    if (placed.length >= 4) break
-    const x = candidate.i % w
-    const y = (candidate.i - x) / w
-    let crowded = false
-    for (const p of placed) {
-      const dx = Math.min(Math.abs(x - p.x), w - Math.abs(x - p.x))
-      const dy = Math.abs(y - p.y)
-      if (dx * dx + dy * dy < springGap * springGap) {
-        crowded = true
-        break
-      }
-    }
-    if (crowded) continue
-    const i = candidate.i
-    sites[i] = SITE_SPRING
-    placed.push({ x, y })
-    let sx = x
-    let sy = y
-    for (let step = 0; step < 3; step++) {
+      if (!diverges(plateId, plateVx, plateVy, x, y, w, h)) continue
+      if ((x + y) % 5 !== 0) continue
+      sites[i] = SITE_SPRING
+      let sx = x
+      let sy = y
+      for (let step = 0; step < 3; step++) {
         let best = -1
         let bestE = elev[sy * w + sx]
         for (const [dx, dy] of [
@@ -156,6 +131,7 @@ export function ageLand(input: AgeLandInput): Uint8Array {
         sites[best] = SITE_TERRACE
       }
     }
+  }
   for (let y = 1; y < h - 1; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x
