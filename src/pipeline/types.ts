@@ -162,6 +162,14 @@ export interface MakeSenseResult {
   rivers: Uint8Array
   /** 1 = closed-basin lake. Water on the grounded world, not a sketch edit. */
   lakes: Uint8Array
+  /** Row-wise zonal wind. `+1` west→east, `−1` east→west. Length = height. */
+  windDir: Int8Array
+  /** °C added by coastal currents. One array, shared with the climate step. */
+  currentBias: Float32Array
+  /** 1 = land that stays at or below the ice line. */
+  ice: Uint8Array
+  /** 1 = closed basin too dry to hold a lake. */
+  salt: Uint8Array
   /** Per-cell biome id; length W*H. */
   biome: string[]
   /** Per-cell suitability score, 0..1; length W*H. */

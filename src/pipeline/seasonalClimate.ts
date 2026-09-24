@@ -76,6 +76,13 @@ export interface SeasonalClimateResult {
   winterMoist: Float32Array
   /** 'cold current' or 'warm current' when a coast carries one. */
   currentNote: '' | 'cold current' | 'warm current'
+  /**
+   * Row-wise zonal wind already used by the moisture march.
+   * `+1` is west→east, `−1` is east→west. Length = height.
+   */
+  windDir: Int8Array
+  /** °C coastal-current bias. The same array `computeOceanCurrents` built. */
+  currentBias: Float32Array
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +165,7 @@ export function computeSeasonalClimate(
   const tempMean = new Float32Array(n)
   const summerMoist = new Float32Array(n)
   const winterMoist = new Float32Array(n)
+  const windDir = new Int8Array(height)
 
   const coastDist = bfsDistanceFromSea(mask, width, height, threshold)
   const radiusKm = planetRadiusKm > 0 ? planetRadiusKm : EARTH_RADIUS_KM
@@ -256,6 +264,7 @@ export function computeSeasonalClimate(
   for (let y = 0; y < height; y++) {
     const lat = latRad(y, height)
     const dir = rowWindDir(lat)
+    windDir[y] = dir
     const baseSummer = latitudePrecip(lat, seasonShiftDeg)
     const baseWinter = latitudePrecip(lat, -seasonShiftDeg)
     for (let x = 0; x < width; x++) {
@@ -276,7 +285,16 @@ export function computeSeasonalClimate(
     }
   }
 
-  return { summer, winter, tempMean, summerMoist, winterMoist, currentNote: currents.note }
+  return {
+    summer,
+    winter,
+    tempMean,
+    summerMoist,
+    winterMoist,
+    currentNote: currents.note,
+    windDir,
+    currentBias: currents.tempBias,
+  }
 }
 
 // ---------------------------------------------------------------------------
