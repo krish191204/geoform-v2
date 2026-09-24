@@ -11,7 +11,13 @@
  */
 
 import type { City, Layer, Polity, Tool, World } from '../world/types'
-import { DEFAULT_META, groupedBiomeLegend } from '../world/types'
+import {
+  DEFAULT_CURRENT_STRENGTH,
+  DEFAULT_ICE_LINE_C,
+  DEFAULT_LAKE_FILL_M,
+  DEFAULT_META,
+  groupedBiomeLegend,
+} from '../world/types'
 import {
   APP_EVENTS,
   STAGE_LABEL,
@@ -1493,6 +1499,74 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
     seedVal.textContent = String(seed)
   })
 
+  const sea = state.meta.seaLevel
+  const seaVal = el('span', { id: 'planetSeaLevelVal' }, String(sea))
+  const seaSlider = el('input', {
+    type: 'range',
+    id: 'planetSeaLevel',
+    min: 0,
+    max: 1,
+    step: 0.01,
+    value: sea,
+    title: 'Shore as a fraction from 0 to 1. 0.5 is today. Make sense applies it.',
+  }) as HTMLInputElement
+  seaSlider.addEventListener('input', () => {
+    const detail: MetaChangeDetail = { meta: { seaLevel: Number(seaSlider.value) } }
+    fire(APP_EVENTS.META_CHANGE, detail)
+    seaVal.textContent = String(seaSlider.value)
+  })
+
+  const current = state.meta.currentStrength ?? DEFAULT_CURRENT_STRENGTH
+  const currentVal = el('span', { id: 'planetCurrentVal' }, String(current))
+  const currentSlider = el('input', {
+    type: 'range',
+    id: 'planetCurrent',
+    min: 0,
+    max: 2,
+    step: 0.1,
+    value: current,
+    title: 'Ocean-current bias. 1× is today. 0 turns currents off. Make sense applies it.',
+  }) as HTMLInputElement
+  currentSlider.addEventListener('input', () => {
+    const detail: MetaChangeDetail = { meta: { currentStrength: Number(currentSlider.value) } }
+    fire(APP_EVENTS.META_CHANGE, detail)
+    currentVal.textContent = String(currentSlider.value)
+  })
+
+  const ice = state.meta.iceLineC ?? DEFAULT_ICE_LINE_C
+  const iceVal = el('span', { id: 'planetIceLineVal' }, String(ice))
+  const iceSlider = el('input', {
+    type: 'range',
+    id: 'planetIceLine',
+    min: -15,
+    max: 15,
+    step: 1,
+    value: ice,
+    title: 'Both seasons at or below this can freeze. 0 °C is today. Make sense applies it.',
+  }) as HTMLInputElement
+  iceSlider.addEventListener('input', () => {
+    const detail: MetaChangeDetail = { meta: { iceLineC: Number(iceSlider.value) } }
+    fire(APP_EVENTS.META_CHANGE, detail)
+    iceVal.textContent = String(iceSlider.value)
+  })
+
+  const lake = state.meta.lakeFillM ?? DEFAULT_LAKE_FILL_M
+  const lakeVal = el('span', { id: 'planetLakeFillVal' }, String(lake))
+  const lakeSlider = el('input', {
+    type: 'range',
+    id: 'planetLakeFill',
+    min: 20,
+    max: 200,
+    step: 1,
+    value: lake,
+    title: 'Metres of sink-fill before a pit stays a lake. 60 m is today. Make sense applies it.',
+  }) as HTMLInputElement
+  lakeSlider.addEventListener('input', () => {
+    const detail: MetaChangeDetail = { meta: { lakeFillM: Number(lakeSlider.value) } }
+    fire(APP_EVENTS.META_CHANGE, detail)
+    lakeVal.textContent = String(lakeSlider.value)
+  })
+
   const landformGrid = el('div', { class: 'style-grid', 'aria-label': 'Landform pictures. Drag onto the map.' })
   for (const opt of LANDFORM_OPTIONS) {
     const thumb = el('img', {
@@ -1561,11 +1635,35 @@ function mountSketchTools(state: ShellStateView): HTMLElement {
       el('label', {}, 'Tilt · ', tiltVal, '°'),
       tiltSlider,
     ),
+    el(
+      'div',
+      { class: 'slider-row' },
+      el('label', {}, 'Sea level · ', seaVal, ' (0–1)'),
+      seaSlider,
+    ),
+    el(
+      'div',
+      { class: 'slider-row' },
+      el('label', {}, 'Currents · ', currentVal, '×'),
+      currentSlider,
+    ),
+    el(
+      'div',
+      { class: 'slider-row' },
+      el('label', {}, 'Ice line · ', iceVal, ' °C'),
+      iceSlider,
+    ),
+    el(
+      'div',
+      { class: 'slider-row' },
+      el('label', {}, 'Lake fill · ', lakeVal, ' m'),
+      lakeSlider,
+    ),
     el('p', { class: 'seed-row' }, el('span', {}, 'Seed · ', seedVal), shuffleSeed),
     el(
       'p',
       { class: 'hint' },
-      'Radius sets how big a cell is. Tilt makes seasons. Shuffle seed keeps your land and invents a different neighbour.',
+      'Radius sets how big a cell is. Tilt makes seasons. Sea, currents, ice, and lakes wait for Make sense. Shuffle seed keeps your land and invents a different neighbour.',
     ),
   )
   const brushes = el(
@@ -1747,6 +1845,26 @@ export function updateStageTools(refs: ToolsRefs, state: ShellStateView): void {
   if (tiltVal) tiltVal.textContent = String(state.meta.obliquityDeg)
   const seedVal = refs.root.querySelector('#planetSeedVal')
   if (seedVal) seedVal.textContent = String(state.meta.seed)
+  const seaLevel = state.meta.seaLevel
+  const seaVal = refs.root.querySelector('#planetSeaLevelVal')
+  if (seaVal) seaVal.textContent = String(seaLevel)
+  const seaSlider = refs.root.querySelector('#planetSeaLevel') as HTMLInputElement | null
+  if (seaSlider) seaSlider.value = String(seaLevel)
+  const current = state.meta.currentStrength ?? DEFAULT_CURRENT_STRENGTH
+  const currentVal = refs.root.querySelector('#planetCurrentVal')
+  if (currentVal) currentVal.textContent = String(current)
+  const currentSlider = refs.root.querySelector('#planetCurrent') as HTMLInputElement | null
+  if (currentSlider) currentSlider.value = String(current)
+  const ice = state.meta.iceLineC ?? DEFAULT_ICE_LINE_C
+  const iceVal = refs.root.querySelector('#planetIceLineVal')
+  if (iceVal) iceVal.textContent = String(ice)
+  const iceSlider = refs.root.querySelector('#planetIceLine') as HTMLInputElement | null
+  if (iceSlider) iceSlider.value = String(ice)
+  const lake = state.meta.lakeFillM ?? DEFAULT_LAKE_FILL_M
+  const lakeVal = refs.root.querySelector('#planetLakeFillVal')
+  if (lakeVal) lakeVal.textContent = String(lake)
+  const lakeSlider = refs.root.querySelector('#planetLakeFill') as HTMLInputElement | null
+  if (lakeSlider) lakeSlider.value = String(lake)
   const polityVal = refs.root.querySelector('#polityCountVal')
   if (polityVal) polityVal.textContent = String(state.polityCount)
   const politySlider = refs.root.querySelector('#polityCount') as HTMLInputElement | null

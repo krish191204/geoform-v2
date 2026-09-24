@@ -1,7 +1,12 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_META } from '../world/types'
+import {
+  DEFAULT_CURRENT_STRENGTH,
+  DEFAULT_ICE_LINE_C,
+  DEFAULT_LAKE_FILL_M,
+  DEFAULT_META,
+} from '../world/types'
 import type { World } from '../world/types'
 import type { ShellStateView } from './stages'
 import {
@@ -17,7 +22,7 @@ import {
   updateInspector,
   updateMapShell,
 } from './ui'
-import { paintModeForTool } from './stages'
+import { APP_EVENTS, paintModeForTool } from './stages'
 import { mountApp } from './shell'
 
 function view(over: Partial<ShellStateView> = {}): ShellStateView {
@@ -332,6 +337,79 @@ describe('sketch tools', () => {
     expect(radius.value).toBe('6371')
   })
 
+  it('keeps sea, currents, ice, and lake fill on the planet plate', () => {
+    const tools = mountStageTools(view())
+    const plate = tools.root.querySelector('.planet-size')
+    expect(plate).toBeTruthy()
+    const sea = plate?.querySelector('#planetSeaLevel') as HTMLInputElement
+    const current = plate?.querySelector('#planetCurrent') as HTMLInputElement
+    const ice = plate?.querySelector('#planetIceLine') as HTMLInputElement
+    const lake = plate?.querySelector('#planetLakeFill') as HTMLInputElement
+    expect(sea.value).toBe(String(DEFAULT_META.seaLevel))
+    expect(sea.min).toBe('0')
+    expect(sea.max).toBe('1')
+    expect(current.value).toBe(String(DEFAULT_CURRENT_STRENGTH))
+    expect(current.min).toBe('0')
+    expect(current.max).toBe('2')
+    expect(ice.value).toBe(String(DEFAULT_ICE_LINE_C))
+    expect(ice.min).toBe('-15')
+    expect(ice.max).toBe('15')
+    expect(lake.value).toBe(String(DEFAULT_LAKE_FILL_M))
+    expect(lake.min).toBe('20')
+    expect(lake.max).toBe('200')
+    expect(plate?.textContent).toMatch(/km/)
+    expect(plate?.textContent).toMatch(/°/)
+    expect(plate?.textContent).toMatch(/0–1/)
+    expect(plate?.textContent).toMatch(/×/)
+    expect(plate?.textContent).toMatch(/°C/)
+    expect(plate?.textContent).toMatch(/Lake fill · 60 m/)
+    expect(tools.root.querySelector('#polityCount')).toBeNull()
+
+    const metaEvents: unknown[] = []
+    let madeSense = false
+    const onMeta = (ev: Event) => metaEvents.push((ev as CustomEvent).detail)
+    const onSense = () => {
+      madeSense = true
+    }
+    window.addEventListener(APP_EVENTS.META_CHANGE, onMeta)
+    window.addEventListener(APP_EVENTS.MAKE_SENSE, onSense)
+    sea.value = '0.42'
+    sea.dispatchEvent(new Event('input', { bubbles: true }))
+    current.value = '0'
+    current.dispatchEvent(new Event('input', { bubbles: true }))
+    ice.value = '-4'
+    ice.dispatchEvent(new Event('input', { bubbles: true }))
+    lake.value = '80'
+    lake.dispatchEvent(new Event('input', { bubbles: true }))
+    window.removeEventListener(APP_EVENTS.META_CHANGE, onMeta)
+    window.removeEventListener(APP_EVENTS.MAKE_SENSE, onSense)
+    expect(madeSense).toBe(false)
+    expect(metaEvents).toEqual([
+      { meta: { seaLevel: 0.42 } },
+      { meta: { currentStrength: 0 } },
+      { meta: { iceLineC: -4 } },
+      { meta: { lakeFillM: 80 } },
+    ])
+    expect(plate?.querySelector('#planetSeaLevelVal')?.textContent).toBe('0.42')
+    expect(plate?.querySelector('#planetCurrentVal')?.textContent).toBe('0')
+    expect(plate?.querySelector('#planetIceLineVal')?.textContent).toBe('-4')
+    expect(plate?.querySelector('#planetLakeFillVal')?.textContent).toBe('80')
+  })
+
+  it('reads omitted climate knobs as today defaults', () => {
+    const meta = { ...DEFAULT_META }
+    delete meta.currentStrength
+    delete meta.iceLineC
+    delete meta.lakeFillM
+    const tools = mountStageTools(view({ meta }))
+    const plate = tools.root.querySelector('.planet-size')
+    expect((plate?.querySelector('#planetCurrent') as HTMLInputElement).value).toBe(
+      String(DEFAULT_CURRENT_STRENGTH),
+    )
+    expect((plate?.querySelector('#planetIceLine') as HTMLInputElement).value).toBe(String(DEFAULT_ICE_LINE_C))
+    expect((plate?.querySelector('#planetLakeFill') as HTMLInputElement).value).toBe(String(DEFAULT_LAKE_FILL_M))
+  })
+
   it('shows continent stamps and decorate symbols on one Draw panel', () => {
     const tools = mountStageTools(view())
     const chips = Array.from(tools.root.querySelectorAll('[data-landform]'))
@@ -363,6 +441,10 @@ describe('sketch tools', () => {
     expect(tools.root.querySelector('#undoBtn')).toBeTruthy()
     expect(tools.root.querySelector('#brushStrength')).toBeTruthy()
     expect(tools.root.querySelector('#planetTilt')).toBeTruthy()
+    expect(tools.root.querySelector('#planetSeaLevel')).toBeTruthy()
+    expect(tools.root.querySelector('#planetCurrent')).toBeTruthy()
+    expect(tools.root.querySelector('#planetIceLine')).toBeTruthy()
+    expect(tools.root.querySelector('#planetLakeFill')).toBeTruthy()
     expect(tools.root.querySelector('#shuffleSeed')).toBeTruthy()
     expect(tools.root.querySelector('#continentCountVal')).toBeNull()
     expect(tools.root.querySelector('small')).toBeNull()
