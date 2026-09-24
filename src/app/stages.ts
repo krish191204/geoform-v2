@@ -162,8 +162,6 @@ export interface ShellStateView extends EditorState {
   readonly worldbuildAct: WorldbuildAct
   /** Last inspected cell, for gazetteer highlight. */
   readonly focusCell: { readonly x: number; readonly y: number } | null
-  /** Landmass the gazetteer is writing. Null shows every land. */
-  readonly focusContinentId?: number | null
   /** Worldbuild ink overlay. */
   readonly worldOverlay: import('../world/types').WorldOverlay
   /** Atlas layer after Make sense. */
@@ -399,12 +397,6 @@ export const APP_EVENTS = {
   RENAME_PLACE: 'app:rename-place',
   /** Pan/zoom the atlas to a cell (wonder, town). Detail: `GotoCellDetail`. */
   GOTO_CELL: 'app:goto-cell',
-  /** Frame one landmass. Detail: `ContinentFocusDetail`. */
-  FOCUS_CONTINENT: 'app:focus-continent',
-  /** Found a denser set of towns on one landmass. Detail: `ContinentFocusDetail`. */
-  BUILD_CONTINENT: 'app:build-continent',
-  /** Writer sigil, history, or notes on one country. Detail: `LoreEditDetail`. */
-  LORE_EDIT: 'app:lore-edit',
   /** Sketch landform drag. Detail: `LandformDragDetail`. */
   LANDFORM_DRAG: 'app:landform-drag',
   /** How many continent doodles to stamp. Detail: `{ count: number }`. */
@@ -462,21 +454,6 @@ export interface RenamePlaceDetail {
 export interface GotoCellDetail {
   readonly x: number
   readonly y: number
-}
-
-/** Type-safe detail for continent open / build. */
-export interface ContinentFocusDetail {
-  readonly id: number
-  readonly x: number
-  readonly y: number
-  readonly span: number
-}
-
-/** Type-safe detail for `app:lore-edit`. */
-export interface LoreEditDetail {
-  readonly id: number
-  readonly field: 'sigil' | 'history' | 'notes'
-  readonly text: string
 }
 
 /** Type-safe detail for `app:layer-change`. */

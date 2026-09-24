@@ -25,10 +25,6 @@ export type WonderKind =
   | 'dune-sea'
   | 'rift-gorge'
   | 'stone-forest'
-  | 'hot-spring'
-  | 'travertine'
-  | 'hoodoo'
-  | 'slot-canyon'
 
 export interface Wonder {
   /** Stable id: `${kind}-${rank within kind}`. */
@@ -70,10 +66,6 @@ const KINDS: readonly WonderKind[] = [
   'dune-sea',
   'rift-gorge',
   'stone-forest',
-  'hot-spring',
-  'travertine',
-  'hoodoo',
-  'slot-canyon',
 ]
 
 const K_SALT = 0
@@ -86,10 +78,6 @@ const K_MANGROVE = 6
 const K_DUNE = 7
 const K_RIFT = 8
 const K_STONE = 9
-const K_SPRING = 10
-const K_TERRACE = 11
-const K_HOODOO = 12
-const K_SLOT = 13
 
 // ---------------------------------------------------------------------------
 // Grid helpers
@@ -356,14 +344,6 @@ export function earthCousinFor(kind: WonderKind, y: number, height: number): str
       return south ? 'Fish River Canyon, Namibia' : 'Grand Canyon, Arizona'
     case 'stone-forest':
       return south ? 'Tsingy de Bemaraha, Madagascar' : 'Shilin Stone Forest, Yunnan'
-    case 'hot-spring':
-      return south ? 'Rotorua, New Zealand' : 'Grand Prismatic Spring, Wyoming'
-    case 'travertine':
-      return south ? 'Wai-O-Tapu sinter, New Zealand' : 'Pamukkale, Turkey'
-    case 'hoodoo':
-      return south ? 'Putangirua Pinnacles, New Zealand' : 'Cappadocia, Turkey'
-    case 'slot-canyon':
-      return south ? 'Chambers Gorge, South Australia' : 'Antelope Canyon, Arizona'
   }
 }
 
@@ -425,10 +405,6 @@ const KIND_EPITHET: Readonly<Record<WonderKind, string>> = {
   'dune-sea': 'Erg',
   'rift-gorge': 'Gorge',
   'stone-forest': 'Pinnacles',
-  'hot-spring': 'Spring',
-  travertine: 'Terraces',
-  hoodoo: 'Chimneys',
-  'slot-canyon': 'Slot',
 }
 
 /** Gazetteer heading for a kind — one essay, many named places. */
@@ -443,10 +419,6 @@ export const KIND_LABEL: Readonly<Record<WonderKind, string>> = {
   'dune-sea': 'Sand seas',
   'rift-gorge': 'Gorges',
   'stone-forest': 'Stone forests',
-  'hot-spring': 'Hot springs',
-  travertine: 'Travertine',
-  hoodoo: 'Hoodoos',
-  'slot-canyon': 'Slot canyons',
 }
 
 /** Shared mechanism — printed once per kind, not once per twin. */
@@ -461,10 +433,6 @@ export const KIND_MECHANISM: Readonly<Record<WonderKind, string>> = {
   'dune-sea': 'Far from the sea and starved of rivers, sand here moves only with the wind.',
   'rift-gorge': 'A river cuts down as fast as the land around it stands up.',
   'stone-forest': 'Warm rain etches moderately broken rock into fins, sinkholes, and pinnacle thickets.',
-  'hot-spring': 'Where a plate pulls apart, groundwater comes up hot and leaves a coloured pool.',
-  travertine: 'That water cools as it steps downhill and drops a white mineral crust.',
-  hoodoo: 'Dry air leaves a hard cap on a soft peak; the sides fall away and a chimney remains.',
-  'slot-canyon': 'Rare floods in a dry river cut a narrow slot between high walls.',
 }
 
 export interface WonderKindGroup {
@@ -542,14 +510,6 @@ function localFact(kind: WonderKind, world: World, x: number, y: number): string
       return `${Math.round(gorgeWall(world, x, y))} m walls`
     case 'stone-forest':
       return `moisture ${world.moistMean[i].toFixed(2)}`
-    case 'hot-spring':
-      return `${Math.round(world.tempMean[i])}°C at a plate edge`
-    case 'travertine':
-      return `${Math.round(world.elev[i])} m, downhill of a spring`
-    case 'hoodoo':
-      return `${Math.round(landRelief(world, x, y, 1))} m drop`
-    case 'slot-canyon':
-      return `${Math.round(world.flux[i])} flux, dry`
   }
 }
 
@@ -725,50 +685,6 @@ function describe(
         ),
       }
     }
-    case 'hot-spring':
-      return {
-        blurb: `Groundwater rises where the plate is pulling apart. The pool is hot for this ${band} latitude, and mineral rings stain the rim.`,
-        futures: pickFuture(
-          'If the rift keeps opening, the spring stays and the crust around it thickens.',
-          'If the plates stop moving, the spring cools and the colour fades.',
-          x,
-          y,
-          seed,
-        ),
-      }
-    case 'travertine':
-      return {
-        blurb: `Water from the spring steps downhill and cools. Each step drops a white crust, so the slope becomes a stair of shallow pools.`,
-        futures: pickFuture(
-          'The stair grows as long as the spring runs.',
-          'A drier climate leaves the terraces as dry white stone.',
-          x,
-          y,
-          seed,
-        ),
-      }
-    case 'hoodoo':
-      return {
-        blurb: `An arid peak with a steep side. The cap stays; the softer rock around it does not, so a chimney is left standing.`,
-        futures: pickFuture(
-          'Further dry weathering narrows the neck until the cap falls.',
-          'A wetter climate rounds the chimney back into a hill.',
-          x,
-          y,
-          seed,
-        ),
-      }
-    case 'slot-canyon':
-      return {
-        blurb: `A river in dry country runs between walls high enough to shade the channel. Floods, not the mean rain, cut the slot.`,
-        futures: pickFuture(
-          'The next flood deepens the slot.',
-          'If the river dies, the walls slowly slump and the slot fills.',
-          x,
-          y,
-          seed,
-        ),
-      }
   }
 }
 
@@ -805,15 +721,8 @@ export function findWonders(world: World): Wonder[] {
     const fx = world.flux[i]
     const cd = coast[i]
 
-    const site = world.sites?.[i] ?? 0
-    if (world.salt?.[i]) add(K_SALT, i, site === 1 ? 0.95 : 0.7)
-    if (site === 2) add(K_SPRING, i, 0.85)
-    if (site === 3) add(K_TERRACE, i, 0.8)
-    if (site === 4) add(K_HOODOO, i, 0.75)
-    if (site === 5) add(K_SLOT, i, 0.8)
-
     // salt-flat: dry desert cell on the floor of a closed local basin.
-    if (!world.salt?.[i] && (b === 'hot-desert' || b === 'boreal-desert') && moist < 0.16 && fx < 2.5) {
+    if ((b === 'hot-desert' || b === 'boreal-desert') && moist < 0.16 && fx < 2.5) {
       const depth = basinDepth(world, x, y)
       if (depth > 120) {
         add(K_SALT, i, Math.min(1, depth / 450) * 0.75 + Math.min(0.25, 0.16 - moist))

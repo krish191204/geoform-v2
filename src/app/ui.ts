@@ -49,8 +49,6 @@ import {
   type StrengthChangeDetail,
   type RenamePlaceDetail,
   type GotoCellDetail,
-  type ContinentFocusDetail,
-  type LoreEditDetail,
   type WorldbuildActDetail,
 } from './stages'
 import { accountsConfigured } from '../auth/account'
@@ -69,8 +67,6 @@ import { wondersFor } from './wondersCache'
 import { groupWondersByKind, shortWonderName } from '../sketch/wonders'
 import { labelLandmasses } from '../sketch/countBigComponents'
 import { foundingLine } from '../sketch/chronicle'
-import { groundSentence, listContinents } from '../sketch/continents'
-import { sigilMark, suggestKingdom } from '../sketch/kingdomLore'
 import type { ChronicleRuin } from '../world/types'
 import { LANDFORM_OPTIONS, stampLandformAt, type LandformKind } from '../sketch/landforms'
 import { hasAnyLand } from './canvas_paint'
@@ -2015,44 +2011,6 @@ function countryBlock(p: Polity, state: ShellStateView): HTMLElement {
   const sells = p.exports.map((g) => TRADE_GOOD_LABEL[g]).join(', ') || 'little surplus'
   const wants = p.imports.map((g) => TRADE_GOOD_LABEL[g]).join(', ') || 'little want'
   const selected = isFocus(state, p.capitalX, p.capitalY)
-  const world = state.world
-  const origin = world?.chronicle?.entries.find((row) => row.polityId === p.id)?.origin ?? null
-  const suggestion = world ? suggestKingdom(world, p, origin) : null
-  const charge = p.sigil || suggestion?.charge || 'Salt'
-  const mark = el('div', { class: 'sigil-wrap' })
-  mark.innerHTML = sigilMark(charge)
-  const history = el('textarea', {
-    class: 'place-note',
-    maxlength: 280,
-    rows: 3,
-    'aria-label': 'Kingdom history',
-    placeholder: origin ?? 'What the land already allows',
-  }) as HTMLTextAreaElement
-  history.value = p.history ?? ''
-  history.addEventListener('change', () => {
-    const detail: LoreEditDetail = { id: p.id, field: 'history', text: history.value }
-    fire(APP_EVENTS.LORE_EDIT, detail)
-  })
-  const notes = el('textarea', {
-    class: 'place-note',
-    maxlength: 280,
-    rows: 2,
-    'aria-label': 'Kingdom notes',
-    placeholder: 'Your note. It cannot change the climate.',
-  }) as HTMLTextAreaElement
-  notes.value = p.notes ?? ''
-  notes.addEventListener('change', () => {
-    const detail: LoreEditDetail = { id: p.id, field: 'notes', text: notes.value }
-    fire(APP_EVENTS.LORE_EDIT, detail)
-  })
-  const accept = el('button', { type: 'button', class: 'action-btn' }, 'Use the land')
-  accept.addEventListener('click', () => {
-    if (!suggestion) return
-    const sigil: LoreEditDetail = { id: p.id, field: 'sigil', text: suggestion.charge }
-    const past: LoreEditDetail = { id: p.id, field: 'history', text: suggestion.history }
-    fire(APP_EVENTS.LORE_EDIT, sigil)
-    fire(APP_EVENTS.LORE_EDIT, past)
-  })
   const row = el(
     'div',
     { class: 'country-block' + (selected ? ' is-selected' : ''), 'data-x': p.capitalX, 'data-y': p.capitalY },
@@ -2064,19 +2022,9 @@ function countryBlock(p: Polity, state: ShellStateView): HTMLElement {
       el('span', { class: 'dossier-chip' }, `Sells ${sells}`),
       el('span', { class: 'dossier-chip' }, `Wants ${wants}`),
     ),
-    el(
-      'div',
-      { class: 'lore-fields' },
-      mark,
-      el('p', { class: 'hint' }, suggestion?.hint ?? ''),
-      el('label', {}, 'History', history),
-      el('label', {}, 'Notes', notes),
-      accept,
-    ),
   )
   row.addEventListener('click', (e) => {
-    const t = e.target
-    if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLButtonElement) return
+    if (e.target instanceof HTMLInputElement) return
     goTo(p.capitalX, p.capitalY)
   })
   return row
@@ -2184,46 +2132,7 @@ function mountLandPage(state: ShellStateView): HTMLElement {
     list.append(el('p', { class: 'hint' }, 'Ground the doodle first.'))
     return list
   }
-  const continents = listContinents(state.world)
-  if (continents.length) {
-    const ul = el('ul', { class: 'city-list' })
-    for (const land of continents) {
-      const openBtn = el('button', { type: 'button', class: 'wonder-goto' }, land.name)
-      openBtn.addEventListener('click', () => {
-        const detail: ContinentFocusDetail = { id: land.id, x: land.x, y: land.y, span: land.span }
-        fire(APP_EVENTS.FOCUS_CONTINENT, detail)
-      })
-      const buildBtn = el('button', { type: 'button', class: 'action-btn' }, 'Write')
-      buildBtn.addEventListener('click', () => {
-        const detail: ContinentFocusDetail = { id: land.id, x: land.x, y: land.y, span: land.span }
-        fire(APP_EVENTS.BUILD_CONTINENT, detail)
-      })
-      ul.append(
-        el(
-          'li',
-          { class: 'route-line' },
-          openBtn,
-          el('span', { class: 'wonder-fact' }, `${land.cells.toLocaleString('en-US')} cells · ${groundSentence(land)}`),
-          buildBtn,
-        ),
-      )
-    }
-    list.append(
-      el(
-        'details',
-        { class: 'gazetteer-fold', open: true },
-        el('summary', {}, `Continents (${continents.length})`),
-        el('p', { class: 'hint' }, 'Open frames the land. Write founds towns there, then the kingdoms.'),
-        ul,
-      ),
-    )
-  }
   const groups = groupWondersByKind(wondersFor(state.world))
-  const focusId = state.focusContinentId
-  const labels =
-    focusId != null && focusId >= 0
-      ? labelLandmasses(state.world.mask, state.world.meta.width, state.world.meta.height, state.world.meta.threshold)
-      : null
   const ruins = state.world.chronicle?.ruins ?? []
   if (!groups.length && !ruins.length) {
     list.append(el('p', { class: 'hint' }, 'No standout wonders on this plate — hover a cell anyway.'))
@@ -2234,7 +2143,6 @@ function mountLandPage(state: ShellStateView): HTMLElement {
     body.append(el('p', { class: 'wonder-mechanism' }, group.mechanism))
     const places = el('ul', { class: 'wonder-places' })
     for (const w of group.places) {
-      if (labels && focusId != null && labels.id[w.y * state.world.meta.width + w.x] !== focusId) continue
       const goBtn = el(
         'button',
         { type: 'button', class: 'wonder-goto', title: `Zoom to ${w.name}` },
@@ -2255,14 +2163,12 @@ function mountLandPage(state: ShellStateView): HTMLElement {
         ),
       )
     }
-    if (!places.childElementCount) continue
     body.append(places)
-    const shown = places.childElementCount
     const open = group.places.some((w) => isFocus(state, w.x, w.y)) || groups.length === 1
     const box = el(
       'details',
       { class: 'gazetteer-fold', open: open ? true : null },
-      el('summary', {}, `${group.label} (${shown})`),
+      el('summary', {}, `${group.label} (${group.places.length})`),
       body,
     )
     list.append(box)
@@ -2280,29 +2186,7 @@ function mountKingdomsPage(state: ShellStateView): HTMLElement {
     page.append(el('p', { class: 'hint' }, 'No countries yet — land may be too harsh to settle.'))
     return page
   }
-  const focusId = state.focusContinentId
-  let masses = groupPolitiesByLandmass(world)
-  if (focusId != null && focusId >= 0) {
-    const labels = labelLandmasses(world.mask, world.meta.width, world.meta.height, world.meta.threshold)
-    const land = listContinents(world).find((row) => row.id === focusId)
-    const name = land?.name ?? labels.name[focusId]
-    masses = name ? masses.filter((mass) => mass.name === name) : masses
-    const clear = el('button', { type: 'button', class: 'action-btn' }, 'All lands')
-    clear.addEventListener('click', () => {
-      const detail: ContinentFocusDetail = { id: -1, x: 0, y: 0, span: 12 }
-      fire(APP_EVENTS.FOCUS_CONTINENT, detail)
-    })
-    page.append(
-      el(
-        'p',
-        { class: 'hint' },
-        land
-          ? `Writing ${land.name}. ${groundSentence(land)}. The coast and the climate stay as grounded.`
-          : 'Writing this land. The geography is already fixed.',
-      ),
-      clear,
-    )
-  }
+  const masses = groupPolitiesByLandmass(world)
   let opened = false
   for (const mass of masses) {
     const body = el('div', { class: 'landmass-body' })
@@ -2347,15 +2231,9 @@ function mountTownsPage(state: ShellStateView): HTMLElement {
     page.append(el('p', { class: 'hint' }, 'No towns yet — land may be too harsh to settle.'))
     return page
   }
-  const focusId = state.focusContinentId
-  const labels =
-    focusId != null && focusId >= 0
-      ? labelLandmasses(world.mask, world.meta.width, world.meta.height, world.meta.threshold)
-      : null
   const byPolity = new Map<number, City[]>()
   const stray: City[] = []
   for (const city of world.cities) {
-    if (labels && focusId != null && labels.id[city.y * world.meta.width + city.x] !== focusId) continue
     const pid = city.polityId ?? -1
     if (pid < 0) {
       stray.push(city)
@@ -2370,7 +2248,6 @@ function mountTownsPage(state: ShellStateView): HTMLElement {
     const ul = el('ul', { class: 'city-list' })
     for (const city of towns) ul.append(townRow(city, state))
     const open = towns.some((c) => isFocus(state, c.x, c.y))
-    if (labels && !towns.length) continue
     page.append(
       el(
         'details',
@@ -2385,12 +2262,6 @@ function mountTownsPage(state: ShellStateView): HTMLElement {
     for (const city of stray) ul.append(townRow(city, state))
     page.append(el('details', { class: 'gazetteer-fold', open: true }, el('summary', {}, 'Unclaimed'), ul))
   }
-  if (labels) {
-    let here = stray.length
-    for (const list of byPolity.values()) here += list.length
-    const count = page.querySelector('.cities-count')
-    if (count) count.textContent = `${here} ${here === 1 ? 'town' : 'towns'} on this land`
-  }
   return page
 }
 
@@ -2403,18 +2274,7 @@ function mountTradePage(state: ShellStateView): HTMLElement {
     page.append(el('p', { class: 'hint' }, 'Open trade after towns exist.'))
     return page
   }
-  const focusId = state.focusContinentId
-  const labels =
-    focusId != null && focusId >= 0
-      ? labelLandmasses(world.mask, world.meta.width, world.meta.height, world.meta.threshold)
-      : null
-  const routes = world.routes.filter((r) => {
-    if (r.kind !== kind || r.path.length < 2) return false
-    if (!labels || focusId == null || focusId < 0) return true
-    const mid = r.path[Math.floor(r.path.length / 2)]
-    if (!mid) return false
-    return labels.id[mid.y * world.meta.width + mid.x] === focusId
-  })
+  const routes = world.routes.filter((r) => r.kind === kind && r.path.length >= 2)
   const hubs = entrepotHubs(world)
   if (hubs.length) {
     page.append(el('p', { class: 'cities-count' }, `Entrepôts: ${hubs.map((c) => c.name).join(', ')}`))

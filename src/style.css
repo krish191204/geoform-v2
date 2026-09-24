@@ -690,31 +690,6 @@ button.primary:hover {
   color: inherit;
 }
 
-.sigil {
-  width: 36px;
-  height: 36px;
-  display: block;
-  color: #1c221c;
-}
-
-.lore-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  margin-top: 0.4rem;
-}
-
-.place-note {
-  font: inherit;
-  width: 100%;
-  min-height: 2.6rem;
-  padding: 0.25rem 0.35rem;
-  border-radius: 6px;
-  border: 1px solid rgba(28, 34, 28, 0.18);
-  background: rgba(255, 255, 255, 0.45);
-  color: inherit;
-}
-
 .place-name-people {
   font-weight: 500;
   width: 12rem;

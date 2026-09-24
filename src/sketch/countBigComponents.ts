@@ -165,22 +165,7 @@ function landmassTitle(
 }
 
 /** Label every land blob so kingdoms can nest under the continents you drew. */
-const labelCache = new WeakMap<Float32Array, { threshold: number; width: number; height: number; labels: LandmassLabels }>()
-
 export function labelLandmasses(
-  mask: Float32Array,
-  width: number,
-  height: number,
-  threshold: number,
-): LandmassLabels {
-  const hit = labelCache.get(mask)
-  if (hit && hit.threshold === threshold && hit.width === width && hit.height === height) return hit.labels
-  const labels = labelLandmassesUncached(mask, width, height, threshold)
-  labelCache.set(mask, { threshold, width, height, labels })
-  return labels
-}
-
-function labelLandmassesUncached(
   mask: Float32Array,
   width: number,
   height: number,

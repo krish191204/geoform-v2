@@ -558,24 +558,6 @@ function paperGrain(x: number, y: number): number {
  * Layer fill only — no hillshade, grain, or coast. Integer cell.
  * Bilinear sampling mixes these, then `applyPaperLook` lights the sample.
  */
-function tintAged(
-  world: World,
-  i: number,
-  season: Season,
-  rgb: [number, number, number],
-): [number, number, number] {
-  const site = world.sites?.[i] ?? 0
-  if (world.salt?.[i] && site !== 1) return mix(rgb, [228, 224, 208], 0.55)
-  if (site === 1) {
-    return season === 'winter' ? mix(rgb, [186, 206, 214], 0.62) : mix(rgb, [236, 234, 226], 0.7)
-  }
-  if (site === 2) return mix(rgb, [72, 168, 156], 0.45)
-  if (site === 3) return mix(rgb, [236, 232, 220], 0.6)
-  if (site === 4) return mix(rgb, [176, 132, 96], 0.4)
-  if (site === 5) return mix(rgb, [186, 112, 64], 0.42)
-  return rgb
-}
-
 function layerFill(
   world: World,
   season: Season,
@@ -603,7 +585,7 @@ function layerFill(
           : undefined
       const land = landHypsometric(e, moist)
       if (world.biome[i] === 'ice') return mix(land, [232, 240, 244], 0.72)
-      return tintAged(world, i, season, land)
+      return land
     }
     case 'elevation':
       return elevBandColor(e, ocean)
@@ -632,7 +614,7 @@ function layerFill(
     case 'biome':
       // Lakes are water on the grounded world. Ice is the biome field.
       if (isLakeCell(world, i)) return hexToRgb(biomeColor('ocean'))
-      return tintAged(world, i, season, hexToRgb(biomeColor(world.biome[i] ?? 'ocean')))
+      return hexToRgb(biomeColor(world.biome[i] ?? 'ocean'))
     case 'suitability':
       return ocean
         ? mix(suitColor(world.suitability[i]), [18, 48, 68], 0.55)

@@ -39,8 +39,6 @@ import {
   type StrengthChangeDetail,
   type RenamePlaceDetail,
   type GotoCellDetail,
-  type ContinentFocusDetail,
-  type LoreEditDetail,
   type WorldbuildActDetail,
   type WorldbuildAct,
 } from './stages'
@@ -83,7 +81,6 @@ import {
 import { MaskHistory } from '../world/history'
 import { landformStampCopy, stampLandformAt, clampContinentCount, isLandformKind, shrinkLandBlob, landformStampSeed, landBlobContains } from '../sketch/landforms'
 import { placeCity, removeNearestCity } from '../sketch/worldbuild'
-import { fillContinent, listContinents } from '../sketch/continents'
 import {
   inferSettlementRole,
   seedSettlements,
@@ -117,7 +114,6 @@ import {
   provenanceFromResult,
   worldFromMakeSense,
 } from '../pipeline/makeSense'
-import { ageContinent, SITE_MIRROR, SITE_SLOT, SITE_SPRING } from '../pipeline/ageLand'
 import { critiqueMask, critiqueWorld } from '../critique/main'
 import {
   saveMask,
@@ -159,7 +155,6 @@ interface ShellFlags {
   polityCount: number
   worldbuildAct: WorldbuildAct
   focusCell: { x: number; y: number } | null
-  focusContinentId: number | null
   worldOverlay: WorldOverlay
   canUndo: boolean
   canRedo: boolean
@@ -199,7 +194,6 @@ function makeInitialBundle(): ShellBundle {
     polityCount: 4,
     worldbuildAct: 'land',
     focusCell: null,
-    focusContinentId: null,
     worldOverlay: 'countries',
     canUndo: false,
     canRedo: false,
@@ -1884,34 +1878,6 @@ export function mountApp(root: HTMLElement): void {
         }
       }
       const world = worldFromMakeSense(result, state.meta, mask)
-      const aged = ageContinent({
-        width: world.meta.width,
-        height: world.meta.height,
-        threshold: world.meta.threshold,
-        mask: world.mask,
-        elev: world.elev,
-        tempMean: world.tempMean,
-        summerMoist: world.summerMoist,
-        winterMoist: world.winterMoist,
-        moistMean: world.moistMean,
-        flux: world.flux,
-        rivers: world.rivers,
-        salt: world.salt ?? new Uint8Array(world.meta.width * world.meta.height),
-        lakes: world.lakes,
-        ice: world.ice,
-        plateId: world.plateId,
-        plateVx: world.plateVx,
-        plateVy: world.plateVy,
-      })
-      world.salt = aged.salt
-      world.sites = aged.sites
-      world.elev = aged.elev
-      for (let i = 0; i < aged.salt.length; i++) {
-        if (!aged.salt[i] || world.mask[i] < world.meta.threshold) continue
-        world.rivers[i] = 0
-        const t = world.tempMean[i]
-        world.biome[i] = t >= 18 ? 'hot-desert' : t >= 5 ? 'steppe' : 'polar-desert'
-      }
       flags.polityCount = defaultPolityCount(world)
       const added = seedSettlements(world, 0.35, flags.polityCount)
       ensureWorldbuild(world, flags.polityCount)
@@ -1951,23 +1917,6 @@ export function mountApp(root: HTMLElement): void {
         announce(
           'success',
           `${added.length} towns founded where the land can feed them. Open Worldbuild to rename, place, or raze.`,
-        )
-      }
-      let mirrors = 0
-      let springs = 0
-      let slots = 0
-      const sites = world.sites
-      if (sites) {
-        for (let i = 0; i < sites.length; i++) {
-          if (sites[i] === SITE_MIRROR) mirrors++
-          else if (sites[i] === SITE_SPRING) springs++
-          else if (sites[i] === SITE_SLOT) slots++
-        }
-      }
-      if (mirrors || springs || slots) {
-        announce(
-          'info',
-          `The land aged after the continent was grounded. ${mirrors} mirror cells, ${springs} springs, ${slots} slots. The coast did not move.`,
         )
       }
     } catch (err) {
@@ -2231,72 +2180,6 @@ export function mountApp(root: HTMLElement): void {
 
   window.addEventListener(APP_EVENTS.RESET_ATLAS_VIEW, () => {
     resetAtlasView()
-  })
-
-  function frameContinent(x: number, y: number, span: number): void {
-    if (flags.viewMode !== 'atlas') {
-      flags.viewMode = 'atlas'
-      updateMapShell(map, buildView(bundle))
-    }
-    const box = letterboxCss()
-    if (!box) return
-    const shellW = map.canvas.offsetWidth
-    const shellH = map.canvas.offsetHeight
-    const cellPx = box.w / Math.max(1, state.meta.width)
-    const want = Math.max(12, span) * cellPx
-    atlasScale = Math.min(ATLAS_ZOOM_MAX, Math.max(1.8, (Math.min(shellW, shellH) * 0.72) / Math.max(1, want)))
-    const cx = box.x + ((x + 0.5) / state.meta.width) * box.w
-    const cy = box.y + ((y + 0.5) / state.meta.height) * box.h
-    atlasPanX = shellW / 2 - cx * atlasScale
-    atlasPanY = shellH / 2 - cy * atlasScale
-    applyAtlasView()
-    inspectAt(Math.round(x) % state.meta.width, Math.max(0, Math.min(state.meta.height - 1, Math.round(y))))
-    requestPaint()
-  }
-
-  window.addEventListener(APP_EVENTS.FOCUS_CONTINENT, (ev) => {
-    const detail = (ev as CustomEvent).detail as ContinentFocusDetail | undefined
-    if (!detail || !state.world) return
-    if (detail.id < 0) {
-      flags.focusContinentId = null
-      refreshGazetteer()
-      render({ remount: false })
-      return
-    }
-    flags.focusContinentId = detail.id
-    frameContinent(detail.x, detail.y, detail.span)
-    refreshGazetteer()
-  })
-
-  window.addEventListener(APP_EVENTS.BUILD_CONTINENT, (ev) => {
-    const detail = (ev as CustomEvent).detail as ContinentFocusDetail | undefined
-    if (!detail || !state.world) return
-    const added = fillContinent(state.world, detail.id)
-    ensureWorldbuild(state.world, flags.polityCount)
-    flags.focusContinentId = detail.id
-    applyWorldbuildAct('kingdoms')
-    const land = listContinents(state.world).find((c) => c.id === detail.id)
-    frameContinent(detail.x, detail.y, detail.span)
-    announce(
-      'success',
-      added
-        ? `${added} towns on ${land?.name ?? 'that land'}. Write the kingdoms that sit there.`
-        : `Write the kingdoms on ${land?.name ?? 'that land'}.`,
-    )
-    refreshGazetteer()
-    render({ remount: true })
-  })
-
-  window.addEventListener(APP_EVENTS.LORE_EDIT, (ev) => {
-    const detail = (ev as CustomEvent).detail as LoreEditDetail | undefined
-    if (!detail || !state.world) return
-    const polity = state.world.polities.find((p) => p.id === detail.id)
-    if (!polity) return
-    const text = detail.text.trim().slice(0, detail.field === 'sigil' ? 24 : 280)
-    if (detail.field === 'sigil') polity.sigil = text || undefined
-    else if (detail.field === 'history') polity.history = text || undefined
-    else polity.notes = text || undefined
-    refreshGazetteer()
   })
 
   window.addEventListener(APP_EVENTS.GOTO_CELL, (ev) => {
