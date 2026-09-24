@@ -15,6 +15,7 @@ import {
 import { drawIssueOverlays } from '../critique/preview'
 import { buildSketchNoteFields } from '../sketch/sketchMarks'
 import { TRADE_GOOD_LABEL } from '../sketch/analogs'
+import { featuresAtZoom, namePhysicalFeatures, type FeatureName } from '../sketch/featureNames'
 
 export type { Season }
 
@@ -100,6 +101,11 @@ export interface AtlasPaintOpts {
   sketchEpoch?: number
   /** Sketch decorate notes. Doodle only — never on a grounded atlas. */
   marks?: Uint8Array | null
+  /**
+   * Atlas zoom (1..ATLAS_ZOOM_MAX). Physical names appear as this rises.
+   * The base bake stays bilinear; this only chooses which ink labels to draw.
+   */
+  zoom?: number
 }
 
 export interface SizeCanvasOpts {
@@ -328,6 +334,9 @@ export function paintAtlas(canvas: HTMLCanvasElement, opts: AtlasPaintOpts): voi
   if (opts.world && opts.worldOverlay) {
     paintWorldOverlay(ctx, opts.world, box, opts.worldOverlay)
   }
+  if (opts.world) {
+    paintFeatureNames(ctx, opts.world, box, opts.zoom ?? 1)
+  }
 }
 
 interface BlitBox {
@@ -399,6 +408,52 @@ const POLITY_WASH: readonly [number, number, number][] = [
 
 function wrapX(x: number, w: number): number {
   return ((x % w) + w) % w
+}
+
+/**
+ * Physical names as ink on the paper. Zoom chooses the set; the raster
+ * underneath stays the bilinear bake.
+ */
+export function paintFeatureNames(
+  ctx: CanvasRenderingContext2D,
+  world: World,
+  box: BlitBox,
+  zoom: number,
+): void {
+  if (typeof ctx.fillText !== 'function' || typeof ctx.strokeText !== 'function') return
+  const { width: w, height: h } = world.meta
+  if (w <= 0 || h <= 0) return
+  const names = featuresAtZoom(namePhysicalFeatures(world), zoom)
+  if (names.length === 0) return
+  const cellW = box.w / w
+  const cellH = box.h / h
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.lineJoin = 'round'
+  for (const feature of names) {
+    drawFeatureInk(ctx, feature, box.x + feature.x * cellW, box.y + feature.y * cellH, cellW)
+  }
+  ctx.restore()
+}
+
+function drawFeatureInk(
+  ctx: CanvasRenderingContext2D,
+  feature: FeatureName,
+  x: number,
+  y: number,
+  cellW: number,
+): void {
+  const land = feature.kind === 'landmass'
+  const size = land
+    ? Math.max(13, Math.min(22, cellW * 5))
+    : Math.max(10, Math.min(15, cellW * 3.4))
+  ctx.font = `${land ? 600 : 500} ${size}px Fraunces, Georgia, serif`
+  ctx.lineWidth = land ? 3.5 : 2.5
+  ctx.strokeStyle = 'rgba(244, 239, 228, 0.92)'
+  ctx.fillStyle = '#1c221c'
+  ctx.strokeText(feature.name, x, y)
+  ctx.fillText(feature.name, x, y)
 }
 
 /** Exported for the zoom overlay, which repaints worldbuild ink over its HD window. */

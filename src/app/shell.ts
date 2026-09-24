@@ -64,7 +64,7 @@ import {
   TOOLS_SIZE_KEY,
   type ToolsRefs,
 } from './ui'
-import { cellFromPointer, createIdleBakeScheduler, paintAtlas, paintCities, paintWorldOverlay } from './atlas'
+import { cellFromPointer, createIdleBakeScheduler, paintAtlas, paintCities, paintFeatureNames, paintWorldOverlay } from './atlas'
 import { bakeWorldWindowImageData, clientToContainedBitmap, inspectCell } from '../render/draw'
 import { wondersFor } from './wondersCache'
 import { hasAnyLand } from './canvas_paint'
@@ -533,6 +533,7 @@ export function mountApp(root: HTMLElement): void {
         ? overlayForWorldbuildAct(flags.worldbuildAct, flags.worldOverlay)
         : null
     if (overlay) paintWorldOverlay(ctx, world, gridBox, overlay)
+    paintFeatureNames(ctx, world, gridBox, atlasScale)
     zc.style.left = `${atlasPanX + vx0 * atlasScale}px`
     zc.style.top = `${atlasPanY + vy0 * atlasScale}px`
     zc.style.width = `${(vx1 - vx0) * atlasScale}px`
@@ -787,6 +788,7 @@ export function mountApp(root: HTMLElement): void {
           ? overlayForWorldbuildAct(flags.worldbuildAct, flags.worldOverlay)
           : null,
       marks: showWorld ? null : flags.marks,
+      zoom: 1,
     })
   }
 
@@ -837,6 +839,14 @@ export function mountApp(root: HTMLElement): void {
     const s = Number.isFinite(suitability) ? Math.max(0, Math.min(1, suitability)) : 0.5
     const pop = Math.round((base * (0.4 + s * 1.2)) / 500) * 500
     return `≈${pop.toLocaleString('en-US')} people`
+  }
+
+  /** Equatorial cell width, same formula as the cartouche. */
+  function hoveredCellKmLine(): string {
+    const R = state.meta.planetRadiusKm > 0 ? state.meta.planetRadiusKm : 6371
+    const cellKm = (2 * Math.PI * R) / state.meta.width
+    if (!(cellKm > 0) || !Number.isFinite(cellKm)) return ''
+    return `<p class="hint">≈${Math.round(cellKm)} km</p>`
   }
 
   function inspectAt(x: number, y: number): void {
@@ -917,6 +927,7 @@ export function mountApp(root: HTMLElement): void {
       const note = flags.marks?.[i]
       flags.inspectHtml = sketchInspectHtml(x, y, land, markKindLabel(note ?? 0))
     }
+    flags.inspectHtml += hoveredCellKmLine()
     updateInspector(inspector, buildView(bundle))
   }
 
