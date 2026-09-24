@@ -81,6 +81,10 @@ export interface SavedWorld {
     rivers: number[]
     /** Closed-basin lakes. Omitted on worlds grounded before that field existed. */
     lakes?: number[]
+    /** Salt flats. Omitted on worlds grounded before the age pass. */
+    salt?: number[]
+    /** Aged surfaces: 1 mirror, 2 spring, 3 terrace, 4 hoodoo, 5 slot. */
+    sites?: number[]
     biome: string[]
     suitability: number[]
     cities: World['cities']
@@ -274,6 +278,8 @@ export function serializeWorld(world: World): string {
       flux: Array.from(world.flux),
       rivers: Array.from(world.rivers),
       ...(world.lakes ? { lakes: Array.from(world.lakes) } : {}),
+      ...(world.salt ? { salt: Array.from(world.salt) } : {}),
+      ...(world.sites ? { sites: Array.from(world.sites) } : {}),
       biome: world.biome.slice(),
       suitability: Array.from(world.suitability),
       cities: world.cities.map((c) => ({ ...c })),
@@ -361,6 +367,8 @@ export function deserializeWorld(json: string): World | null {
     biome: w.biome.slice() as CellBiome[],
     suitability: Float32Array.from(w.suitability),
     ...(isNumberArray(w.lakes) && w.lakes.length === n ? { lakes: Uint8Array.from(w.lakes) } : {}),
+    ...(isNumberArray(w.salt) && w.salt.length === n ? { salt: Uint8Array.from(w.salt) } : {}),
+    ...(isNumberArray(w.sites) && w.sites.length === n ? { sites: Uint8Array.from(w.sites) } : {}),
     cities: w.cities.map((c) => ({ ...c })),
     ...emptyPolityState(n),
     ...(isNumberArray(w.polityId) && w.polityId.length === n
@@ -434,6 +442,8 @@ export function serializeWorldBlob(world: World): Uint8Array {
     polities: world.polities,
     routes: world.routes,
     polityId: Array.from(world.polityId),
+    ...(world.salt ? { salt: Array.from(world.salt) } : {}),
+    ...(world.sites ? { sites: Array.from(world.sites) } : {}),
   })
   const headerBytes = new TextEncoder().encode(header)
   const f32: Float32Array[] = [
@@ -486,6 +496,8 @@ export function deserializeWorldBlob(bytes: Uint8Array): World | null {
     polities?: Polity[]
     routes?: TradeRoute[]
     polityId?: number[]
+    salt?: number[]
+    sites?: number[]
   }
   try {
     header = JSON.parse(new TextDecoder().decode(bytes.subarray(headerStart, headerEnd))) as typeof header
@@ -547,6 +559,8 @@ export function deserializeWorldBlob(bytes: Uint8Array): World | null {
       : {}),
     ...(Array.isArray(header.polities) ? { polities: header.polities } : {}),
     ...(Array.isArray(header.routes) ? { routes: header.routes } : {}),
+    ...(isNumberArray(header.salt) && header.salt.length === n ? { salt: Uint8Array.from(header.salt) } : {}),
+    ...(isNumberArray(header.sites) && header.sites.length === n ? { sites: Uint8Array.from(header.sites) } : {}),
   }
 }
 

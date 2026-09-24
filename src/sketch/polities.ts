@@ -429,6 +429,9 @@ function summarizePolities(world: World): void {
       imports: topGoods(net, 'lo'),
       meltingPot: 0,
       mass: Math.max(0.25, (landN[id] / 80) * (1 + surplus)),
+      sigil: prev?.sigil,
+      history: prev?.history,
+      notes: prev?.notes,
     }
   })
 }

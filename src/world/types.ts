@@ -237,6 +237,12 @@ export interface Polity {
   meltingPot: number
   /** Hinterland surplus mass for gravity trade. Not GDP. */
   mass: number
+  /** Heraldic charge the writer kept. Omitted until they accept a suggestion. */
+  sigil?: string
+  /** Writer history. Chronicle origin is the default when this is empty. */
+  history?: string
+  /** Free notes about this country. Not geography. */
+  notes?: string
 }
 
 /**
@@ -562,6 +568,11 @@ export interface World {
   ice?: Uint8Array
   /** 1 = salt flat. Length W*H. Omitted on old saves. */
   salt?: Uint8Array
+  /**
+   * Aged surface from the hydrology fast-forward.
+   * 1 mirror, 2 hot spring, 3 travertine, 4 hoodoo, 5 slot. Omitted on old saves.
+   */
+  sites?: Uint8Array
 
   /** Per-cell biome name, keyed off (tempMean, tempRange, water balance). Length W*H. */
   biome: CellBiome[]

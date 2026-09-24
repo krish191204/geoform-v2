@@ -344,13 +344,30 @@ export function computeHydrology(
     }
   }
 
-  // 4. Closed basins: water when the cell is moist, salt when summer is dry.
-  // Rivers end here — the cell is a sink, not a channel.
+  // 4. Closed basins: a moist pit holds a lake. A dry pit seeds salt
+  // only at its floor. The playa grows later, after the continent exists.
   for (let i = 0; i < n; i++) {
     if (!closed[i]) continue
     const dry = runoff ? runoff[i] < SALT_SUMMER_MOIST : false
-    if (dry) salt[i] = 1
-    else lakes[i] = 1
+    if (!dry) {
+      lakes[i] = 1
+      continue
+    }
+    const x = i % width
+    const y = (i - x) / width
+    let floor = true
+    for (let k = 0; k < 4; k++) {
+      const dx = k === 0 ? 1 : k === 1 ? -1 : 0
+      const dy = k === 2 ? 1 : k === 3 ? -1 : 0
+      const ny = y + dy
+      if (ny < 0 || ny >= height) continue
+      const ni = ny * width + ((x + dx + width) % width)
+      if (closed[ni] && elev[ni] < elev[i]) {
+        floor = false
+        break
+      }
+    }
+    if (floor) salt[i] = 1
   }
 
   // 5. Mark rivers where flux exceeds the documented threshold.

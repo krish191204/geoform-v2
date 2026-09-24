@@ -134,7 +134,7 @@ describe('journeyDays', () => {
     const land = world({ biome: 'hot-desert' })
     const elev = land.elev.slice()
     const mask = land.mask.slice()
-    journeyDays(land, 1, 8, 12, 'army', 'summer')
+    journeyDays(land, 1, 8, 12, 8, 'army', 'summer')
     expect(Array.from(land.elev)).toEqual(Array.from(elev))
     expect(Array.from(land.mask)).toEqual(Array.from(mask))
   })
