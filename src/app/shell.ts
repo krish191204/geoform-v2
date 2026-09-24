@@ -1965,9 +1965,13 @@ export function mountApp(root: HTMLElement): void {
         }
       }
       if (mirrors || springs || slots) {
+        const bits: string[] = []
+        if (mirrors) bits.push(mirrors === 1 ? 'a salt mirror' : 'salt mirrors')
+        if (springs) bits.push(springs === 1 ? 'a hot spring' : 'a few hot springs')
+        if (slots) bits.push(slots === 1 ? 'a slot canyon' : 'slot canyons')
         announce(
           'info',
-          `The land aged after the continent was grounded. ${mirrors} mirror cells, ${springs} springs, ${slots} slots. The coast did not move.`,
+          `After the continent was grounded, ${bits.join(' and ')} opened. The coast did not move.`,
         )
       }
     } catch (err) {
