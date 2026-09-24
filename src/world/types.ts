@@ -74,7 +74,31 @@ export interface WorldMeta {
   seaLevel: number
   /** Mask threshold for freeze intent, default 0.5. */
   threshold: number
+  /**
+   * Ocean-current multiplier. `1` is today's warm/cold bias.
+   * `0` turns currents off. Omitted on old saves; readers use 1.
+   */
+  currentStrength?: number
+  /**
+   * °C. A cell can glaciate when both seasons are at or below this.
+   * `0` is today's ice line. Omitted on old saves; readers use 0.
+   */
+  iceLineC?: number
+  /**
+   * Metres of sink-fill before a pit stays a closed basin.
+   * `60` is today's cap. Omitted on old saves; readers use 60.
+   */
+  lakeFillM?: number
 }
+
+/** Today's ocean-current bias. `0` turns currents off. */
+export const DEFAULT_CURRENT_STRENGTH = 1
+
+/** °C. Both seasons at or below this can glaciate. */
+export const DEFAULT_ICE_LINE_C = 0
+
+/** Metres of sink-fill before a pit stays a lake or salt flat. Matches `FILL_CAP_M`. */
+export const DEFAULT_LAKE_FILL_M = 60
 
 /** Defaults for a fresh sketch — Geoform 1 HD grid. Spread and override. */
 export const DEFAULT_META: Readonly<WorldMeta> = {
@@ -85,6 +109,9 @@ export const DEFAULT_META: Readonly<WorldMeta> = {
   obliquityDeg: 23.5,
   seaLevel: 0.5,
   threshold: 0.5,
+  currentStrength: DEFAULT_CURRENT_STRENGTH,
+  iceLineC: DEFAULT_ICE_LINE_C,
+  lakeFillM: DEFAULT_LAKE_FILL_M,
 }
 
 // ---------------------------------------------------------------------------
