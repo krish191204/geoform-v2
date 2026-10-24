@@ -40,9 +40,50 @@ _Purpose: if this session dies or the model switches, the next agent resumes fro
 1. Browser pass at :5199: paint land, Make sense, check the Geology chip (colours plausible, shoreline still smooth), hover for Bedrock/Resources/Sky, check the Deep time panel in the Make sense card, step through and dismiss the field guide, then reload to confirm it stays dismissed.
 2. (Done at 21:48: full suite green.) Re-run it after any change.
 3. Decide whether `geologyRaster.ts` is still needed now that the draw path exists; delete it or use it for an export, but do not ship both looks.
-4. Apply the UX designer's placement recommendations (in its final report in the chat) if they hold up.
-5. Panel `onPlace` (clicking a history place to pan the atlas) is not wired; reuse the `zoomAtlasAt` math in `shell.ts`.
+4. Apply the UX designer's placement recommendations (listed below) if they hold up in the browser.
+5. **The history place buttons do nothing yet.** `mountDeepTimePanel(model, onPlace?)` always renders the place buttons, but `ui.ts` passes no `onPlace`, so the buttons are dead. Either wire `onPlace` (reuse the `zoomAtlasAt` math in `shell.ts`) or leave buttons out when there is no handler.
 6. Science check: whether the geology rules (fold belts on convergent boundaries, evaporites in dry closed basins, till at high latitude) match the plates and climate on several seeds. Geography wins over the doodle.
+7. **Field guide is appended twice.** `mountFieldGuide()` already appends itself to `document.body`, and `main.ts` appends it again. Moving the node can drop the focus the guide sets on mount. Fix: in `main.ts`, call `if (shouldShowFieldGuide()) mountFieldGuide()` without `document.body.append(...)`.
+8. **History areas are too big at high latitude.** `deepHistory.ts` uses cells × the equatorial cell area, so polar countries are overstated. Scale each cell by cos(latitude).
+9. **History names do not match map labels.** `deepHistory.ts` has its own seeded `placeName`, because `featureNames.ts` keeps its namer private and imports from `src/pipeline`. A river named in the history can differ from the label on the map. Expose one shared namer.
+
+**Specialist reports (summarised, for whoever continues).**
+- **Geology** (`geology.ts`, 5 tests):
+  - Boundary cut-offs match `plates.ts` (converging below −0.05, pulling apart above +0.05, transform when the sideways speed is above 0.1). Land–ocean edges that pull apart or slide are passive.
+  - Land priority: till, then alluvium, then evaporite, then the nearest plate edge by reach (fault 40 km, arc 250 km, rift 150 km, fold belt 300 km), then old mountains, then basin, then craton.
+  - One linear BFS per boundary kind. Kilometres are scaled by cos(latitude).
+  - `World` has no ice field. Till uses `tempMean < −8`, or both seasons at or below `meta.iceLineC`.
+  - `World` has no salt field on this branch (salt is only on `cursor/stitch-makesense-world`). Evaporite comes from closed lakes in dry climates or very dry flat lowlands.
+  - Two extra rules: low ground more than 60 km from a collision becomes a young basin, and land above 1,800 m with no active edge becomes an old fold belt aged 250–400 million years.
+  - Caveat: any quiet land below 300 m is basin, so flat, low continents read mostly as basin. Ages always read in "million years".
+- **Physics** (`planetPhysics.ts`, 13 tests):
+  - Earth checks: gravity 9.82 m/s², escape velocity 11.19 km/s, horizon 4.65 km, equinox equator 433 W/m², 52°N day length 16.5 h in June and 7.5 h in December, scale height 8.43 km.
+  - Two numbers differ from older tables, and the model is correct: the June pole is 541 W/m² on a circular orbit (523.7 at Earth's real July distance), and the annual equator mean is 415.5 W/m² with a solar constant of 1361.
+  - The card says "1.00× Earth" for gravity rather than comparing with 9.81, which includes Earth's spin.
+  - Ocean cells report pressure at the sea surface.
+  - `describeSky` says nothing about the time of day because the model has no daily cycle.
+- **History** (`deepHistory.ts`, 6 tests):
+  - Up to six eras, oldest first: river cradles, highland ore, a sheltered bay, a dry margin, the largest country, the longest route.
+  - Each era cites cell facts (flow, elevation, moisture, area, route length). Dates count back from the map, never BC/AD.
+  - An era is skipped when its geography is missing, so thin worlds can get fewer than 4.
+- **Resources** (`resources.ts`, 12 tests) and **raster** (`geologyRaster.ts`, 8 tests): match the contract. The raster is unused.
+- **Panel** (`deepTimePanel.ts`, 7 tests):
+  - Each reader is fenced, so a failing reader hides only its own block. If geology fails, Resources hides too.
+  - A world counts as empty when no cell is above 0 m.
+  - Shows the top 6 rocks. All data goes in through `textContent`.
+- **Styling** (`deepTime.css`):
+  - Scoped under `.deep-time` so it beats `.panel h2` and `.panel h3`.
+  - The rock share bar sits on its own row so the label keeps AA contrast.
+  - Place buttons are at least 1.5rem tall. Era nodes have an ink border.
+- **UX designer** (`fieldGuide.ts`, 10 tests):
+  - Non-modal card, bottom-left. Back / Next / Done, a × close, and Escape (only while focus is inside the card). "Done" or the ticked checkbox saves the dismissal.
+  - Each step highlights its stage button. Step 3 targets `[data-look="geology"]`, which only exists after Make sense.
+  - Placement advice:
+    1. Move the Geology chip right after Relief and use the caption "Bedrock — the rock under the soil — and its age".
+    2. Keep Deep time in the Make sense card (where it is), as a collapsible section; the inspector stays about the place under the cursor.
+    3. Order it cause to effect: sunlight, bedrock, resources, history. Open History by default and collapse the rest.
+    4. Use verdigris or ink for its actions, never copper.
+    5. Check whether the guide collides with the scale bar, cartouche, or mobile dock in the bottom-left corner.
 
 ## Completed (27 Aug, ~14:55)
 
