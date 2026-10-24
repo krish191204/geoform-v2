@@ -1,0 +1,321 @@
+/* Deep time — the planet's long memory, set like the margin notes of a
+   survey sheet: ink rules, hand-tinted legend boxes, a dated spine.
+   Lives inside an existing floating card, so it never positions itself. */
+
+.deep-time {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.7rem;
+  max-width: 100%;
+  min-width: 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--ink);
+  overflow-wrap: break-word;
+}
+
+.deep-time :is(ul, ol) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.deep-time .deep-time-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-variant-caps: small-caps;
+  font-synthesis: small-caps;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+  color: var(--ink);
+}
+
+.deep-time .deep-time-lede {
+  margin: -0.35rem 0 0;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-synthesis: style;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
+.deep-time .deep-time-block {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.4rem;
+  min-width: 0;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--line);
+}
+
+.deep-time .deep-time-block h3 {
+  margin: 0;
+  font-family: inherit;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  line-height: 1.3;
+  color: var(--ink-soft);
+}
+
+/* Facts: a column of figures, ruled like a ledger. */
+
+.deep-time .deep-time-facts {
+  gap: 0;
+}
+
+.deep-time .deep-time-facts li {
+  padding: 0.28rem 0;
+  font-family: var(--font-data);
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums lining-nums;
+  line-height: 1.4;
+  list-style: none;
+}
+
+.deep-time .deep-time-facts li + li {
+  border-top: 1px solid rgba(28, 34, 28, 0.12);
+}
+
+/* Rock budget: legend swatch, name, share; the tinted bar sits on its own
+   line beneath so the label always reads on bare paper. */
+
+.deep-time .rock-bar {
+  display: grid;
+  grid-template-columns: 0.9rem minmax(0, 1fr) auto;
+  grid-template-rows: auto 0.45rem;
+  column-gap: 0.5rem;
+  row-gap: 0.2rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.deep-time .rock-bar::before {
+  content: "";
+  grid-column: 2 / -1;
+  grid-row: 2;
+  justify-self: start;
+  width: calc(clamp(0, var(--share, 0), 1) * 100%);
+  height: 100%;
+  border: 1px solid var(--ink);
+  background:
+    linear-gradient(rgba(231, 224, 210, 0.55), rgba(231, 224, 210, 0.55)),
+    var(--color, var(--paper-deep));
+}
+
+.deep-time .rock-swatch {
+  grid-column: 1;
+  grid-row: 1;
+  width: 0.9rem;
+  height: 0.9rem;
+  border: 1px solid var(--ink);
+  background-color: var(--color, var(--paper-deep));
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(28, 34, 28, 0.26) 0 1px,
+    transparent 1px 3.5px
+  );
+}
+
+.deep-time .rock-label {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  font-size: 0.8rem;
+  line-height: 1.3;
+}
+
+.deep-time .rock-share {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+  text-align: right;
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums lining-nums;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+/* Resources: name left, cell count right, hairline between. */
+
+.deep-time .deep-time-resource-list {
+  gap: 0;
+}
+
+.deep-time .deep-time-resource-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.26rem 0;
+  font-size: 0.8rem;
+  list-style: none;
+}
+
+.deep-time .deep-time-resource-list li + li {
+  border-top: 1px solid rgba(28, 34, 28, 0.12);
+}
+
+.deep-time .res-label {
+  min-width: 0;
+}
+
+.deep-time .res-cells {
+  flex: 0 0 auto;
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums lining-nums;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+/* Eras: a single ink spine, one dated node per age. */
+
+.deep-time .era-list {
+  --spine-x: 0.3rem;
+  --rail: 1.15rem;
+  --node: 0.6rem;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.8rem;
+  margin: 0;
+  padding: 0.1rem 0 0.1rem var(--rail);
+  list-style: none;
+}
+
+.deep-time .era-list::before {
+  content: "";
+  position: absolute;
+  top: 0.4rem;
+  bottom: 0.4rem;
+  left: var(--spine-x);
+  border-left: 1px solid var(--ink);
+}
+
+.deep-time .era {
+  position: relative;
+  display: block;
+  min-width: 0;
+  list-style: none;
+}
+
+.deep-time .era::before {
+  content: "";
+  position: absolute;
+  top: 0.16rem;
+  left: calc(var(--spine-x) - var(--rail) - var(--node) / 2 + 0.5px);
+  width: var(--node);
+  height: var(--node);
+  border: 1px solid var(--ink);
+  border-radius: 50%;
+  background: var(--era-node, var(--paper));
+}
+
+.deep-time .era[data-theme="cradle"] { --era-node: var(--moss); }
+.deep-time .era[data-theme="metal"] { --era-node: var(--copper); }
+.deep-time .era[data-theme="sea"] { --era-node: var(--sea); }
+.deep-time .era[data-theme="drought"] { --era-node: #b08a3e; }
+.deep-time .era[data-theme="empire"] { --era-node: #7a3b2e; }
+.deep-time .era[data-theme="trade"] { --era-node: var(--verdigris); }
+
+.deep-time .era-years {
+  display: block;
+  margin: 0;
+  font-family: var(--font-data);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+  color: var(--ink-soft);
+}
+
+.deep-time .era-title {
+  display: block;
+  margin: 0.1rem 0 0;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink);
+}
+
+.deep-time .era-why {
+  display: block;
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.deep-time .era-place {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  vertical-align: middle;
+  min-height: 1.5rem;
+  margin: 0.35rem 0.3rem 0 0;
+  padding: 0 0.6rem;
+  border: 1px solid var(--ink);
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.deep-time .era-place:hover:not(:disabled) {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.deep-time .era-place:focus-visible {
+  outline: 2px solid var(--copper);
+  outline-offset: 2px;
+}
+
+.deep-time .era-place:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.deep-time .deep-time-empty {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deep-time,
+  .deep-time *,
+  .deep-time *::before,
+  .deep-time *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .deep-time .rock-swatch,
+  .deep-time .rock-bar::before,
+  .deep-time .era::before {
+    forced-color-adjust: none;
+  }
+}

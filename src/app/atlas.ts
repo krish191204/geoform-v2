@@ -27,6 +27,7 @@ export const LAYER_CHIPS: readonly { id: Layer; label: string; title: string; ca
   { id: 'suitability', label: 'Settle', title: 'Where people can live', caption: 'How livable the cell is for towns, 0–1.' },
   { id: 'plates', label: 'Plates', title: 'Tectonic plates', caption: 'Crust pieces. Colour is an id, not height.' },
   { id: 'elevation', label: 'Height', title: 'Elevation in metres', caption: 'Elevation in metres above the reference surface.' },
+  { id: 'geology', label: 'Geology', title: 'Bedrock and its age', caption: 'Bedrock read from the plates, height, and climate.' },
 ]
 
 export const SEASON_LAYERS: ReadonlySet<Layer> = new Set([

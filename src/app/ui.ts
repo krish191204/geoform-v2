@@ -70,6 +70,8 @@ import { LANDFORM_OPTIONS, stampLandformAt, type LandformKind } from '../sketch/
 import { hasAnyLand } from './canvas_paint'
 import { analogStillDataUri, ANALOG_STILL_CAPTION } from './analogStills'
 import { decorateCoachCopy } from './coach'
+import { buildDeepTimeModel, mountDeepTimePanel, type DeepTimeModel } from './deepTimePanel'
+import { geologyFor } from '../render/geologyCache'
 
 // ---------------------------------------------------------------------------
 // DOM helpers
@@ -1909,7 +1911,22 @@ function mountMakeSenseWork(state: ShellStateView): HTMLElement {
   const cancelBtn = el('button', { type: 'button', class: 'action-btn' }, 'Cancel')
   cancelBtn.hidden = !state.isProcessing
   cancelBtn.addEventListener('click', () => fire(APP_EVENTS.CANCEL_MAKE_SENSE))
-  return el('div', {}, cancelBtn, worldbuildBtn)
+  const root = el('div', {}, cancelBtn, worldbuildBtn)
+  if (state.world && state.makeSenseComplete && !state.isProcessing) {
+    root.append(mountDeepTimePanel(deepTimeModelFor(state.world)))
+  }
+  return root
+}
+
+const deepTimeModels = new WeakMap<World, DeepTimeModel>()
+
+function deepTimeModelFor(world: World): DeepTimeModel {
+  let model = deepTimeModels.get(world)
+  if (!model) {
+    model = buildDeepTimeModel(world, geologyFor(world))
+    deepTimeModels.set(world, model)
+  }
+  return model
 }
 
 function cityListBlurb(city: City, state: ShellStateView): string {
@@ -2373,6 +2390,9 @@ export function worldInspectHtml(
     wonder?: string
     /** Real Earth place that formed the same way. */
     wonderEarth?: string
+    rock?: string
+    sky?: string
+    resources?: string
   },
   layer: Layer = 'relief',
 ): string {
@@ -2405,13 +2425,18 @@ export function worldInspectHtml(
             ? [['Settle', display.settle ?? '—']]
             : layer === 'biome'
               ? [['Biome', display.biome]]
-              : [['Elevation', display.elev]]
+              : layer === 'geology'
+                ? [['Bedrock', lore?.rock || '—']]
+                : [['Elevation', display.elev]]
 
   const loreRows = [
     lore?.polity ? `<dt>Country</dt><dd>${lore.polity}</dd>` : '',
     lore?.tradition ? `<dt>People</dt><dd>${lore.tradition}</dd>` : '',
     lore?.economy ? `<dt>Trade</dt><dd>${lore.economy}</dd>` : '',
     lore?.mix ? `<dt>Capital</dt><dd>${lore.mix}</dd>` : '',
+    lore?.rock && layer !== 'geology' ? `<dt>Bedrock</dt><dd>${lore.rock}</dd>` : '',
+    lore?.resources ? `<dt>Resources</dt><dd>${lore.resources}</dd>` : '',
+    lore?.sky ? `<dt>Sky</dt><dd>${lore.sky}</dd>` : '',
   ].join('')
 
   const moistNote =

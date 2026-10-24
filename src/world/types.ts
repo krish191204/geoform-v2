@@ -645,7 +645,7 @@ export function clamp(v: number, lo: number, hi: number): number {
 // 12. Kept exports
 // ---------------------------------------------------------------------------
 
-/** The seven viewable layers in the atlas. */
+/** The viewable layers in the atlas. Geology is read from plates, height, and climate. */
 export type Layer =
   | 'relief'
   | 'plates'
@@ -654,5 +654,6 @@ export type Layer =
   | 'temperature'
   | 'biome'
   | 'suitability'
+  | 'geology'
 
 export { createRng, hash2, valueNoise2D, fbm } from './noise'

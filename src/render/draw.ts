@@ -20,6 +20,8 @@
 import { biomeColor, type Layer, type World } from '../world/types'
 import { classifyOcean, type OceanClass } from '../pipeline/oceanClass'
 import type { SketchNoteFields } from '../sketch/sketchMarks'
+import { LITHOLOGY_COLOR } from '../sketch/geology'
+import { geologyFor } from './geologyCache'
 
 // ---------------------------------------------------------------------------
 // 1. Types
@@ -603,6 +605,11 @@ function layerFill(
       return ocean
         ? mix(suitColor(world.suitability[i]), [18, 48, 68], 0.55)
         : suitColor(world.suitability[i])
+    case 'geology': {
+      if (ocean) return elevBandColor(e, true)
+      const code = geologyFor(world).lith[i] ?? 0
+      return hexToRgb(LITHOLOGY_COLOR[code] ?? '#d8cfbd')
+    }
   }
 }
 
@@ -625,7 +632,7 @@ function applyPaperLook(
   const ocean = maskV < threshold || (lakeV >= 0.45 && maskV >= threshold)
 
   // Hillshade on terrain-ish layers. Height stays a raw metre ramp.
-  if (layer === 'relief' || layer === 'biome') {
+  if (layer === 'relief' || layer === 'biome' || layer === 'geology') {
     const er = sampleElev(world, x + 1, y)
     const ed = sampleElev(world, x, y + 1)
     const dx = (e - er) / SHADE_M
@@ -637,7 +644,7 @@ function applyPaperLook(
   }
 
   // Still water grain — no animation (draw stays pure). Geoform 1 shimmer 0.14.
-  if (ocean && (layer === 'relief' || layer === 'biome' || layer === 'elevation')) {
+  if (ocean && (layer === 'relief' || layer === 'biome' || layer === 'elevation' || layer === 'geology')) {
     const depth = e < 0 ? ramp(1 + e / 1200) : 0.35
     const wave =
       0.5 + 0.5 * Math.sin(x * 0.35 + Math.cos(y * 0.22) * 2) * Math.sin(y * 0.4)

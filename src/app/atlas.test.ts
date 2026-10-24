@@ -270,6 +270,7 @@ describe('LAYER_CHIPS', () => {
       'suitability',
       'plates',
       'elevation',
+      'geology',
     ])
     for (const chip of LAYER_CHIPS) {
       expect(chip.title.length).toBeGreaterThan(8)

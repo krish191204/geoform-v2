@@ -8,6 +8,42 @@ _Purpose: if this session dies or the model switches, the next agent resumes fro
 - Workspace rule: geographical accuracy first; never mutate `input.mask`; pipeline modules must not import `src/world/` or `src/app/`; no `--prod` deploys; visual target is Geoform 1 (paper-ink atlas). Map look work is gated by `.agents/skills/geoform-atlas-look/SKILL.md`.
 - Dev server: `npx vite --port 5199 --strictPort` (needs `required_permissions: ["all"]` in sandbox). Tests: `npx vitest run`, types: `npx tsc --noEmit`.
 
+## Deep-time atlas (24 Oct 2026, 21:35–21:50) — branch `cursor/deep-time-atlas`
+
+**Where things stand.** `main` is still the live full-screen atlas (`02ed9b2`, same tree as `d80002e`); do not push this work to `main` or deploy unless the user asks. This branch starts at `02ed9b2`. The user set a 15-minute cap, so this is a first cut: types clean, tests green, **no browser pass done yet**.
+
+**Plan used.** One head agent (integration) plus specialist agents, each owning only its own files:
+
+| Role | Files | Exports the rest of the app uses |
+|------|-------|----------------------------------|
+| Geologist | `src/sketch/geology.ts` (+test) | `readGeology(world)` returns `lith` (codes 0 none, 1 craton, 2 fold belt, 3 arc, 4 rift basalt, 5 basin, 6 alluvium, 7 evaporite, 8 till, 9 fault), `ageMyr`, `boundaryKind`; `describeRock`, `geologySummary`, `LITHOLOGY_LABEL`, `LITHOLOGY_COLOR` |
+| Mathematician/physicist | `src/science/planetPhysics.ts` (+test) | `planetCard(meta)`, `formatPlanetCard`, `cellPhysics(world, i)`, `describeSky`, plus gravity, escape velocity, horizon, insolation, day length, Coriolis, pressure helpers |
+| Historian | `src/sketch/deepHistory.ts` (+test) | `deepHistory(world)` returns eras with `yearsAgo`, `places`, `why`, `theme`; `formatEra` |
+| Raster | `src/render/geologyRaster.ts` (+test) | `bakeLithologyRaster`, `toImageData`. **Not wired in yet** — the Geology layer goes through `draw.ts` instead (see below) |
+| Resources | `src/sketch/resources.ts` (+test) | `readResources(world, lith)` returns bit flags (ORE 1, STONE 2, SALT 4, TIMBER 8, FERTILE 16, FISH 32, GEMS 64); `describeResources`, `resourceSummary` |
+| Panel | `src/app/deepTimePanel.ts` (+test) | `buildDeepTimeModel(world, geology?)`, `mountDeepTimePanel(model)`; root `<section class="deep-time">` |
+| Styling | `src/deepTime.css` | panel styles |
+| UI/UX designer (added at the user's request) | `src/app/fieldGuide.ts` (+test), `src/fieldGuide.css` | first-run 4-step field guide; dismissal stored at `geoform:field-guide:v1` |
+
+**Head-agent integration (what changed in existing files).**
+- `src/world/types.ts`: `'geology'` added to the `Layer` union.
+- `src/app/atlas.ts`: Geology chip added at the end of `LAYER_CHIPS`; `atlas.test.ts` list updated to match.
+- `src/render/draw.ts`: `case 'geology'` in `layerFill` colours land by `LITHOLOGY_COLOR`, and the sea uses the elevation sea bands. Geology is also added to the hillshade and ocean-shading conditions, so it keeps the bilinear paper look (no pixel blit).
+- `src/render/geologyCache.ts` (new): `geologyFor(world)` / `resourcesFor(world)` WeakMap caches. One read per grounded World; a new Make sense makes a new World.
+- `src/app/ui.ts`: `worldInspectHtml` lore gains `rock`, `resources`, `sky` rows (Bedrock / Resources / Sky). On the Geology layer, Bedrock is the lead row. `mountMakeSenseWork` appends the Deep time panel once Make sense is complete, through a per-World cached model (`deepTimeModelFor`), because `render()` remounts the stage card on every call.
+- `src/app/shell.ts`: `deepTimeLines(world, i)` fills those hover rows, wrapped in try/catch so a failing reader cannot break Inspect.
+- `src/app/main.ts`: imports `deepTime.css` and `fieldGuide.css`; mounts the field guide after `mountApp` when it has not been dismissed. It does not load a world on boot.
+
+**Verified (21:46).** `npx tsc --noEmit` clean. The 8 new and touched test files: 95 passed. Full suite before the atlas list fix: 598 passed, 1 failed (the chip list); that test now passes. The full suite has not been re-run after the field-guide wiring.
+
+**Not done — next agent starts here.**
+1. Browser pass at :5199: paint land, Make sense, check the Geology chip (colours plausible, shoreline still smooth), hover for Bedrock/Resources/Sky, check the Deep time panel in the Make sense card, step through and dismiss the field guide, then reload to confirm it stays dismissed.
+2. Run the full `npx vitest run` again.
+3. Decide whether `geologyRaster.ts` is still needed now that the draw path exists; delete it or use it for an export, but do not ship both looks.
+4. Apply the UX designer's placement recommendations (in its final report in the chat) if they hold up.
+5. Panel `onPlace` (clicking a history place to pan the atlas) is not wired; reuse the `zoomAtlasAt` math in `shell.ts`.
+6. Science check: whether the geology rules (fold belts on convergent boundaries, evaporites in dry closed basins, till at high latitude) match the plates and climate on several seeds. Geography wins over the doodle.
+
 ## Completed (27 Aug, ~14:55)
 
 - **Draggable coach**: grip handle on `#coach`; drag floats it over the map (`position: fixed` on `.app`); double-click docks it back. Tone updates no longer wipe floating state. Keys sheet notes the gesture. Test in `ui.test.ts`.

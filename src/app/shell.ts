@@ -3,8 +3,12 @@
  * Critique stays in the factory for silent scoring; it is not a product stage.
  */
 
-import type { EditorState, Layer, WorldOverlay } from '../world/types'
+import type { EditorState, Layer, World, WorldOverlay } from '../world/types'
 import { DEFAULT_META } from '../world/types'
+import { describeRock } from '../sketch/geology'
+import { describeResources } from '../sketch/resources'
+import { cellPhysics, describeSky } from '../science/planetPhysics'
+import { geologyFor, resourcesFor } from '../render/geologyCache'
 import {
   APP_EVENTS,
   MAKE_SENSE_STEP_INDEX,
@@ -919,6 +923,7 @@ export function mountApp(root: HTMLElement): void {
             const hit = routeNearCell(state.world, x, y, kind)
             return hit ? routeDossier(state.world, hit) : undefined
           })(),
+          ...deepTimeLines(world, i),
         },
         flags.layer,
       )
@@ -929,6 +934,18 @@ export function mountApp(root: HTMLElement): void {
     }
     flags.inspectHtml += hoveredCellKmLine()
     updateInspector(inspector, buildView(bundle))
+  }
+
+  function deepTimeLines(world: World, i: number): { rock?: string; sky?: string; resources?: string } {
+    try {
+      return {
+        rock: describeRock(world, geologyFor(world), i) || undefined,
+        resources: describeResources(resourcesFor(world).flags[i]) || undefined,
+        sky: describeSky(cellPhysics(world, i)) || undefined,
+      }
+    } catch {
+      return {}
+    }
   }
 
   function refreshGazetteer(): void {
