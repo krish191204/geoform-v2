@@ -34,11 +34,11 @@ _Purpose: if this session dies or the model switches, the next agent resumes fro
 - `src/app/shell.ts`: `deepTimeLines(world, i)` fills those hover rows, wrapped in try/catch so a failing reader cannot break Inspect.
 - `src/app/main.ts`: imports `deepTime.css` and `fieldGuide.css`; mounts the field guide after `mountApp` when it has not been dismissed. It does not load a world on boot.
 
-**Verified (21:46).** `npx tsc --noEmit` clean. The 8 new and touched test files: 95 passed. Full suite before the atlas list fix: 598 passed, 1 failed (the chip list); that test now passes. The full suite has not been re-run after the field-guide wiring.
+**Verified (21:48).** `npx tsc --noEmit` clean. Full `npx vitest run` after all wiring: 54 files, 609 passed, 0 failed. Committed `e4b061a` and pushed `cursor/deep-time-atlas` to origin (the first push failed with "Error in the HTTP2 framing layer"; `git -c http.version=HTTP/1.1 push` worked). `origin/main` is untouched at `02ed9b2`. Open a PR from https://github.com/krish191204/geoform-v2/pull/new/cursor/deep-time-atlas only when the user asks.
 
 **Not done — next agent starts here.**
 1. Browser pass at :5199: paint land, Make sense, check the Geology chip (colours plausible, shoreline still smooth), hover for Bedrock/Resources/Sky, check the Deep time panel in the Make sense card, step through and dismiss the field guide, then reload to confirm it stays dismissed.
-2. Run the full `npx vitest run` again.
+2. (Done at 21:48: full suite green.) Re-run it after any change.
 3. Decide whether `geologyRaster.ts` is still needed now that the draw path exists; delete it or use it for an export, but do not ship both looks.
 4. Apply the UX designer's placement recommendations (in its final report in the chat) if they hold up.
 5. Panel `onPlace` (clicking a history place to pan the atlas) is not wired; reuse the `zoomAtlasAt` math in `shell.ts`.
